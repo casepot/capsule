@@ -1,0 +1,54 @@
+{
+  "timestamp": "2025-08-25T23:52:39Z",
+  "summary": {
+    "total": 7,
+    "passed": 4,
+    "failed": 0,
+    "timeout": 0,
+    "errors": 3
+  },
+  "results": [
+    {
+      "test": "Basic Session",
+      "status": "PASS",
+      "time": "0.081s",
+      "error": null
+    },
+    {
+      "test": "Session with Warmup",
+      "status": "PASS",
+      "time": "0.084s",
+      "error": null
+    },
+    {
+      "test": "Pool Creation",
+      "status": "ERROR",
+      "time": "0.079s",
+      "error": "'SessionPool' object has no attribute 'size'"
+    },
+    {
+      "test": "Pool with Warmup",
+      "status": "ERROR",
+      "time": "0.081s",
+      "error": "'SessionPool' object has no attribute 'size'"
+    },
+    {
+      "test": "Multiple Executions",
+      "status": "PASS",
+      "time": "0.088s",
+      "error": null
+    },
+    {
+      "test": "Concurrent Sessions",
+      "status": "PASS",
+      "time": "0.094s",
+      "error": null
+    },
+    {
+      "test": "Pool Concurrent Acquire",
+      "status": "ERROR",
+      "time": "0.087s",
+      "error": "'SessionPool' object has no attribute 'size'"
+    }
+  ]
+}

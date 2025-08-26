@@ -1,0 +1,62 @@
+[
+  {
+    "timestamp": "2025-08-25T06:00:00Z",
+    "tags": ["initial_symptom", "observation"],
+    "summary": "Tests timing out after v0_1 → src/pyrepl reorganization",
+    "details": "After reorganizing project structure from v0_1/ to src/pyrepl/, pytest collection succeeded but tests using subprocess.exec with module paths like '-m src.pyrepl.runner' were timing out after 120 seconds. No error messages, just silent hanging.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Need to investigate module path issues",
+    "notes": "25 test files total, subset worked (fake runner tests) but subprocess tests failed"
+  },
+  {
+    "timestamp": "2025-08-25T06:15:00Z",
+    "tags": ["hypothesis", "investigation"],
+    "summary": "Testing if src is a valid Python package",
+    "details": "Suspected that tests trying to run '-m src.pyrepl.runner' were failing because src/ was not a Python package. Checked for src/__init__.py file.",
+    "hypothesis": "Missing package structure after v0_1 → src/pyrepl migration",
+    "falsification_steps": "1. Checked for src/__init__.py - not found, 2. Verified module paths in tests - using src.pyrepl.*, 3. Confirmed Python requires __init__.py for package recognition",
+    "outcome": "Hypothesis confirmed - src/ lacked __init__.py",
+    "notes": "Classic Python packaging issue - filesystem paths != module paths"
+  },
+  {
+    "timestamp": "2025-08-25T06:20:00Z",
+    "tags": ["root_cause", "fix_decision"],
+    "summary": "Module import paths broken due to missing package file",
+    "details": "Root cause identified: src/ directory was not a valid Python package (missing __init__.py), causing subprocess creation with '-m src.pyrepl.runner' to fail. This led to silent hangs as subprocess never started properly.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Decision to add src/__init__.py to establish proper package structure",
+    "notes": "Matches documented 'Silent Hangs' pattern from development_insights.md"
+  },
+  {
+    "timestamp": "2025-08-25T06:25:00Z",
+    "tags": ["implementation", "fix"],
+    "summary": "Added src/__init__.py to create valid package",
+    "details": "Created src/__init__.py with minimal content to make src a valid Python package. This enables module paths like src.pyrepl.runner to work correctly with Python's -m flag.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Package structure established, ready for testing",
+    "notes": "Simple one-file fix for complex symptom"
+  },
+  {
+    "timestamp": "2025-08-25T06:30:00Z",
+    "tags": ["validation", "testing"],
+    "summary": "Verified fix resolves test issues",
+    "details": "Testing confirmed: 1) Package imports work (from src.pyrepl import protocol), 2) Module execution works (python -m src.pyrepl.runner), 3) Subprocess test passes (test_subprocess_debug.py), 4) All 63 tests now discoverable and 26+ passing.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Fix validated - tests no longer hanging",
+    "notes": "Progressive testing approach as per troubleshooting guidelines"
+  },
+  {
+    "timestamp": "2025-08-25T06:35:00Z",
+    "tags": ["reflection", "lessons_learned"],
+    "summary": "Key insights from reorganization debugging",
+    "details": "1) Always verify package structure after directory reorganization, 2) Python module paths require __init__.py files in every directory, 3) Subprocess failures can manifest as silent hangs, 4) Following systematic troubleshooting process (check basics first) quickly identified issue.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Knowledge captured for future reorganizations",
+    "notes": "Could have been prevented with post-reorganization validation checklist"
+  }
+]

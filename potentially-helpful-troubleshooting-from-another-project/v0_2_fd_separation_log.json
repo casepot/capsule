@@ -1,0 +1,92 @@
+[
+  {
+    "timestamp": "2025-01-25T10:00:00Z",
+    "tags": ["initial_symptom", "observation"],
+    "summary": "Test failure with TimeoutError after implementing FD separation",
+    "details": "Initial v0.2 implementation attempted to use FD 3 and 4 for protocol communication. Tests failed with TimeoutError waiting for protocol response. Error cascade showed OSError [Errno 22] Invalid argument and KeyError '0 is not registered' when AsyncIO tried to connect to FD 0.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Need to investigate why FDs 3/4 aren't available",
+    "notes": "Runner appears to fall back to stdin/stdout when FDs 3/4 don't exist"
+  },
+  {
+    "timestamp": "2025-01-25T10:15:00Z",
+    "tags": ["hypothesis", "investigation"],
+    "summary": "Hypothesis: pass_fds remaps to FD 3 and 4",
+    "details": "Initial assumption was that pass_fds=(protocol_r_fd, manager_w_fd) would make these available as FD 3 and 4 in the child process. This seemed logical as 0/1/2 are stdin/stdout/stderr.",
+    "hypothesis": "pass_fds parameter remaps passed FDs to 3 and 4",
+    "falsification_steps": "Create minimal test script that passes specific FDs and checks what's available in child",
+    "outcome": "Hypothesis FALSIFIED - pass_fds preserves exact FD numbers",
+    "notes": "This was the critical misunderstanding"
+  },
+  {
+    "timestamp": "2025-01-25T10:30:00Z",
+    "tags": ["breakthrough", "root_cause"],
+    "summary": "Discovery: pass_fds preserves EXACT FD numbers",
+    "details": "Test revealed that if pipes are created with FDs 3,4,5,6 and we pass (3,6), the child gets exactly FDs 3 and 6, not remapped to 3 and 4. This explains why the runner couldn't find FDs when told to use '3,4'.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Root cause identified - need to pass actual FD numbers",
+    "notes": "pass_fds documentation clearly states this, but it wasn't intuitive"
+  },
+  {
+    "timestamp": "2025-01-25T10:45:00Z",
+    "tags": ["fix_decision", "implementation"],
+    "summary": "Implement Option A: Pass actual FD numbers via environment",
+    "details": "Solution: Pass the actual FD numbers in PYREPL_PROTOCOL_FDS environment variable. Manager sets env['PYREPL_PROTOCOL_FDS'] = f'{to_runner_r},{from_runner_w}'. Runner parses these numbers and uses them directly with os.fdopen().",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Implementation successful with correct FD passing",
+    "notes": "Option A simpler than Option B (dup2 remapping with preexec_fn)"
+  },
+  {
+    "timestamp": "2025-01-25T11:00:00Z",
+    "tags": ["observation", "testing"],
+    "summary": "Secondary issue: Protocol class doesn't support drain()",
+    "details": "After fixing FD numbers, encountered AttributeError: 'Protocol' object has no attribute '_drain_helper'. StreamWriter.drain() requires flow control support.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Fixed by using asyncio.streams.FlowControlMixin() instead of asyncio.Protocol",
+    "notes": "Consistent with existing v0.1 implementation"
+  },
+  {
+    "timestamp": "2025-01-25T11:15:00Z",
+    "tags": ["implementation", "improvement"],
+    "summary": "Improved pipe naming for clarity",
+    "details": "Renamed pipes from protocol_r_fd/manager_w_fd to to_runner_r/from_runner_w. Clear directional naming makes data flow obvious: Manager writes to_runner_w, Runner reads to_runner_r.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Code is more self-documenting",
+    "notes": "Following recommendation from user's troubleshooting notes"
+  },
+  {
+    "timestamp": "2025-01-25T11:30:00Z",
+    "tags": ["validation", "testing"],
+    "summary": "Comprehensive testing confirms v0.2 works",
+    "details": "All tests pass: Basic execution works, stdin/stdout/stderr are free for user code, sys.stdin.read() works (was EOFError before), input() via protocol still works, backward compatibility maintained with PYREPL_FD_SEPARATION=false.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "v0.2 successfully implements FD separation",
+    "notes": "~50 lines changed, 0 breaking changes"
+  },
+  {
+    "timestamp": "2025-01-25T11:45:00Z",
+    "tags": ["reflection", "lessons_learned"],
+    "summary": "Key lessons from v0.2 implementation",
+    "details": "1. Always verify API behavior with minimal tests. 2. Read documentation carefully - pass_fds behavior was documented. 3. Test incrementally - isolation tests revealed issue immediately. 4. Simple solutions often exist - Option A was much simpler than anticipated remapping.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Successful v0.2 implementation with minimal changes",
+    "notes": "Continues the 'one-line philosophy' - infrastructure was complete, just needed correct FD numbers"
+  },
+  {
+    "timestamp": "2025-01-25T12:00:00Z",
+    "tags": ["summary", "process_improvement"],
+    "summary": "Testing methodology that led to solution",
+    "details": "1. Incremental testing strategy - start minimal, add complexity. 2. Evidence-based debugging - don't assume, verify with os.fstat(). 3. Test coverage progression from basic FD passing to full integration. 4. Each test built on previous, creating chain of evidence.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Systematic approach identified and fixed issue efficiently",
+    "notes": "This methodology should be applied to future troubleshooting"
+  }
+]

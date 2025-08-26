@@ -1,0 +1,72 @@
+[
+  {
+    "timestamp": "2025-01-24T09:00:00Z",
+    "tags": ["initial_symptom", "observation"],
+    "summary": "input() fails with EOFError in v0.1 subprocess mode",
+    "details": "User code calling input() or sys.stdin.read() fails with EOFError. This is because stdin is exclusively used for Frame protocol communication between Manager and Runner. The single-reader architecture that fixes v0's deadlock prevents stdin from being available for user input.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Documented as known limitation in v0_1_input_issue/ directory",
+    "notes": "Trade-off was deliberate: reliability over interactivity"
+  },
+  {
+    "timestamp": "2025-01-24T10:00:00Z",
+    "tags": ["observation", "investigation"],
+    "summary": "Protocol infrastructure for input already exists",
+    "details": "Found that v0_1/runner_async.py already has await_input function (lines 224-233) that uses INPUT_REQUEST/input_response protocol. The FakeRunner uses this successfully. Manager has provide_input method. All pieces exist but input() builtin is never overridden.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Identified that infrastructure is complete, just not connected",
+    "notes": "await_input works but user code calls builtin input() which reads stdin"
+  },
+  {
+    "timestamp": "2025-01-24T10:30:00Z",
+    "tags": ["hypothesis", "investigation"],
+    "summary": "Testing if overriding builtin input would work",
+    "details": "Hypothesis: Adding local_ns['input'] = await_input would route all input() calls through the protocol instead of stdin, solving the EOFError issue without breaking single-reader invariant.",
+    "hypothesis": "Overriding builtin input in exec namespace will enable input() via protocol",
+    "falsification_steps": "1. Add local_ns['input'] = await_input at line 251, 2. Test with simple input() call, 3. Test with multiple inputs, 4. Verify no new threads created, 5. Ensure all existing tests pass",
+    "outcome": "Hypothesis confirmed - single line fix works perfectly",
+    "notes": "Solution is remarkably simple, leveraging existing infrastructure"
+  },
+  {
+    "timestamp": "2025-01-24T11:00:00Z",
+    "tags": ["fix_decision", "implementation"],
+    "summary": "Implemented single-line fix in runner_async.py",
+    "details": "Added 'local_ns[\"input\"] = await_input' at line 251 in v0_1/runner_async.py _worker_body function. This overrides the builtin input() for executed code to use the protocol-based await_input function.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Fix applied, testing with various input scenarios",
+    "notes": "v0.1.1 - maintains all v0.1 guarantees while enabling input()"
+  },
+  {
+    "timestamp": "2025-01-24T11:30:00Z",
+    "tags": ["validation", "testing"],
+    "summary": "Comprehensive testing confirms fix works",
+    "details": "Tested: single input(), multiple sequential inputs, input in loops, input with prompts. All work correctly. Thread count remains at 2 (MainThread + asyncio-waitpid). No deadlocks observed. All 27 existing v0.1 tests pass without regression.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Fix validated - input() fully functional in v0.1.1",
+    "notes": "Direct stdin.read() still fails as expected - must use input()"
+  },
+  {
+    "timestamp": "2025-01-24T12:00:00Z",
+    "tags": ["root_cause", "summary"],
+    "summary": "Root cause: builtin input not connected to protocol",
+    "details": "The input() limitation was not a fundamental architectural constraint but simply a missing connection. The protocol infrastructure (INPUT_REQUEST/input_response) and await_input function existed and worked, but the builtin input() was never overridden to use them. One line of code connected these pieces.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Issue resolved in v0.1.1 with minimal, elegant fix",
+    "notes": "Demonstrates importance of reviewing existing infrastructure before assuming complex solutions needed"
+  },
+  {
+    "timestamp": "2025-01-24T12:30:00Z",
+    "tags": ["lessons_learned", "reflection"],
+    "summary": "Key lesson: simplest solution often correct",
+    "details": "Initial analysis suggested this would require v0.2 with potential architectural changes. Reality: all infrastructure existed, just needed connection. The fix maintains single-reader invariant, adds no threads, uses existing protocol, and is literally one line of code.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "v0.1.1 released with full input() support",
+    "notes": "Future investigation should always check if infrastructure already exists before planning major changes"
+  }
+]
