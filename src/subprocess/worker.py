@@ -184,7 +184,7 @@ class InputHandler:
             except asyncio.TimeoutError:
                 raise TimeoutError("Input timeout exceeded")
             
-            if message.type == MessageType.INPUT_RESPONSE:
+            if message.type == "input_response":
                 response = message  # type: ignore
                 if response.input_id == input_msg.id:
                     return response.data
@@ -288,12 +288,14 @@ class SubprocessWorker:
         # Get the current event loop for thread coordination
         loop = asyncio.get_running_loop()
         
-        # Create threaded executor
+        # Create threaded executor with configurable timeouts
         executor = ThreadedExecutor(
             self._transport,
             execution_id,
             self._namespace,
-            loop
+            loop,
+            input_send_timeout=5.0,  # TODO: Make configurable via session config
+            input_wait_timeout=300.0  # TODO: Make configurable via session config
         )
         
         # Start output pump for async message sending
@@ -405,6 +407,9 @@ class SubprocessWorker:
             await self._transport.send_message(error_msg)
             
         finally:
+            # Shutdown input waiters before cleaning up  
+            executor.shutdown_input_waiters()
+            
             # Shutdown output pump and clean up
             executor.shutdown_pump()
             if executor._pump_task:
@@ -482,16 +487,14 @@ class SubprocessWorker:
                 logger.info("Worker received message", type=message.type, id=message.id, type_value=str(message.type), type_class=type(message.type).__name__, has_executor=self._active_executor is not None)
                 
                 # Handle message based on type
-                # Check both string and enum comparison for debugging
-                logger.debug(f"Checking message type: {message.type} == {MessageType.EXECUTE} ? {message.type == MessageType.EXECUTE}")
-                logger.debug(f"Checking string comparison: {message.type} == 'execute' ? {message.type == 'execute'}")
+                logger.debug(f"Processing message with type: {message.type}")
                 
-                if message.type == MessageType.EXECUTE or message.type == "execute":
+                if message.type == "execute":
                     logger.info("Processing execute message", id=message.id)
                     # Don't await - let it run in background so we can process INPUT_RESPONSE
                     asyncio.create_task(self.execute(message))  # type: ignore
                     
-                elif message.type == MessageType.INPUT_RESPONSE or message.type == "input_response":
+                elif message.type == "input_response":
                     # Route input response to active executor
                     if self._active_executor:
                         response = message  # type: ignore
@@ -500,15 +503,15 @@ class SubprocessWorker:
                     else:
                         logger.warning("Received input response with no active executor")
                     
-                elif message.type == MessageType.CHECKPOINT:
+                elif message.type == "checkpoint":
                     # Will be implemented with checkpoint system
                     pass
                     
-                elif message.type == MessageType.RESTORE:
+                elif message.type == "restore":
                     # Will be implemented with restore system
                     pass
                     
-                elif message.type == MessageType.SHUTDOWN:
+                elif message.type == "shutdown":
                     shutdown_msg = message  # type: ignore
                     logger.info("Shutdown requested", reason=shutdown_msg.reason)
                     self._running = False

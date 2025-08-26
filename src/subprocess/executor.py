@@ -128,6 +128,8 @@ class ThreadedExecutor:
         output_backpressure: Literal["block", "drop_new", "drop_oldest", "error"] = "block",
         line_chunk_size: int = 64 * 1024,
         drain_timeout_ms: Optional[int] = 2000,
+        input_send_timeout: float = 5.0,
+        input_wait_timeout: Optional[float] = 300.0,
     ) -> None:
         self._transport = transport
         self._execution_id = execution_id
@@ -136,6 +138,8 @@ class ThreadedExecutor:
         self._input_waiters: Dict[str, tuple[threading.Event, Optional[str]]] = {}
         self._result: Any = None
         self._error: Optional[Exception] = None
+        self._input_send_timeout = input_send_timeout
+        self._input_wait_timeout = input_wait_timeout
         
         # Event-driven output handling with asyncio.Queue
         self._aq: asyncio.Queue[OutputOrSentinel] = asyncio.Queue(maxsize=output_queue_maxsize)
@@ -164,6 +168,18 @@ class ThreadedExecutor:
         """Create input function that works in thread context."""
         def protocol_input(prompt: str = "") -> str:
             """Input function that sends protocol message and waits for response."""
+            # Flush prompt to stdout before requesting input
+            try:
+                sys.stdout.write(str(prompt))
+                if hasattr(sys.stdout, "flush"):
+                    sys.stdout.flush()
+            except Exception:
+                pass  # Continue even if flush fails
+            
+            # Check if shutting down
+            if self._shutdown:
+                raise EOFError("Session is shutting down")
+            
             # Generate unique token for this request
             token = str(uuid.uuid4())
             
@@ -171,28 +187,36 @@ class ThreadedExecutor:
             event = threading.Event()
             self._input_waiters[token] = (event, None)
             
-            # Schedule async message send in main loop
-            future = asyncio.run_coroutine_threadsafe(
-                self._send_input_request(token, prompt),
-                self._loop
-            )
-            
-            # Wait for send to complete
             try:
-                future.result(timeout=5.0)
-            except Exception as e:
-                # Clean up on error
+                # Schedule async message send in main loop
+                future = asyncio.run_coroutine_threadsafe(
+                    self._send_input_request(token, prompt),
+                    self._loop
+                )
+                
+                # Wait for send to complete
+                try:
+                    future.result(timeout=self._input_send_timeout)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to send input request: {e}")
+                
+                # Block thread until response arrives
+                if not event.wait(timeout=self._input_wait_timeout):
+                    raise TimeoutError("input() timed out")
+                
+                # Check if shutdown occurred while waiting
+                if self._shutdown:
+                    raise EOFError("input() cancelled due to shutdown")
+                
+                # Get the response value
+                _, value = self._input_waiters.get(token, (None, None))
+                if value is None:
+                    raise EOFError("input() was cancelled")
+                return value
+                
+            finally:
+                # Always clean up the waiter
                 self._input_waiters.pop(token, None)
-                raise RuntimeError(f"Failed to send input request: {e}")
-            
-            # Block thread until response arrives
-            if not event.wait(timeout=300):  # 5 minute timeout
-                self._input_waiters.pop(token, None)
-                raise TimeoutError("Input timeout exceeded")
-            
-            # Get the response value
-            _, value = self._input_waiters.pop(token, (None, ""))
-            return value or ""
             
         return protocol_input
     
@@ -376,6 +400,14 @@ class ThreadedExecutor:
             self._pump_task.cancel()
         finally:
             self._pump_task = None
+    
+    def shutdown_input_waiters(self) -> None:
+        """Wake all waiting input threads with None to trigger EOFError."""
+        self._shutdown = True
+        for token, (event, _) in list(self._input_waiters.items()):
+            # Set data to None and wake the thread
+            self._input_waiters[token] = (event, None)
+            event.set()
     
     def handle_input_response(self, token: str, data: str) -> None:
         """Handle input response from async context."""
