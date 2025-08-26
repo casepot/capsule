@@ -38,7 +38,7 @@ from ..protocol.messages import (
     StreamType,
 )
 from ..protocol.transport import MessageTransport
-from .executor import ThreadedExecutor
+from .executor import ThreadedExecutor, OutputDrainTimeout
 
 logger = structlog.get_logger()
 
@@ -330,7 +330,28 @@ class SubprocessWorker:
             
             # CRITICAL: Drain all outputs before sending result
             # This ensures output messages arrive before ResultMessage
-            await executor.drain_outputs()
+            try:
+                # Use a reasonable timeout (default is 2 seconds from executor)
+                await executor.drain_outputs(timeout=5.0)
+            except OutputDrainTimeout as e:
+                # Log the timeout but don't fail the execution
+                logger.warning(
+                    "Output drain timeout",
+                    execution_id=execution_id,
+                    error=str(e)
+                )
+                # Send error about the timeout
+                error_msg = ErrorMessage(
+                    id=str(uuid.uuid4()),
+                    timestamp=time.time(),
+                    traceback=str(e),
+                    exception_type="OutputDrainTimeout",
+                    exception_message="Failed to drain all outputs before timeout",
+                    execution_id=execution_id,
+                )
+                await self._transport.send_message(error_msg)
+                # Don't send ResultMessage if drain failed - maintain ordering guarantee
+                return
             
             # Calculate execution time
             execution_time = time.time() - start_time
