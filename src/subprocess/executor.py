@@ -150,32 +150,41 @@ class ThreadedExecutor:
         """Execute user code in thread context (called by thread)."""
         import builtins
         
-        # Save originals
-        original_input = builtins.input
+        # Save originals for stdout/stderr only (NOT input!)
         original_stdout = sys.stdout
         original_stderr = sys.stderr
         
         try:
-            # Override input
-            builtins.input = self.create_protocol_input()
-            self._namespace["input"] = builtins.input
+            # Only create protocol input if not already overridden
+            if "input" not in self._namespace or not callable(self._namespace.get("input")):
+                protocol_input = self.create_protocol_input()
+                builtins.input = protocol_input
+                self._namespace["input"] = protocol_input
+                
+                # Also override in builtins dict if present
+                if "__builtins__" in self._namespace:
+                    if isinstance(self._namespace["__builtins__"], dict):
+                        self._namespace["__builtins__"]["input"] = protocol_input
+                    else:
+                        self._namespace["__builtins__"].input = protocol_input
             
-            # Redirect output streams
+            # Redirect output streams (these we DO restore)
             sys.stdout = ThreadSafeOutput(self, StreamType.STDOUT)
             sys.stderr = ThreadSafeOutput(self, StreamType.STDERR)
             
             # Parse code for source tracking (if needed)
             tree = ast.parse(code)
             
-            # Execute the code
+            # Execute the code - use namespace for both globals and locals
+            # This ensures variables are stored in the namespace dict
             compiled = compile(tree, "<session>", "exec")
-            exec(compiled, self._namespace)
+            exec(compiled, self._namespace, self._namespace)
             
             # Try to capture result if it's an expression
             try:
                 expr_tree = ast.parse(code, mode="eval")
                 compiled_eval = compile(expr_tree, "<session>", "eval")
-                self._result = eval(compiled_eval, self._namespace)
+                self._result = eval(compiled_eval, self._namespace, self._namespace)
             except:
                 # Not a single expression, no result to capture
                 pass
@@ -193,7 +202,7 @@ class ThreadedExecutor:
             if hasattr(sys.stderr, 'flush'):
                 sys.stderr.flush()
                 
-            # Restore originals
+            # Restore ONLY stdout/stderr, NOT input!
             sys.stdout = original_stdout
             sys.stderr = original_stderr
-            builtins.input = original_input
+            # DO NOT restore builtins.input - keep protocol override!

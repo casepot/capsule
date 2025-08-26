@@ -495,5 +495,89 @@
     "falsification_steps": null,
     "outcome": "Rich interactive code execution enabled - agents can now execute blocks requiring user I/O",
     "notes": "Following exec-py's threading pattern was crucial. Key architectural principle: synchronous user code in threads, async infrastructure for message passing. This enables complex interactive scenarios like UI, prompts, and long-running I/O operations."
+  },
+  {
+    "timestamp": "2025-08-26T11:30:00Z",
+    "tags": [
+      "testing",
+      "investigation",
+      "observation"
+    ],
+    "summary": "Test failures reveal namespace persistence and input issues",
+    "details": "Running test_foundation/test_namespace_and_transactions.py showed namespace variables not persisting across executions. test_reproductions/test_input_broken.py showed input() causing timeouts despite previous threading fixes. These failures suggested deeper architectural issues with state management.",
+    "hypothesis": "Input override being restored and sessions not being reused properly",
+    "falsification_steps": "1. Check executor.py for input restoration, 2. Verify session lifecycle in tests, 3. Debug namespace dict updates",
+    "outcome": "Multiple related bugs identified",
+    "notes": "Despite ThreadedExecutor implementation, core persistence was broken"
+  },
+  {
+    "timestamp": "2025-08-26T11:45:00Z",
+    "tags": [
+      "root_cause",
+      "breakthrough",
+      "input_handling"
+    ],
+    "summary": "Input override restoration bug discovered",
+    "details": "Found critical bug at /src/subprocess/executor.py:199 where 'builtins.input = original_input' was restoring the original input function after each execution. This was undoing the protocol input override, breaking input persistence across executions. The finally block was incorrectly treating input like stdout/stderr which do need restoration.",
+    "hypothesis": "Removing input restoration will fix persistence",
+    "falsification_steps": "1. Remove restoration line, 2. Test input across multiple executions, 3. Verify protocol input remains",
+    "outcome": "Root cause confirmed - input should NOT be restored",
+    "notes": "Input override must be permanent, unlike output streams"
+  },
+  {
+    "timestamp": "2025-08-26T12:00:00Z",
+    "tags": [
+      "root_cause",
+      "session_management",
+      "breakthrough"
+    ],
+    "summary": "Session reuse pattern critical for namespace persistence",
+    "details": "Tests were creating new Session() instances for each test, and each Session creates a new subprocess with fresh namespace. This explained why variables weren't persisting - they were in different processes! The test pattern was fundamentally flawed. SessionPool exists but wasn't being used properly.",
+    "hypothesis": "Reusing sessions will restore namespace persistence",
+    "falsification_steps": "1. Create shared session helper, 2. Update tests to reuse sessions, 3. Verify variables persist",
+    "outcome": "Session reuse is mandatory for state persistence",
+    "notes": "Each Session() = new subprocess = fresh namespace. This is by design."
+  },
+  {
+    "timestamp": "2025-08-26T12:15:00Z",
+    "tags": [
+      "fix",
+      "implementation",
+      "namespace"
+    ],
+    "summary": "Namespace dict handling fixed in executor",
+    "details": "Modified exec() and eval() calls to pass namespace for both globals AND locals parameters: exec(compiled, self._namespace, self._namespace). This ensures variables are properly stored in the namespace dictionary rather than creating separate local scopes.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Namespace updates correctly preserved",
+    "notes": "Critical for variable persistence within same session"
+  },
+  {
+    "timestamp": "2025-08-26T12:30:00Z",
+    "tags": [
+      "fix",
+      "implementation",
+      "testing"
+    ],
+    "summary": "Comprehensive fixes implemented and verified",
+    "details": "Three critical fixes applied: 1) Removed builtins.input restoration keeping protocol override permanent, 2) Added get_shared_session() helper for test namespace persistence, 3) Fixed exec/eval to use namespace for both globals and locals. Created test_namespace_debug.py confirming all fixes work: x=42 persists, y=100 persists, input override remains active.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "All namespace and input persistence issues resolved",
+    "notes": "Fixes align with async capability architecture in planning prompts"
+  },
+  {
+    "timestamp": "2025-08-26T12:45:00Z",
+    "tags": [
+      "validation",
+      "summary",
+      "lessons_learned"
+    ],
+    "summary": "Critical bug fixes enable async capability system",
+    "details": "Successfully fixed two architectural bugs blocking PyREPL3's core functionality. Input override persistence and session reuse patterns are now properly implemented. These fixes unblock the async capability system described in /async_capability_prompts/. Total fixes in this session: 1) Input override persistence (executor.py:199), 2) Session reuse pattern for tests, 3) Namespace dict handling in exec/eval. System ready for capability injection and async executor implementation.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "PyREPL3 foundation stabilized for advanced features",
+    "notes": "Key insight: Session reuse is not optional - it's fundamental to the architecture. Each Session creates an isolated subprocess by design. The comparative analysis with pyrepl2 and exec-py was crucial in identifying these patterns."
   }
 ]

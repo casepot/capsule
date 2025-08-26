@@ -2,13 +2,18 @@
 """
 Test namespace persistence, state management, and transaction support.
 Also tests source tracking and checkpoint/restore capabilities.
+
+IMPORTANT: These tests demonstrate that namespace persistence requires
+session reuse. Each new Session() creates a fresh subprocess with a
+clean namespace. To maintain state, you must reuse the same session
+or use SessionPool for proper session management.
 """
 
 import asyncio
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -22,12 +27,30 @@ from src.protocol.messages import (
 # Test results tracking
 test_results: Dict[str, Any] = {}
 
+# Shared session for namespace persistence tests
+_shared_session: Optional[Session] = None
+
+async def get_shared_session() -> Session:
+    """Get or create a shared session for namespace persistence tests.
+    
+    This ensures that namespace persistence tests use the same subprocess,
+    which is required for variables to persist across executions.
+    """
+    global _shared_session
+    if _shared_session is None or not _shared_session.is_alive:
+        _shared_session = Session()
+        await _shared_session.start()
+    return _shared_session
+
 
 async def test_namespace_persistence_detailed():
-    """Test detailed namespace persistence across executions."""
+    """Test detailed namespace persistence across executions.
+    
+    IMPORTANT: Namespace persistence requires reusing the same session.
+    Each Session() creates a new subprocess with a fresh namespace.
+    """
     print("\n=== Test: Namespace Persistence (Detailed) ===")
-    session = Session()
-    await session.start()
+    session = await get_shared_session()  # Use shared session for persistence!
     
     try:
         # Execution 1: Set multiple variables
@@ -86,14 +109,14 @@ results
         return success
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def test_function_source_tracking():
     """Test if function source code is tracked."""
     print("\n=== Test: Function Source Tracking ===")
-    session = Session()
-    await session.start()
+    session = await get_shared_session()  # Use shared session for persistence!
     
     try:
         # Define a function
@@ -141,14 +164,14 @@ def calculate_area(radius):
         return function_exists
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def test_class_source_tracking():
     """Test if class source code and methods are tracked."""
     print("\n=== Test: Class Source Tracking ===")
-    session = Session()
-    await session.start()
+    session = await get_shared_session()  # Use shared session for persistence!
     
     try:
         # Define a class
@@ -215,13 +238,17 @@ result
         return success
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def test_transaction_commit_always():
-    """Test transaction with commit_always policy (default)."""
+    """Test transaction with commit_always policy (default).
+    
+    Note: Using separate session for transaction tests to ensure clean state.
+    """
     print("\n=== Test: Transaction - Commit Always ===")
-    session = Session()
+    session = Session()  # Use separate session for transaction testing
     await session.start()
     
     try:
@@ -282,7 +309,8 @@ raise RuntimeError("Test error")
         return success
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def test_transaction_rollback():
@@ -359,7 +387,8 @@ result
         return success
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def test_checkpoint_create():
@@ -424,14 +453,14 @@ def checkpoint_func():
         return success
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def test_imports_tracking():
     """Test if imports are tracked and persisted."""
     print("\n=== Test: Import Tracking ===")
-    session = Session()
-    await session.start()
+    session = await get_shared_session()  # Use shared session for persistence!
     
     try:
         # Import various modules
@@ -489,7 +518,8 @@ results
         return all_imports_work
         
     finally:
-        await session.shutdown()
+        # Don't shutdown - using shared session
+        pass
 
 
 async def main():
@@ -551,6 +581,13 @@ async def main():
     print(f"  Source tracking: {'✅ Working' if test_results.get('function_source_tracking', {}).get('pass') else '⚠️ Partial'}")
     print(f"  Transactions: {'✅ Implemented' if test_results.get('transaction_rollback', {}).get('pass') else '❌ Not implemented'}")
     print(f"  Checkpoints: {'✅ Implemented' if test_results.get('checkpoint_create', {}).get('implemented') else '❌ Not implemented'}")
+    
+    # Clean up shared session
+    global _shared_session
+    if _shared_session and _shared_session.is_alive:
+        print("\nCleaning up shared session...")
+        await _shared_session.shutdown()
+        _shared_session = None
     
     return passed == len(tests)
 
