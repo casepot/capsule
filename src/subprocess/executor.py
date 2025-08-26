@@ -21,6 +21,66 @@ from ..protocol.messages import (
 from ..protocol.transport import MessageTransport
 
 
+class CancelToken:
+    """Thread-safe cancellation token."""
+    
+    def __init__(self) -> None:
+        self._cancelled = False
+        self._lock = threading.Lock()
+    
+    def cancel(self) -> None:
+        """Set the cancellation flag."""
+        with self._lock:
+            self._cancelled = True
+    
+    def is_cancelled(self) -> bool:
+        """Check if cancellation has been requested."""
+        with self._lock:
+            return self._cancelled
+    
+    def reset(self) -> None:
+        """Reset the cancellation flag."""
+        with self._lock:
+            self._cancelled = False
+
+
+def _create_cancel_tracer(token: CancelToken, check_interval: int = 1):
+    """Create a trace function that checks for cancellation.
+    
+    Args:
+        token: The cancellation token to check
+        check_interval: Check every N events (default: 1 = every event)
+    
+    Returns:
+        Trace function for sys.settrace
+    """
+    event_count = 0
+    checked_count = 0
+    
+    def tracer(frame, event, arg):
+        nonlocal event_count, checked_count
+        
+        # Check on line events which are most frequent in loops
+        if event == 'line':
+            event_count += 1
+            if event_count >= check_interval:
+                event_count = 0
+                checked_count += 1
+                if checked_count % 10000000 == 0:  # Log every 10 million checks to avoid I/O overhead
+                    import structlog
+                    logger = structlog.get_logger()
+                    logger.debug(f"Tracer checked {checked_count} times, cancelled={token.is_cancelled()}")
+                if token.is_cancelled():
+                    import structlog
+                    logger = structlog.get_logger()
+                    logger.info(f"RAISING KeyboardInterrupt from tracer! checked_count={checked_count}")
+                    raise KeyboardInterrupt("Execution cancelled")
+        
+        return tracer  # Must return itself to continue tracing
+    
+    return tracer
+
+
 # New types for event-driven output handling
 @dataclass(slots=True)
 class _OutputItem:
@@ -138,6 +198,7 @@ class ThreadedExecutor:
         drain_timeout_ms: Optional[int] = 2000,
         input_send_timeout: float = 5.0,
         input_wait_timeout: Optional[float] = 300.0,
+        cancel_check_interval: int = 1,
     ) -> None:
         self._transport = transport
         self._execution_id = execution_id
@@ -148,6 +209,10 @@ class ThreadedExecutor:
         self._error: Optional[Exception] = None
         self._input_send_timeout = input_send_timeout
         self._input_wait_timeout = input_wait_timeout
+        
+        # Cancellation support
+        self._cancel_token = CancelToken()
+        self._cancel_check_interval = cancel_check_interval
         
         # Event-driven output handling with asyncio.Queue
         self._aq: asyncio.Queue[OutputOrSentinel] = asyncio.Queue(maxsize=output_queue_maxsize)
@@ -424,13 +489,35 @@ class ThreadedExecutor:
             self._input_waiters[token] = (event, data)
             event.set()
     
+    def cancel(self) -> None:
+        """Request cancellation of the current execution."""
+        import structlog
+        logger = structlog.get_logger()
+        logger.info(f"Executor.cancel() called for execution {self._execution_id}")
+        self._cancel_token.cancel()
+        # Also shutdown input waiters to unblock any waiting input() calls
+        self.shutdown_input_waiters()
+    
     def execute_code(self, code: str) -> None:
         """Execute user code in thread context (called by thread)."""
         import builtins
+        import structlog
+        logger = structlog.get_logger()
+        logger.info(f"execute_code starting for {self._execution_id}, thread={threading.current_thread().name}")
         
         # Save originals for stdout/stderr only (NOT input!)
         original_stdout = sys.stdout
         original_stderr = sys.stderr
+        
+        # Reset cancel token for this execution
+        self._cancel_token.reset()
+        
+        # Set up trace function for this thread
+        # This is required for exec/eval to have tracing
+        tracer = _create_cancel_tracer(self._cancel_token, self._cancel_check_interval)
+        logger.info(f"Installing tracer for {self._execution_id}, check_interval={self._cancel_check_interval}")
+        sys.settrace(tracer)
+        monitoring_id = None
         
         try:
             # Only create protocol input if not already overridden
@@ -462,12 +549,15 @@ class ThreadedExecutor:
             # Execute code exactly once based on type
             if is_expr:
                 # Single expression: evaluate and capture result
+                logger.info(f"Executing expression for {self._execution_id}")
                 compiled = compile(code, "<session>", "eval", dont_inherit=True, optimize=0)
                 self._result = eval(compiled, self._namespace, self._namespace)
             else:
                 # Statements: execute without result capture
+                logger.info(f"Executing statements for {self._execution_id}")
                 compiled = compile(code, "<session>", "exec", dont_inherit=True, optimize=0)
                 exec(compiled, self._namespace, self._namespace)
+                logger.info(f"Execution completed for {self._execution_id}")
                 
         except Exception as e:
             # Store error for async context to handle
@@ -476,6 +566,9 @@ class ThreadedExecutor:
             traceback.print_exc(file=sys.stderr)
             
         finally:
+            # Clear trace function
+            sys.settrace(None)
+            
             # Flush any remaining output
             if hasattr(sys.stdout, 'flush'):
                 sys.stdout.flush()

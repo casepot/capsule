@@ -227,11 +227,12 @@ class SessionPool:
         
         raise RuntimeError("Pool is shutting down")
     
-    async def release(self, session: Session) -> None:
+    async def release(self, session: Session, restart_if_dead: bool = True) -> None:
         """Release a session back to the pool.
         
         Args:
             session: Session to release
+            restart_if_dead: Whether to restart session if it's dead
         """
         async with self._lock:
             if session in self._active_sessions:
@@ -254,6 +255,21 @@ class SessionPool:
                 session_id=session.session_id,
                 state=session.state,
             )
+            
+            if restart_if_dead:
+                # Try to restart the session
+                try:
+                    logger.info("Attempting to restart dead session", session_id=session.session_id)
+                    await session.restart()
+                    
+                    # Return to idle pool if restart succeeded
+                    await self._idle_sessions.put(session)
+                    self._metrics.sessions_restarted += 1
+                    logger.info("Session restarted and returned to pool", session_id=session.session_id)
+                    return
+                except Exception as e:
+                    logger.error("Failed to restart session", session_id=session.session_id, error=str(e))
+            
             await self._remove_session(session)
             return
         
@@ -488,6 +504,7 @@ class SessionPool:
                 "sessions_created": metrics.sessions_created,
                 "sessions_removed": metrics.sessions_removed,
                 "sessions_recycled": metrics.sessions_recycled,
+                "sessions_restarted": metrics.sessions_restarted,
                 "acquisition_timeouts": metrics.acquisition_timeouts,
             },
         }
@@ -503,6 +520,7 @@ class PoolMetrics:
     sessions_created: int = 0
     sessions_removed: int = 0
     sessions_recycled: int = 0
+    sessions_restarted: int = 0
     pool_hits: int = 0
     pool_misses: int = 0
     hit_rate: float = 0.0

@@ -132,6 +132,44 @@ class SubprocessWorker:
             "__builtins__": builtins,
         }
     
+    async def _cancel_with_timeout(self, execution_id: str, grace_timeout_ms: int) -> bool:
+        """Cancel execution with grace period before hard cancel.
+        
+        Args:
+            execution_id: Execution to cancel
+            grace_timeout_ms: Milliseconds to wait before hard cancel
+            
+        Returns:
+            True if cancelled cooperatively, False if hard cancel needed
+        """
+        logger.info(f"_cancel_with_timeout called for {execution_id}, active: {self._active_executor is not None}")
+        
+        if not self._active_executor or self._active_executor._execution_id != execution_id:
+            logger.info(f"Not our execution - active_id={self._active_executor._execution_id if self._active_executor else None}")
+            return True  # Not our execution
+        
+        # Request cooperative cancellation
+        self._active_executor.cancel()
+        
+        # Wait for grace period
+        grace_seconds = grace_timeout_ms / 1000.0
+        start_time = time.time()
+        
+        while time.time() - start_time < grace_seconds:
+            # Check if execution finished
+            if self._active_executor is None or self._active_executor._execution_id != execution_id:
+                return True  # Cancelled successfully
+            
+            await asyncio.sleep(0.01)  # Check every 10ms
+        
+        # Grace period expired, need hard cancel
+        logger.warning(
+            "Grace period expired, hard cancel required",
+            execution_id=execution_id,
+            grace_ms=grace_timeout_ms
+        )
+        return False
+    
     async def start(self) -> None:
         """Start the worker and send ready message."""
         self._running = True
@@ -187,6 +225,7 @@ class SubprocessWorker:
         """
         execution_id = message.id
         start_time = time.time()
+        logger.info(f"execute() method started for {execution_id}")
         
         # Get the current event loop for thread coordination
         loop = asyncio.get_running_loop()
@@ -206,7 +245,7 @@ class SubprocessWorker:
         
         # Track active executor for input routing
         self._active_executor = executor
-        logger.debug("Set active executor", execution_id=execution_id)
+        logger.info(f"Set active executor to {execution_id}, executor._execution_id={executor._execution_id}")
         
         # Parse code for source tracking before execution
         if message.capture_source:
@@ -216,6 +255,7 @@ class SubprocessWorker:
         self._track_imports(message.code)
         
         # Create and start execution thread
+        # The tracer will be set inside execute_code() using sys.settrace
         thread = threading.Thread(
             target=executor.execute_code,
             args=(message.code,),
@@ -224,6 +264,7 @@ class SubprocessWorker:
         )
         
         thread.start()
+        logger.info(f"Started execution thread for {execution_id}, thread alive={thread.is_alive()}")
         
         try:
             # Monitor thread while staying responsive to async events
@@ -392,12 +433,17 @@ class SubprocessWorker:
                 # Handle message based on type
                 logger.debug(f"Processing message with type: {message.type}")
                 
-                if message.type == "execute":
+                # Convert to string for comparison (MessageType enum)
+                msg_type = str(message.type) if hasattr(message.type, 'value') else message.type
+                logger.debug(f"Message type for comparison: {msg_type} (original: {message.type})")
+                
+                if msg_type == "execute" or message.type == MessageType.EXECUTE:
                     logger.info("Processing execute message", id=message.id)
                     # Don't await - let it run in background so we can process INPUT_RESPONSE
-                    asyncio.create_task(self.execute(message))  # type: ignore
+                    exec_task = asyncio.create_task(self.execute(message))  # type: ignore
+                    logger.info(f"Created execution task for {message.id}")
                     
-                elif message.type == "input_response":
+                elif msg_type == "input_response" or message.type == MessageType.INPUT_RESPONSE:
                     # Route input response to active executor
                     if self._active_executor:
                         response = message  # type: ignore
@@ -406,15 +452,48 @@ class SubprocessWorker:
                     else:
                         logger.warning("Received input response with no active executor")
                     
-                elif message.type == "checkpoint":
+                elif msg_type == "checkpoint" or message.type == MessageType.CHECKPOINT:
                     # Will be implemented with checkpoint system
                     pass
                     
-                elif message.type == "restore":
+                elif msg_type == "restore" or message.type == MessageType.RESTORE:
                     # Will be implemented with restore system
                     pass
                     
-                elif message.type == "shutdown":
+                elif msg_type == "cancel" or message.type == MessageType.CANCEL:
+                    # Handle cancellation request
+                    cancel_msg = message  # type: ignore
+                    logger.info("Cancel requested", execution_id=cancel_msg.execution_id, 
+                               has_active_executor=self._active_executor is not None,
+                               active_exec_id=self._active_executor._execution_id if self._active_executor else None)
+                    
+                    # Cancel with grace period
+                    grace_ms = cancel_msg.grace_timeout_ms or 500
+                    cancelled = await self._cancel_with_timeout(cancel_msg.execution_id, grace_ms)
+                    
+                    if not cancelled:
+                        # Hard cancel required - restart worker
+                        logger.error("Hard cancel required, exiting worker for restart")
+                        self._running = False
+                        break
+                        
+                elif msg_type == "interrupt" or message.type == MessageType.INTERRUPT:
+                    # Handle interrupt request (immediate)
+                    interrupt_msg = message  # type: ignore
+                    logger.info("Interrupt requested", execution_id=interrupt_msg.execution_id, force_restart=interrupt_msg.force_restart)
+                    
+                    if self._active_executor and self._active_executor._execution_id == interrupt_msg.execution_id:
+                        # Cancel the active execution
+                        self._active_executor.cancel()
+                        
+                        # If force_restart is set, we should restart the worker
+                        # This would be handled at the session level
+                        if interrupt_msg.force_restart:
+                            logger.warning("Force restart requested, exiting worker")
+                            self._running = False
+                            break
+                    
+                elif msg_type == "shutdown" or message.type == MessageType.SHUTDOWN:
                     shutdown_msg = message  # type: ignore
                     logger.info("Shutdown requested", reason=shutdown_msg.reason)
                     self._running = False

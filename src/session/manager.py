@@ -11,8 +11,10 @@ from typing import Any, AsyncIterator, Dict, Optional
 import structlog
 
 from ..protocol.messages import (
+    CancelMessage,
     ExecuteMessage,
     InputResponseMessage,
+    InterruptMessage,
     Message,
     MessageType,
     ReadyMessage,
@@ -314,6 +316,72 @@ class Session:
             input_id=input_id,
         )
         await self.send_message(response)
+    
+    async def cancel(self, execution_id: str, grace_timeout_ms: int = 500) -> bool:
+        """Cancel a running execution.
+        
+        Args:
+            execution_id: ID of the execution to cancel
+            grace_timeout_ms: Grace period before hard cancel (default: 500ms)
+            
+        Returns:
+            True if cancelled successfully, False if worker restart needed
+        """
+        if not self._transport:
+            raise RuntimeError("Transport not initialized")
+        
+        # Send cancel message
+        cancel_msg = CancelMessage(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            execution_id=execution_id,
+            grace_timeout_ms=grace_timeout_ms,
+        )
+        
+        await self._transport.send_message(cancel_msg)
+        
+        # Wait for response or timeout
+        grace_seconds = grace_timeout_ms / 1000.0
+        start_time = time.time()
+        
+        # Check if worker is still alive after grace period
+        while time.time() - start_time < grace_seconds + 1.0:  # Extra second for processing
+            if not self.is_alive:
+                # Worker died, needs restart
+                logger.warning("Worker died during cancellation", session_id=self.session_id)
+                return False
+            
+            await asyncio.sleep(0.01)
+        
+        return True
+    
+    async def interrupt(self, execution_id: str, force_restart: bool = False) -> None:
+        """Immediately interrupt a running execution.
+        
+        Args:
+            execution_id: ID of the execution to interrupt
+            force_restart: Force worker restart after interrupt
+        """
+        if not self._transport:
+            raise RuntimeError("Transport not initialized")
+        
+        # Send interrupt message
+        interrupt_msg = InterruptMessage(
+            id=str(uuid.uuid4()),
+            timestamp=time.time(),
+            execution_id=execution_id,
+            force_restart=force_restart,
+        )
+        
+        await self._transport.send_message(interrupt_msg)
+        
+        if force_restart:
+            # Wait a bit for graceful exit
+            await asyncio.sleep(0.5)
+            
+            # Restart if needed
+            if not self.is_alive:
+                await self.restart()
     
     async def receive_message(
         self,

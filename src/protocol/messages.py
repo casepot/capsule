@@ -18,6 +18,8 @@ class MessageType(str, Enum):
     READY = "ready"
     HEARTBEAT = "heartbeat"
     SHUTDOWN = "shutdown"
+    CANCEL = "cancel"
+    INTERRUPT = "interrupt"
 
 
 class StreamType(str, Enum):
@@ -130,6 +132,22 @@ class ShutdownMessage(BaseMessage):
     checkpoint: bool = Field(default=True, description="Whether to create checkpoint before shutdown")
 
 
+class CancelMessage(BaseMessage):
+    type: Literal["cancel"] = "cancel"
+    execution_id: str = Field(description="ID of the execution to cancel")
+    grace_timeout_ms: Optional[int] = Field(
+        default=500, description="Grace period in milliseconds before hard cancel"
+    )
+
+
+class InterruptMessage(BaseMessage):
+    type: Literal["interrupt"] = "interrupt"
+    execution_id: str = Field(description="ID of the execution to interrupt")
+    force_restart: bool = Field(
+        default=False, description="Force worker restart after interrupt"
+    )
+
+
 Message = Union[
     ExecuteMessage,
     OutputMessage,
@@ -142,6 +160,8 @@ Message = Union[
     ReadyMessage,
     HeartbeatMessage,
     ShutdownMessage,
+    CancelMessage,
+    InterruptMessage,
 ]
 
 
@@ -171,6 +191,8 @@ def parse_message(data: dict[str, Any]) -> Message:
         "ready": ReadyMessage,
         "heartbeat": HeartbeatMessage,
         "shutdown": ShutdownMessage,
+        "cancel": CancelMessage,
+        "interrupt": InterruptMessage,
     }
     
     message_class = message_classes.get(message_type)
