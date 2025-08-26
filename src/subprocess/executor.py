@@ -60,6 +60,10 @@ class OutputDrainTimeout(asyncio.TimeoutError):
 class ThreadSafeOutput:
     """Bridge stdout/stderr from thread to async transport."""
     
+    # TextIOBase-like attributes for library compatibility
+    encoding = "utf-8"
+    errors = "replace"
+    
     def __init__(self, executor: ThreadedExecutor, stream_type: StreamType) -> None:
         self._executor = executor
         self._stream_type = stream_type
@@ -112,6 +116,10 @@ class ThreadSafeOutput:
     
     def fileno(self) -> int:
         raise io.UnsupportedOperation("fileno")
+    
+    def writable(self) -> bool:
+        """TextIOBase compatibility - indicates this stream is writable."""
+        return True
 
 
 class ThreadedExecutor:
