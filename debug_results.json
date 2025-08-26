@@ -1,0 +1,1172 @@
+[
+  {
+    "iteration": 0,
+    "start_time": 1756201626.284346,
+    "messages": [
+      {
+        "type": "result",
+        "id": "716d9610-0201-415f-9729-ef0f44a5b8ec",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0007290840148925781,
+        "id": "716d9610-0201-415f-9729-ef0f44a5b8ec",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0007441043853759766
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.38697,
+    "total_duration": 0.10262393951416016
+  },
+  {
+    "iteration": 1,
+    "start_time": 1756201626.386994,
+    "messages": [
+      {
+        "type": "result",
+        "id": "9ddb8a52-fbc3-41a6-b06e-fd25b642e56c",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005779266357421875,
+        "id": "9ddb8a52-fbc3-41a6-b06e-fd25b642e56c",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005917549133300781
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.482493,
+    "total_duration": 0.09549903869628906
+  },
+  {
+    "iteration": 2,
+    "start_time": 1756201626.482511,
+    "messages": [
+      {
+        "type": "result",
+        "id": "a21b94f7-b8e5-420f-b740-aa939c0042e3",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.00061798095703125,
+        "id": "a21b94f7-b8e5-420f-b740-aa939c0042e3",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006299018859863281
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.573995,
+    "total_duration": 0.09148406982421875
+  },
+  {
+    "iteration": 3,
+    "start_time": 1756201626.5740101,
+    "messages": [
+      {
+        "type": "result",
+        "id": "e805c398-7ce6-4c6a-b431-505867dabbb1",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006120204925537109,
+        "id": "e805c398-7ce6-4c6a-b431-505867dabbb1",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.000640869140625
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.6708648,
+    "total_duration": 0.09685468673706055
+  },
+  {
+    "iteration": 4,
+    "start_time": 1756201626.6708832,
+    "messages": [
+      {
+        "type": "result",
+        "id": "c32032f8-cf9a-48f8-af24-789fffd059ec",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005838871002197266,
+        "id": "c32032f8-cf9a-48f8-af24-789fffd059ec",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005960464477539062
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.767295,
+    "total_duration": 0.09641170501708984
+  },
+  {
+    "iteration": 5,
+    "start_time": 1756201626.7673101,
+    "messages": [
+      {
+        "type": "result",
+        "id": "ab599d96-e8a1-46b0-9646-1356db9b6513",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005669593811035156,
+        "id": "ab599d96-e8a1-46b0-9646-1356db9b6513",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005800724029541016
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.8606,
+    "total_duration": 0.09328985214233398
+  },
+  {
+    "iteration": 6,
+    "start_time": 1756201626.860616,
+    "messages": [
+      {
+        "type": "result",
+        "id": "ef3b6561-79a7-4543-a7b5-54c7e389a365",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006411075592041016,
+        "id": "ef3b6561-79a7-4543-a7b5-54c7e389a365",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0007040500640869141
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201626.955797,
+    "total_duration": 0.09518098831176758
+  },
+  {
+    "iteration": 7,
+    "start_time": 1756201626.955812,
+    "messages": [
+      {
+        "type": "result",
+        "id": "77973b3d-d229-4864-a97b-97053eac1df8",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005719661712646484,
+        "id": "77973b3d-d229-4864-a97b-97053eac1df8",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005838871002197266
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.0478332,
+    "total_duration": 0.09202122688293457
+  },
+  {
+    "iteration": 8,
+    "start_time": 1756201627.047842,
+    "messages": [
+      {
+        "type": "result",
+        "id": "52138f78-38d7-4f32-a38f-54509db98ec0",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005612373352050781,
+        "id": "52138f78-38d7-4f32-a38f-54509db98ec0",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005712509155273438
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.142899,
+    "total_duration": 0.09505701065063477
+  },
+  {
+    "iteration": 9,
+    "start_time": 1756201627.142911,
+    "messages": [
+      {
+        "type": "result",
+        "id": "dc2f7922-fce4-4e7d-92d5-c23120bf3c89",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006270408630371094,
+        "id": "dc2f7922-fce4-4e7d-92d5-c23120bf3c89",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006380081176757812
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.236772,
+    "total_duration": 0.09386110305786133
+  },
+  {
+    "iteration": 10,
+    "start_time": 1756201627.236786,
+    "messages": [
+      {
+        "type": "result",
+        "id": "1c4692f9-86bc-4d5a-ad16-c01486564350",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005843639373779297,
+        "id": "1c4692f9-86bc-4d5a-ad16-c01486564350",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005953311920166016
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.329087,
+    "total_duration": 0.0923011302947998
+  },
+  {
+    "iteration": 11,
+    "start_time": 1756201627.329101,
+    "messages": [
+      {
+        "type": "result",
+        "id": "97b10728-70ba-47cf-ba0f-38857a99cb5b",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005691051483154297,
+        "id": "97b10728-70ba-47cf-ba0f-38857a99cb5b",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005970001220703125
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.422019,
+    "total_duration": 0.09291791915893555
+  },
+  {
+    "iteration": 12,
+    "start_time": 1756201627.4220328,
+    "messages": [
+      {
+        "type": "result",
+        "id": "cfaafb21-2cbf-4f88-8d92-38a21d7a61c0",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005362033843994141,
+        "id": "cfaafb21-2cbf-4f88-8d92-38a21d7a61c0",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005450248718261719
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.51508,
+    "total_duration": 0.0930471420288086
+  },
+  {
+    "iteration": 13,
+    "start_time": 1756201627.5150888,
+    "messages": [
+      {
+        "type": "result",
+        "id": "0a08638f-ee00-471d-8ad5-5d63d1350e5e",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005812644958496094,
+        "id": "0a08638f-ee00-471d-8ad5-5d63d1350e5e",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005922317504882812
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.609596,
+    "total_duration": 0.09450721740722656
+  },
+  {
+    "iteration": 14,
+    "start_time": 1756201627.609611,
+    "messages": [
+      {
+        "type": "result",
+        "id": "94c24017-42a0-4509-bf5a-6cefe1c577ae",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005602836608886719,
+        "id": "94c24017-42a0-4509-bf5a-6cefe1c577ae",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005860328674316406
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.706444,
+    "total_duration": 0.0968329906463623
+  },
+  {
+    "iteration": 15,
+    "start_time": 1756201627.7064588,
+    "messages": [
+      {
+        "type": "result",
+        "id": "f4b653a3-e0ac-4456-972d-6c458d1e9682",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006079673767089844,
+        "id": "f4b653a3-e0ac-4456-972d-6c458d1e9682",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006189346313476562
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.799336,
+    "total_duration": 0.09287714958190918
+  },
+  {
+    "iteration": 16,
+    "start_time": 1756201627.7993522,
+    "messages": [
+      {
+        "type": "result",
+        "id": "d4fe926d-b85b-4947-8f3b-9725dab74a65",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005609989166259766,
+        "id": "d4fe926d-b85b-4947-8f3b-9725dab74a65",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005900859832763672
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.8946838,
+    "total_duration": 0.09533166885375977
+  },
+  {
+    "iteration": 17,
+    "start_time": 1756201627.8947031,
+    "messages": [
+      {
+        "type": "result",
+        "id": "be19d2b4-9360-4ea0-ad70-29f29abe4b7a",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005700588226318359,
+        "id": "be19d2b4-9360-4ea0-ad70-29f29abe4b7a",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005841255187988281
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201627.991734,
+    "total_duration": 0.0970308780670166
+  },
+  {
+    "iteration": 18,
+    "start_time": 1756201627.991745,
+    "messages": [
+      {
+        "type": "result",
+        "id": "9f01a4c4-60e1-42ec-817f-0b091c1cd7d0",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006608963012695312,
+        "id": "9f01a4c4-60e1-42ec-817f-0b091c1cd7d0",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006718635559082031
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.087151,
+    "total_duration": 0.09540605545043945
+  },
+  {
+    "iteration": 19,
+    "start_time": 1756201628.087167,
+    "messages": [
+      {
+        "type": "result",
+        "id": "efc85e1a-493f-4c41-bd0f-c95669175faf",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006000995635986328,
+        "id": "efc85e1a-493f-4c41-bd0f-c95669175faf",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006239414215087891
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.181835,
+    "total_duration": 0.09466791152954102
+  },
+  {
+    "iteration": 20,
+    "start_time": 1756201628.1818502,
+    "messages": [
+      {
+        "type": "result",
+        "id": "88d1c597-b7fd-425e-b7a4-5d2c2fa573df",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005803108215332031,
+        "id": "88d1c597-b7fd-425e-b7a4-5d2c2fa573df",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005922317504882812
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.2774882,
+    "total_duration": 0.09563803672790527
+  },
+  {
+    "iteration": 21,
+    "start_time": 1756201628.277503,
+    "messages": [
+      {
+        "type": "result",
+        "id": "53389ec4-9285-48db-961d-b9d1a41f1148",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005409717559814453,
+        "id": "53389ec4-9285-48db-961d-b9d1a41f1148",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005660057067871094
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.3713439,
+    "total_duration": 0.0938408374786377
+  },
+  {
+    "iteration": 22,
+    "start_time": 1756201628.371361,
+    "messages": [
+      {
+        "type": "result",
+        "id": "7e0cddb0-b03f-4213-a283-bf3dc530337d",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005450248718261719,
+        "id": "7e0cddb0-b03f-4213-a283-bf3dc530337d",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005698204040527344
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.46869,
+    "total_duration": 0.09732890129089355
+  },
+  {
+    "iteration": 23,
+    "start_time": 1756201628.468704,
+    "messages": [
+      {
+        "type": "result",
+        "id": "0b8e7ca5-b2f0-46fc-bf6d-5140ce24be14",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006368160247802734,
+        "id": "0b8e7ca5-b2f0-46fc-bf6d-5140ce24be14",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006620883941650391
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.565053,
+    "total_duration": 0.09634900093078613
+  },
+  {
+    "iteration": 24,
+    "start_time": 1756201628.565069,
+    "messages": [
+      {
+        "type": "result",
+        "id": "d0bcd1ff-f9dc-4937-8ad7-3f240ce464c0",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005679130554199219,
+        "id": "d0bcd1ff-f9dc-4937-8ad7-3f240ce464c0",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.000579833984375
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.659112,
+    "total_duration": 0.09404301643371582
+  },
+  {
+    "iteration": 25,
+    "start_time": 1756201628.6591308,
+    "messages": [
+      {
+        "type": "result",
+        "id": "b7a07d7c-b7f4-4e06-af32-49675ab4f6a1",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006101131439208984,
+        "id": "b7a07d7c-b7f4-4e06-af32-49675ab4f6a1",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006248950958251953
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.756742,
+    "total_duration": 0.0976111888885498
+  },
+  {
+    "iteration": 26,
+    "start_time": 1756201628.756761,
+    "messages": [
+      {
+        "type": "result",
+        "id": "ddf245cf-dbba-4bd4-b1f5-b9e61d830d4c",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005393028259277344,
+        "id": "ddf245cf-dbba-4bd4-b1f5-b9e61d830d4c",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005519390106201172
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.851994,
+    "total_duration": 0.09523296356201172
+  },
+  {
+    "iteration": 27,
+    "start_time": 1756201628.852011,
+    "messages": [
+      {
+        "type": "result",
+        "id": "b9b774a2-ba29-433f-8b8a-74e6e22b6ced",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005738735198974609,
+        "id": "b9b774a2-ba29-433f-8b8a-74e6e22b6ced",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0005958080291748047
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201628.9479911,
+    "total_duration": 0.09598016738891602
+  },
+  {
+    "iteration": 28,
+    "start_time": 1756201628.948002,
+    "messages": [
+      {
+        "type": "result",
+        "id": "0a38d632-c7c6-4205-89d2-545a99673618",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0006430149078369141,
+        "id": "0a38d632-c7c6-4205-89d2-545a99673618",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006551742553710938
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201629.041719,
+    "total_duration": 0.09371685981750488
+  },
+  {
+    "iteration": 29,
+    "start_time": 1756201629.041734,
+    "messages": [
+      {
+        "type": "result",
+        "id": "c6184acd-d0dd-4651-b1ae-79ed29d2f56a",
+        "data": null,
+        "value": null,
+        "stream": null
+      }
+    ],
+    "output_text": "",
+    "result_value": null,
+    "passed": false,
+    "error": "Output missing 'Sum: 30', got: ''",
+    "message_order": [
+      {
+        "type": "result",
+        "time_offset": 0.0005731582641601562,
+        "id": "c6184acd-d0dd-4651-b1ae-79ed29d2f56a",
+        "data": null,
+        "value": null
+      }
+    ],
+    "timing": {
+      "execution_duration": 0.0006041526794433594
+    },
+    "assertion_checks": {
+      "has_result_message": true,
+      "result_is_none": true,
+      "has_output_messages": false,
+      "output_contains_sum": false,
+      "output_exact": false,
+      "output_stripped": false
+    },
+    "end_time": 1756201629.138921,
+    "total_duration": 0.09718704223632812
+  }
+]
