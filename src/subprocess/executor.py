@@ -44,15 +44,15 @@ class CancelToken:
             self._cancelled = False
 
 
-def _create_cancel_tracer(token: CancelToken, check_interval: int = 1):
+def _create_cancel_tracer(token: CancelToken, check_interval: int = 100):
     """Create a trace function that checks for cancellation.
     
     Args:
         token: The cancellation token to check
-        check_interval: Check every N events (default: 1 = every event)
+        check_interval: Check every N events (default: 100 for better performance)
     
     Returns:
-        Trace function for sys.settrace
+        Trace function for threading.settrace
     """
     event_count = 0
     checked_count = 0
@@ -60,20 +60,19 @@ def _create_cancel_tracer(token: CancelToken, check_interval: int = 1):
     def tracer(frame, event, arg):
         nonlocal event_count, checked_count
         
+        # ALWAYS return the tracer to ensure it's installed in new frames
+        # This is critical for exec/eval frames
+        if event == 'call':
+            return tracer  # Return tracer to install in new frame
+            
         # Check on line events which are most frequent in loops
         if event == 'line':
             event_count += 1
             if event_count >= check_interval:
                 event_count = 0
                 checked_count += 1
-                if checked_count % 10000000 == 0:  # Log every 10 million checks to avoid I/O overhead
-                    import structlog
-                    logger = structlog.get_logger()
-                    logger.debug(f"Tracer checked {checked_count} times, cancelled={token.is_cancelled()}")
+                # Check for cancellation
                 if token.is_cancelled():
-                    import structlog
-                    logger = structlog.get_logger()
-                    logger.info(f"RAISING KeyboardInterrupt from tracer! checked_count={checked_count}")
                     raise KeyboardInterrupt("Execution cancelled")
         
         return tracer  # Must return itself to continue tracing
@@ -198,7 +197,8 @@ class ThreadedExecutor:
         drain_timeout_ms: Optional[int] = 2000,
         input_send_timeout: float = 5.0,
         input_wait_timeout: Optional[float] = 300.0,
-        cancel_check_interval: int = 1,
+        cancel_check_interval: int = 100,
+        enable_cooperative_cancel: bool = True,
     ) -> None:
         self._transport = transport
         self._execution_id = execution_id
@@ -213,6 +213,7 @@ class ThreadedExecutor:
         # Cancellation support
         self._cancel_token = CancelToken()
         self._cancel_check_interval = cancel_check_interval
+        self._enable_cooperative_cancel = enable_cooperative_cancel
         
         # Event-driven output handling with asyncio.Queue
         self._aq: asyncio.Queue[OutputOrSentinel] = asyncio.Queue(maxsize=output_queue_maxsize)
@@ -512,11 +513,16 @@ class ThreadedExecutor:
         # Reset cancel token for this execution
         self._cancel_token.reset()
         
-        # Set up trace function for this thread
-        # This is required for exec/eval to have tracing
-        tracer = _create_cancel_tracer(self._cancel_token, self._cancel_check_interval)
-        logger.info(f"Installing tracer for {self._execution_id}, check_interval={self._cancel_check_interval}")
-        sys.settrace(tracer)
+        # Set up trace function for this thread if cancellation is enabled
+        tracer = None
+        if self._enable_cooperative_cancel:
+            tracer = _create_cancel_tracer(self._cancel_token, self._cancel_check_interval)
+            logger.info(f"Installing tracer for {self._execution_id}, check_interval={self._cancel_check_interval}")
+            # Set tracer for the current thread
+            # This is required for the tracer to work in exec/eval frames
+            sys.settrace(tracer)
+            # Also set the tracer on the current frame to ensure it's active
+            sys._getframe().f_trace = tracer
         monitoring_id = None
         
         try:
@@ -550,15 +556,22 @@ class ThreadedExecutor:
             if is_expr:
                 # Single expression: evaluate and capture result
                 logger.info(f"Executing expression for {self._execution_id}")
-                compiled = compile(code, "<session>", "eval", dont_inherit=True, optimize=0)
+                # IMPORTANT: Use dont_inherit=False to inherit the trace function
+                compiled = compile(code, "<session>", "eval", dont_inherit=False, optimize=0)
                 self._result = eval(compiled, self._namespace, self._namespace)
             else:
                 # Statements: execute without result capture
                 logger.info(f"Executing statements for {self._execution_id}")
-                compiled = compile(code, "<session>", "exec", dont_inherit=True, optimize=0)
+                # IMPORTANT: Use dont_inherit=False to inherit the trace function
+                compiled = compile(code, "<session>", "exec", dont_inherit=False, optimize=0)
                 exec(compiled, self._namespace, self._namespace)
                 logger.info(f"Execution completed for {self._execution_id}")
                 
+        except KeyboardInterrupt as e:
+            # Handle cancellation - store as error for async context
+            self._error = e
+            # Print minimal message to original stderr (avoid issues with redirected stderr)
+            print(f"KeyboardInterrupt: {e}", file=original_stderr)
         except Exception as e:
             # Store error for async context to handle
             self._error = e
@@ -567,7 +580,8 @@ class ThreadedExecutor:
             
         finally:
             # Clear trace function
-            sys.settrace(None)
+            if self._enable_cooperative_cancel:
+                sys.settrace(None)
             
             # Flush any remaining output
             if hasattr(sys.stdout, 'flush'):

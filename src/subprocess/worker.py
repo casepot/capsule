@@ -113,6 +113,7 @@ class SubprocessWorker:
         self._running = False
         self._process = psutil.Process()
         self._active_executor: Optional[ThreadedExecutor] = None
+        self._active_thread: Optional[threading.Thread] = None
         
         # Initialize namespace with builtins
         self._setup_namespace()
@@ -132,7 +133,7 @@ class SubprocessWorker:
             "__builtins__": builtins,
         }
     
-    async def _cancel_with_timeout(self, execution_id: str, grace_timeout_ms: int) -> bool:
+    async def _cancel_with_timeout(self, execution_id: str, grace_timeout_ms: int, thread: threading.Thread = None) -> bool:
         """Cancel execution with grace period before hard cancel.
         
         Args:
@@ -157,7 +158,13 @@ class SubprocessWorker:
         
         while time.time() - start_time < grace_seconds:
             # Check if execution finished
-            if self._active_executor is None or self._active_executor._execution_id != execution_id:
+            # If thread was provided, check if it's still alive
+            if thread and not thread.is_alive():
+                logger.info(f"Thread finished for {execution_id}")
+                return True  # Cancelled successfully
+            # Otherwise check if executor was cleared (backward compatibility)
+            executor = self._active_executor
+            if executor is None or executor._execution_id != execution_id:
                 return True  # Cancelled successfully
             
             await asyncio.sleep(0.01)  # Check every 10ms
@@ -266,6 +273,9 @@ class SubprocessWorker:
         thread.start()
         logger.info(f"Started execution thread for {execution_id}, thread alive={thread.is_alive()}")
         
+        # Store thread reference for cancellation checks
+        self._active_thread = thread
+        
         try:
             # Monitor thread while staying responsive to async events
             while thread.is_alive():
@@ -273,6 +283,7 @@ class SubprocessWorker:
                 
             # Wait for thread to fully complete
             thread.join(timeout=1.0)
+            logger.info(f"Thread joined for {execution_id}, error={executor._error}")
             
             # CRITICAL: Drain all outputs before sending result
             # This ensures output messages arrive before ResultMessage
@@ -304,6 +315,7 @@ class SubprocessWorker:
             
             # Check if there was an error
             if executor._error:
+                logger.info(f"Sending ErrorMessage for {execution_id}: {type(executor._error).__name__}")
                 # Error already printed to stderr by executor
                 error_msg = ErrorMessage(
                     id=str(uuid.uuid4()),
@@ -362,9 +374,10 @@ class SubprocessWorker:
                 except asyncio.TimeoutError:
                     pass  # Force continue if pump doesn't stop
             
-            # Clear active executor
+            # Clear active executor and thread
             logger.debug("Clearing active executor", execution_id=execution_id)
             self._active_executor = None
+            self._active_thread = None
     
     def _track_sources(self, code: str) -> None:
         """Track function and class sources from code.
@@ -469,7 +482,7 @@ class SubprocessWorker:
                     
                     # Cancel with grace period
                     grace_ms = cancel_msg.grace_timeout_ms or 500
-                    cancelled = await self._cancel_with_timeout(cancel_msg.execution_id, grace_ms)
+                    cancelled = await self._cancel_with_timeout(cancel_msg.execution_id, grace_ms, self._active_thread)
                     
                     if not cancelled:
                         # Hard cancel required - restart worker
