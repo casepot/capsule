@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import io
+import queue
 import sys
 import threading
 import time
@@ -29,31 +30,58 @@ class ThreadSafeOutput:
         self._buffer = ""
         
     def write(self, data: str) -> int:
-        """Write data and send complete lines to async transport."""
+        """Write data to queue with proper line handling."""
         if not isinstance(data, str):
             data = str(data)
             
         self._buffer += data
         
-        # Send complete lines
+        # Handle carriage returns for progress bars
+        if '\r' in self._buffer:
+            cr_parts = self._buffer.split('\r')
+            # Keep only the last part after all CRs
+            self._buffer = cr_parts[-1]
+            # Send the last complete segment before the final CR
+            for segment in cr_parts[:-1]:
+                if segment:  # Don't send empty segments
+                    try:
+                        self._executor._output_queue.put((segment + '\r', self._stream_type), timeout=1.0)
+                    except queue.Full:
+                        # Drop output if queue is full (backpressure)
+                        pass
+        
+        # Handle newlines
         while '\n' in self._buffer:
             line, self._buffer = self._buffer.split('\n', 1)
-            # Schedule async send in main loop
-            future = asyncio.run_coroutine_threadsafe(
-                self._executor._send_output(line + '\n', self._stream_type),
-                self._executor._loop
-            )
-            # Don't wait for completion to avoid blocking
+            # Chunk very long lines to protect framing (64KB chunks)
+            chunk_size = 64000
+            if len(line) <= chunk_size:
+                # Normal case: line fits in one chunk
+                try:
+                    self._executor._output_queue.put((line + '\n', self._stream_type), timeout=1.0)
+                except queue.Full:
+                    pass  # Drop if queue full
+            else:
+                # Long line: send in chunks
+                for i in range(0, len(line), chunk_size):
+                    chunk = line[i:i+chunk_size]
+                    # Only add newline to last chunk
+                    if i + chunk_size >= len(line):
+                        chunk += '\n'
+                    try:
+                        self._executor._output_queue.put((chunk, self._stream_type), timeout=1.0)
+                    except queue.Full:
+                        break  # Stop chunking if queue full
             
         return len(data)
     
     def flush(self) -> None:
-        """Flush any remaining buffer."""
+        """Flush any remaining buffer to the queue."""
         if self._buffer:
-            future = asyncio.run_coroutine_threadsafe(
-                self._executor._send_output(self._buffer, self._stream_type),
-                self._executor._loop
-            )
+            try:
+                self._executor._output_queue.put((self._buffer, self._stream_type), timeout=1.0)
+            except queue.Full:
+                pass  # Drop if queue full
             self._buffer = ""
     
     def isatty(self) -> bool:
@@ -80,6 +108,13 @@ class ThreadedExecutor:
         self._input_waiters: Dict[str, tuple[threading.Event, Optional[str]]] = {}
         self._result: Any = None
         self._error: Optional[Exception] = None
+        
+        # Output queue and drain mechanism
+        self._output_queue: queue.Queue = queue.Queue(maxsize=1024)
+        self._pending_sends = 0
+        self._drain_event: Optional[asyncio.Event] = None
+        self._pump_task: Optional[asyncio.Task] = None
+        self._shutdown = False
         
     def create_protocol_input(self) -> callable:
         """Create input function that works in thread context."""
@@ -139,6 +174,78 @@ class ThreadedExecutor:
         )
         await self._transport.send_message(msg)
     
+    async def start_output_pump(self) -> None:
+        """Start the async task that pumps output from queue to transport."""
+        if self._drain_event is None:
+            self._drain_event = asyncio.Event()
+            self._drain_event.set()  # Initially nothing pending
+        
+        async def pump():
+            """Pump output from queue to transport."""
+            loop = asyncio.get_running_loop()
+            
+            while not self._shutdown:
+                try:
+                    # Use run_in_executor to read from blocking queue without freezing loop
+                    # We need to handle queue.Empty exceptions properly
+                    def get_from_queue():
+                        try:
+                            return self._output_queue.get(block=True, timeout=0.1)
+                        except queue.Empty:
+                            return 'QUEUE_EMPTY'  # Special marker for empty queue
+                    
+                    item = await loop.run_in_executor(None, get_from_queue)
+                    
+                    if item == 'QUEUE_EMPTY':
+                        # Queue was empty, check if we should set drain event
+                        if self._pending_sends == 0 and self._output_queue.empty():
+                            self._drain_event.set()
+                        continue
+                    elif item is None:  # Sentinel for shutdown
+                        break
+                    
+                    data, stream_type = item
+                    
+                    # Track pending sends
+                    self._pending_sends += 1
+                    self._drain_event.clear()
+                    
+                    try:
+                        await self._send_output(data, stream_type)
+                    finally:
+                        self._pending_sends -= 1
+                        # Set drain event if no more pending and queue empty
+                        if self._pending_sends == 0 and self._output_queue.empty():
+                            self._drain_event.set()
+                            
+                except Exception:
+                    # Ignore exceptions and continue pumping
+                    continue
+            
+            # Check drain event one more time when exiting
+            if self._pending_sends == 0 and self._output_queue.empty():
+                self._drain_event.set()
+        
+        self._pump_task = asyncio.create_task(pump())
+    
+    async def drain_outputs(self) -> None:
+        """Wait for all pending outputs to be sent."""
+        # If queue has items, give pump a brief moment to start processing
+        if not self._output_queue.empty():
+            await asyncio.sleep(0.005)  # 5ms should be enough
+        
+        if self._drain_event:
+            await self._drain_event.wait()
+    
+    def shutdown_pump(self) -> None:
+        """Signal the pump to shutdown."""
+        self._shutdown = True
+        # Put sentinel to unblock pump
+        try:
+            self._output_queue.put(None, block=False)
+        except queue.Full:
+            pass
+    
     def handle_input_response(self, token: str, data: str) -> None:
         """Handle input response from async context."""
         if token in self._input_waiters:
@@ -172,22 +279,24 @@ class ThreadedExecutor:
             sys.stdout = ThreadSafeOutput(self, StreamType.STDOUT)
             sys.stderr = ThreadSafeOutput(self, StreamType.STDERR)
             
-            # Parse code for source tracking (if needed)
-            tree = ast.parse(code)
-            
-            # Execute the code - use namespace for both globals and locals
-            # This ensures variables are stored in the namespace dict
-            compiled = compile(tree, "<session>", "exec")
-            exec(compiled, self._namespace, self._namespace)
-            
-            # Try to capture result if it's an expression
+            # Decide once: expression vs statements
+            # Expression iff parseable as eval mode
+            is_expr = False
             try:
-                expr_tree = ast.parse(code, mode="eval")
-                compiled_eval = compile(expr_tree, "<session>", "eval")
-                self._result = eval(compiled_eval, self._namespace, self._namespace)
-            except:
-                # Not a single expression, no result to capture
-                pass
+                ast.parse(code, mode="eval")
+                is_expr = True
+            except SyntaxError:
+                is_expr = False
+            
+            # Execute code exactly once based on type
+            if is_expr:
+                # Single expression: evaluate and capture result
+                compiled = compile(code, "<session>", "eval", dont_inherit=True, optimize=0)
+                self._result = eval(compiled, self._namespace, self._namespace)
+            else:
+                # Statements: execute without result capture
+                compiled = compile(code, "<session>", "exec", dont_inherit=True, optimize=0)
+                exec(compiled, self._namespace, self._namespace)
                 
         except Exception as e:
             # Store error for async context to handle

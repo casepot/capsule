@@ -265,18 +265,24 @@ class NamespaceManager:
         Returns:
             Execution result if code is an expression
         """
-        # Compile code
-        compiled = compile(code, "<session>", "exec")
-        
-        # Execute in namespace
-        exec(compiled, self._namespace)
-        
-        # Try to get result if it's an expression
+        # Decide once: expression vs statements
+        # Expression iff parseable as eval mode
+        is_expr = False
         try:
-            tree = ast.parse(code, mode="eval")
-            compiled_eval = compile(tree, "<session>", "eval")
-            return eval(compiled_eval, self._namespace)
-        except:
+            ast.parse(code, mode="eval")
+            is_expr = True
+        except SyntaxError:
+            is_expr = False
+        
+        # Execute code exactly once based on type
+        if is_expr:
+            # Single expression: evaluate and capture result
+            compiled = compile(code, "<session>", "eval", dont_inherit=True, optimize=0)
+            return eval(compiled, self._namespace)
+        else:
+            # Statements: execute without result capture
+            compiled = compile(code, "<session>", "exec", dont_inherit=True, optimize=0)
+            exec(compiled, self._namespace)
             return None
     
     def update_function_sources(self, sources: Dict[str, str]) -> None:

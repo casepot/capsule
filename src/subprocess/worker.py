@@ -296,6 +296,9 @@ class SubprocessWorker:
             loop
         )
         
+        # Start output pump for async message sending
+        await executor.start_output_pump()
+        
         # Track active executor for input routing
         self._active_executor = executor
         logger.debug("Set active executor", execution_id=execution_id)
@@ -324,6 +327,10 @@ class SubprocessWorker:
                 
             # Wait for thread to fully complete
             thread.join(timeout=1.0)
+            
+            # CRITICAL: Drain all outputs before sending result
+            # This ensures output messages arrive before ResultMessage
+            await executor.drain_outputs()
             
             # Calculate execution time
             execution_time = time.time() - start_time
@@ -377,6 +384,14 @@ class SubprocessWorker:
             await self._transport.send_message(error_msg)
             
         finally:
+            # Shutdown output pump and clean up
+            executor.shutdown_pump()
+            if executor._pump_task:
+                try:
+                    await asyncio.wait_for(executor._pump_task, timeout=1.0)
+                except asyncio.TimeoutError:
+                    pass  # Force continue if pump doesn't stop
+            
             # Clear active executor
             logger.debug("Clearing active executor", execution_id=execution_id)
             self._active_executor = None
