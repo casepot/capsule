@@ -167,7 +167,7 @@ class Session:
                 message = await self._transport.receive_message(timeout=0.1)
                 
                 # Handle different message types
-                if message.type == MessageType.READY:
+                if message.type == "ready":
                     ready_msg = message  # type: ignore
                     logger.debug(
                         "Received ready message",
@@ -176,7 +176,7 @@ class Session:
                     )
                     self._ready_event.set()
                 
-                elif message.type == MessageType.HEARTBEAT:
+                elif message.type == "heartbeat":
                     heartbeat = message  # type: ignore
                     self._info.memory_usage = heartbeat.memory_usage
                     self._info.cpu_percent = heartbeat.cpu_percent

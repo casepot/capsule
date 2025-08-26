@@ -160,20 +160,20 @@ def parse_message(data: dict[str, Any]) -> Message:
     message_type = data.get("type")
     
     message_classes = {
-        MessageType.EXECUTE: ExecuteMessage,
-        MessageType.OUTPUT: OutputMessage,
-        MessageType.INPUT: InputMessage,
-        MessageType.INPUT_RESPONSE: InputResponseMessage,
-        MessageType.RESULT: ResultMessage,
-        MessageType.ERROR: ErrorMessage,
-        MessageType.CHECKPOINT: CheckpointMessage,
-        MessageType.RESTORE: RestoreMessage,
-        MessageType.READY: ReadyMessage,
-        MessageType.HEARTBEAT: HeartbeatMessage,
-        MessageType.SHUTDOWN: ShutdownMessage,
+        "execute": ExecuteMessage,
+        "output": OutputMessage,
+        "input": InputMessage,
+        "input_response": InputResponseMessage,
+        "result": ResultMessage,
+        "error": ErrorMessage,
+        "checkpoint": CheckpointMessage,
+        "restore": RestoreMessage,
+        "ready": ReadyMessage,
+        "heartbeat": HeartbeatMessage,
+        "shutdown": ShutdownMessage,
     }
     
-    message_class = message_classes.get(MessageType(message_type))
+    message_class = message_classes.get(message_type)
     if not message_class:
         raise ValueError(f"Unknown message type: {message_type}")
     
