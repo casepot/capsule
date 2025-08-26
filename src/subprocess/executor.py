@@ -5,13 +5,13 @@ from __future__ import annotations
 import ast
 import asyncio
 import io
-import queue
 import sys
 import threading
 import time
 import traceback
 import uuid
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Union, Literal
 
 from ..protocol.messages import (
     InputMessage,
@@ -19,6 +19,42 @@ from ..protocol.messages import (
     StreamType,
 )
 from ..protocol.transport import MessageTransport
+
+
+# New types for event-driven output handling
+@dataclass(slots=True)
+class _OutputItem:
+    """Output data to be sent."""
+    data: str
+    stream: StreamType
+
+
+class _FlushSentinel:
+    """Sentinel to mark execution boundary for draining."""
+    __slots__ = ('future',)
+    
+    def __init__(self, future: asyncio.Future[None]) -> None:
+        self.future = future
+
+
+class _StopSentinel:
+    """Sentinel to stop the pump task."""
+    __slots__ = ()
+
+
+# Union type for queue items
+OutputOrSentinel = Union[_OutputItem, _FlushSentinel, _StopSentinel]
+
+
+# Custom exceptions
+class OutputBackpressureExceeded(RuntimeError):
+    """Raised when output backpressure policy is exceeded."""
+    pass
+
+
+class OutputDrainTimeout(asyncio.TimeoutError):
+    """Raised when drain operation times out."""
+    pass
 
 
 class ThreadSafeOutput:
@@ -44,23 +80,16 @@ class ThreadSafeOutput:
             # Send the last complete segment before the final CR
             for segment in cr_parts[:-1]:
                 if segment:  # Don't send empty segments
-                    try:
-                        self._executor._output_queue.put((segment + '\r', self._stream_type), timeout=1.0)
-                    except queue.Full:
-                        # Drop output if queue is full (backpressure)
-                        pass
+                    self._executor._enqueue_from_thread(segment + '\r', self._stream_type)
         
         # Handle newlines
         while '\n' in self._buffer:
             line, self._buffer = self._buffer.split('\n', 1)
             # Chunk very long lines to protect framing (64KB chunks)
-            chunk_size = 64000
+            chunk_size = self._executor._line_chunk_size
             if len(line) <= chunk_size:
                 # Normal case: line fits in one chunk
-                try:
-                    self._executor._output_queue.put((line + '\n', self._stream_type), timeout=1.0)
-                except queue.Full:
-                    pass  # Drop if queue full
+                self._executor._enqueue_from_thread(line + '\n', self._stream_type)
             else:
                 # Long line: send in chunks
                 for i in range(0, len(line), chunk_size):
@@ -68,20 +97,14 @@ class ThreadSafeOutput:
                     # Only add newline to last chunk
                     if i + chunk_size >= len(line):
                         chunk += '\n'
-                    try:
-                        self._executor._output_queue.put((chunk, self._stream_type), timeout=1.0)
-                    except queue.Full:
-                        break  # Stop chunking if queue full
+                    self._executor._enqueue_from_thread(chunk, self._stream_type)
             
         return len(data)
     
     def flush(self) -> None:
         """Flush any remaining buffer to the queue."""
         if self._buffer:
-            try:
-                self._executor._output_queue.put((self._buffer, self._stream_type), timeout=1.0)
-            except queue.Full:
-                pass  # Drop if queue full
+            self._executor._enqueue_from_thread(self._buffer, self._stream_type)
             self._buffer = ""
     
     def isatty(self) -> bool:
@@ -99,7 +122,12 @@ class ThreadedExecutor:
         transport: MessageTransport, 
         execution_id: str, 
         namespace: Dict[str, Any],
-        loop: asyncio.AbstractEventLoop
+        loop: asyncio.AbstractEventLoop,
+        *,
+        output_queue_maxsize: int = 1024,
+        output_backpressure: Literal["block", "drop_new", "drop_oldest", "error"] = "block",
+        line_chunk_size: int = 64 * 1024,
+        drain_timeout_ms: Optional[int] = 2000,
     ) -> None:
         self._transport = transport
         self._execution_id = execution_id
@@ -109,12 +137,28 @@ class ThreadedExecutor:
         self._result: Any = None
         self._error: Optional[Exception] = None
         
-        # Output queue and drain mechanism
-        self._output_queue: queue.Queue = queue.Queue(maxsize=1024)
-        self._pending_sends = 0
+        # Event-driven output handling with asyncio.Queue
+        self._aq: asyncio.Queue[OutputOrSentinel] = asyncio.Queue(maxsize=output_queue_maxsize)
         self._drain_event: Optional[asyncio.Event] = None
-        self._pump_task: Optional[asyncio.Task] = None
+        self._pump_task: Optional[asyncio.Task[None]] = None
         self._shutdown = False
+        self._pending_sends = 0
+        
+        # Configuration
+        self._line_chunk_size = line_chunk_size
+        self._backpressure = output_backpressure
+        self._drain_timeout = drain_timeout_ms / 1000.0 if drain_timeout_ms else None
+        
+        # Backpressure management
+        self._capacity: Optional[threading.Semaphore] = (
+            threading.Semaphore(output_queue_maxsize) if self._backpressure == "block" else None
+        )
+        
+        # Metrics
+        self._outputs_enqueued = 0
+        self._outputs_sent = 0
+        self._outputs_dropped = 0
+        self._max_queue_depth = 0
         
     def create_protocol_input(self) -> callable:
         """Create input function that works in thread context."""
@@ -174,77 +218,164 @@ class ThreadedExecutor:
         )
         await self._transport.send_message(msg)
     
-    async def start_output_pump(self) -> None:
-        """Start the async task that pumps output from queue to transport."""
-        if self._drain_event is None:
-            self._drain_event = asyncio.Event()
-            self._drain_event.set()  # Initially nothing pending
+    def _mark_not_drained_threadsafe(self) -> None:
+        """Mark that new output is pending (safe to call from user thread)."""
+        if self._drain_event:
+            self._loop.call_soon_threadsafe(self._drain_event.clear)
+    
+    def _enqueue_from_thread(self, data: str, stream: StreamType) -> None:
+        """Enqueue output from user thread with backpressure handling."""
+        # Mark that we have pending output
+        self._mark_not_drained_threadsafe()
         
-        async def pump():
-            """Pump output from queue to transport."""
-            loop = asyncio.get_running_loop()
-            
-            while not self._shutdown:
-                try:
-                    # Use run_in_executor to read from blocking queue without freezing loop
-                    # We need to handle queue.Empty exceptions properly
-                    def get_from_queue():
+        # Apply backpressure policy
+        if self._capacity:
+            # Block with bounded timeout to avoid permanent stalls
+            if not self._capacity.acquire(timeout=2.0):
+                # Timeout on acquire - apply policy
+                if self._backpressure == "error":
+                    raise OutputBackpressureExceeded("Capacity acquire timeout")
+                self._outputs_dropped += 1
+                return
+        elif self._backpressure.startswith("drop"):
+            # Check if queue is at capacity
+            try:
+                qsize = self._aq.qsize()
+            except:
+                qsize = 0  # Some platforms don't support qsize
+                
+            if qsize >= self._aq.maxsize:
+                if self._backpressure == "drop_new":
+                    self._outputs_dropped += 1
+                    return
+                elif self._backpressure == "drop_oldest":
+                    # Try to remove one item (best effort)
+                    def try_drop_oldest():
                         try:
-                            return self._output_queue.get(block=True, timeout=0.1)
-                        except queue.Empty:
-                            return 'QUEUE_EMPTY'  # Special marker for empty queue
-                    
-                    item = await loop.run_in_executor(None, get_from_queue)
-                    
-                    if item == 'QUEUE_EMPTY':
-                        # Queue was empty, check if we should set drain event
-                        if self._pending_sends == 0 and self._output_queue.empty():
-                            self._drain_event.set()
-                        continue
-                    elif item is None:  # Sentinel for shutdown
-                        break
-                    
-                    data, stream_type = item
-                    
-                    # Track pending sends
-                    self._pending_sends += 1
-                    self._drain_event.clear()
+                            self._aq.get_nowait()
+                        except asyncio.QueueEmpty:
+                            pass
+                    self._loop.call_soon_threadsafe(try_drop_oldest)
+        elif self._backpressure == "error":
+            try:
+                qsize = self._aq.qsize()
+            except:
+                qsize = 0
+            if qsize >= self._aq.maxsize:
+                raise OutputBackpressureExceeded("Output queue full")
+        
+        # Update metrics
+        self._outputs_enqueued += 1
+        try:
+            depth = self._aq.qsize() + 1
+            if depth > self._max_queue_depth:
+                self._max_queue_depth = depth
+        except:
+            pass  # qsize not supported on all platforms
+        
+        # Enqueue the item - wrap in a function to handle exceptions
+        def safe_enqueue():
+            try:
+                self._aq.put_nowait(_OutputItem(data=data, stream=stream))
+            except asyncio.QueueFull:
+                # This shouldn't happen with our backpressure checks, but handle it
+                self._outputs_dropped += 1
+                if self._capacity:
+                    self._capacity.release()
+        
+        self._loop.call_soon_threadsafe(safe_enqueue)
+    
+    async def start_output_pump(self) -> None:
+        """Start the event-driven pump task."""
+        if self._pump_task:
+            return  # Already running
+            
+        self._drain_event = asyncio.Event()
+        self._drain_event.set()  # Initially nothing pending
+        self._shutdown = False
+        
+        async def pump() -> None:
+            """Event-driven pump - no polling, awaits queue.get()."""
+            try:
+                while not self._shutdown:
+                    # Await next item - no polling!
+                    item = await self._aq.get()
                     
                     try:
-                        await self._send_output(data, stream_type)
-                    finally:
-                        self._pending_sends -= 1
-                        # Set drain event if no more pending and queue empty
-                        if self._pending_sends == 0 and self._output_queue.empty():
-                            self._drain_event.set()
+                        if isinstance(item, _FlushSentinel):
+                            # Flush barrier - signal completion if all sent
+                            if self._pending_sends == 0 and self._aq.empty():
+                                self._drain_event.set()
+                            if not item.future.done():
+                                item.future.set_result(None)
+                            continue
                             
-                except Exception:
-                    # Ignore exceptions and continue pumping
-                    continue
-            
-            # Check drain event one more time when exiting
-            if self._pending_sends == 0 and self._output_queue.empty():
-                self._drain_event.set()
+                        if isinstance(item, _StopSentinel):
+                            break  # Shutdown requested
+                            
+                        # Regular output item
+                        self._pending_sends += 1
+                        try:
+                            await self._send_output(item.data, item.stream)
+                            self._outputs_sent += 1
+                        finally:
+                            self._pending_sends -= 1
+                            if self._capacity:
+                                self._capacity.release()
+                            # Check if we're drained
+                            if self._pending_sends == 0 and self._aq.empty():
+                                self._drain_event.set()
+                    finally:
+                        self._aq.task_done()
+            finally:
+                # Ensure drain event is set on exit to prevent deadlock
+                if self._drain_event and not self._drain_event.is_set():
+                    self._drain_event.set()
         
         self._pump_task = asyncio.create_task(pump())
     
-    async def drain_outputs(self) -> None:
-        """Wait for all pending outputs to be sent."""
-        # If queue has items, give pump a brief moment to start processing
-        if not self._output_queue.empty():
-            await asyncio.sleep(0.005)  # 5ms should be enough
+    async def drain_outputs(self, timeout: Optional[float] = None) -> None:
+        """Wait for all pending outputs to be sent using flush sentinel."""
+        if timeout is None:
+            timeout = self._drain_timeout
+            
+        # Insert flush sentinel and wait for acknowledgment
+        fut = self._loop.create_future()
+        self._loop.call_soon_threadsafe(self._aq.put_nowait, _FlushSentinel(fut))
         
-        if self._drain_event:
-            await self._drain_event.wait()
+        try:
+            await asyncio.wait_for(fut, timeout=timeout)
+        except asyncio.TimeoutError as e:
+            # Provide diagnostics on timeout
+            pending = self._pending_sends
+            try:
+                qsize = self._aq.qsize()
+            except:
+                qsize = -1
+            raise OutputDrainTimeout(
+                f"drain_outputs timeout after {timeout}s "
+                f"(pending_sends={pending}, queue_size={qsize}, "
+                f"sent={self._outputs_sent}, dropped={self._outputs_dropped})"
+            ) from e
     
     def shutdown_pump(self) -> None:
         """Signal the pump to shutdown."""
         self._shutdown = True
-        # Put sentinel to unblock pump
+        # Put stop sentinel to cleanly exit pump
+        self._loop.call_soon_threadsafe(self._aq.put_nowait, _StopSentinel())
+    
+    async def stop_output_pump(self) -> None:
+        """Stop the output pump task."""
+        if not self._pump_task:
+            return
+        self._shutdown = True
+        self._loop.call_soon_threadsafe(self._aq.put_nowait, _StopSentinel())
         try:
-            self._output_queue.put(None, block=False)
-        except queue.Full:
-            pass
+            await asyncio.wait_for(self._pump_task, timeout=2.0)
+        except asyncio.TimeoutError:
+            self._pump_task.cancel()
+        finally:
+            self._pump_task = None
     
     def handle_input_response(self, token: str, data: str) -> None:
         """Handle input response from async context."""
