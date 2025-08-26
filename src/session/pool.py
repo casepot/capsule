@@ -172,25 +172,26 @@ class SessionPool:
             # Check if we can create new session
             async with self._lock:
                 total_sessions = len(self._all_sessions)
+                can_create = total_sessions < self._config.max_sessions
+            
+            if can_create:
+                # Create new session without holding lock
+                session = await self._create_session()
                 
-                if total_sessions < self._config.max_sessions:
-                    # Create new session without holding lock
-                    session = await self._create_session()
-                    
-                    async with self._lock:
-                        self._active_sessions.add(session)
-                    
-                    self._metrics.acquisition_success += 1
-                    self._metrics.total_acquisition_time += time.time() - start_time
-                    self._metrics.pool_misses += 1
-                    
-                    logger.debug(
-                        "Created new session",
-                        session_id=session.session_id,
-                        acquisition_time=time.time() - start_time,
-                    )
-                    
-                    return session
+                async with self._lock:
+                    self._active_sessions.add(session)
+                
+                self._metrics.acquisition_success += 1
+                self._metrics.total_acquisition_time += time.time() - start_time
+                self._metrics.pool_misses += 1
+                
+                logger.debug(
+                    "Created new session",
+                    session_id=session.session_id,
+                    acquisition_time=time.time() - start_time,
+                )
+                
+                return session
             
             # Wait for session to become available
             if deadline:
