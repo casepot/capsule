@@ -74,6 +74,7 @@ class SessionPool:
         self._lock = asyncio.Lock()
         self._shutdown = False
         self._warmup_needed = asyncio.Event()  # Event-driven warmup trigger
+        self._health_needed = asyncio.Event()  # Event-driven health check trigger
         self._warmup_task: Optional[asyncio.Task[None]] = None
         self._health_check_task: Optional[asyncio.Task[None]] = None
         self._metrics = PoolMetrics()
@@ -94,7 +95,7 @@ class SessionPool:
         
         # Start background tasks
         self._warmup_task = asyncio.create_task(self._warmup_worker())
-        self._health_check_task = asyncio.create_task(self._health_check_loop())
+        self._health_check_task = asyncio.create_task(self._health_check_worker())
     
     async def stop(self) -> None:
         """Stop the session pool and cleanup all sessions."""
@@ -287,10 +288,15 @@ class SessionPool:
             await self._remove_session(session)
             # Check if warmup needed after removing session
             self._check_warmup_needed()
+            # Trigger health check after session death
+            self._trigger_health_check()
             return
         
         # Return to idle pool
         await self._idle_sessions.put(session)
+        
+        # Trigger health check on release to detect stale sessions
+        self._trigger_health_check()
         
         logger.debug(
             "Released session to pool",
@@ -366,6 +372,9 @@ class SessionPool:
             total_sessions=len(self._all_sessions),
         )
         
+        # Trigger health check after removing session
+        self._trigger_health_check()
+        
         # Check if warmup needed after removal
         self._check_warmup_needed()
     
@@ -397,6 +406,8 @@ class SessionPool:
             await self._remove_session(session)
             # Check if warmup needed after recycle failure
             self._check_warmup_needed()
+            # Trigger health check after recycle failure
+            self._trigger_health_check()
     
     async def ensure_min_sessions(self) -> None:
         """Ensure minimum number of idle sessions are available."""
@@ -541,50 +552,120 @@ class SessionPool:
                 min_idle=self._config.min_idle,
             )
     
-    async def _health_check_loop(self) -> None:
-        """Background task to check session health."""
+    def _trigger_health_check(self) -> None:
+        """Trigger health check if needed.
+        
+        Should be called after operations that might indicate
+        unhealthy sessions or pool state changes.
+        """
+        if not self._shutdown:
+            # Only count as trigger if event wasn't already set
+            if not self._health_needed.is_set():
+                self._metrics.health_check_triggers += 1
+            self._health_needed.set()
+            logger.debug("Health check triggered")
+    
+    async def _run_health_check_once(self) -> None:
+        """Run a single health check iteration."""
+        self._metrics.health_check_runs += 1
+        
+        # Check idle sessions
+        idle_sessions = []
+        
+        # Drain queue to check all sessions
+        while not self._idle_sessions.empty():
+            try:
+                session = self._idle_sessions.get_nowait()
+                idle_sessions.append(session)
+            except asyncio.QueueEmpty:
+                break
+        
+        # Check each session and return healthy ones
+        sessions_removed = 0
+        for session in idle_sessions:
+            if session.is_alive:
+                # Check idle timeout
+                idle_time = time.time() - session.info.last_used_at
+                
+                if idle_time > self._config.session_timeout:
+                    logger.info(
+                        "Removing idle session",
+                        session_id=session.session_id,
+                        idle_time=idle_time,
+                    )
+                    await self._remove_session(session)
+                    sessions_removed += 1
+                    self._metrics.sessions_removed_by_health += 1
+                else:
+                    await self._idle_sessions.put(session)
+            else:
+                logger.warning(
+                    "Removing dead session",
+                    session_id=session.session_id,
+                )
+                await self._remove_session(session)
+                sessions_removed += 1
+                self._metrics.sessions_removed_by_health += 1
+        
+        # Check if warmup needed after health check removals
+        if sessions_removed > 0:
+            self._check_warmup_needed()
+    
+    async def _health_check_worker(self) -> None:
+        """Hybrid health check worker with baseline timer and event triggers.
+        
+        Runs health check on:
+        1. Event trigger (immediate response)
+        2. Baseline timer expiry (safety net)
+        """
+        # Use configured interval, defaulting to 60s for production
+        # (tests may use shorter intervals)
+        base_interval = float(self._config.health_check_interval)
+        if base_interval == 30.0:  # Default value, increase to 60s for efficiency
+            base_interval = 60.0
+        
         while not self._shutdown:
             try:
-                await asyncio.sleep(self._config.health_check_interval)
+                # Create baseline timer task
+                timer_task = asyncio.create_task(asyncio.sleep(base_interval))
+                event_task = asyncio.create_task(self._health_needed.wait())
                 
-                # Check idle sessions
-                idle_sessions = []
+                # Wait for either trigger or timer
+                done, pending = await asyncio.wait(
+                    {timer_task, event_task},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
                 
-                # Drain queue to check all sessions
-                while not self._idle_sessions.empty():
+                # Clear event if it was triggered
+                if event_task in done:
+                    self._health_needed.clear()
+                
+                # Cancel pending tasks
+                for task in pending:
+                    task.cancel()
                     try:
-                        session = self._idle_sessions.get_nowait()
-                        idle_sessions.append(session)
-                    except asyncio.QueueEmpty:
-                        break
+                        await task
+                    except asyncio.CancelledError:
+                        pass
                 
-                # Check each session and return healthy ones
-                for session in idle_sessions:
-                    if session.is_alive:
-                        # Check idle timeout
-                        idle_time = time.time() - session.info.last_used_at
-                        
-                        if idle_time > self._config.session_timeout:
-                            logger.info(
-                                "Removing idle session",
-                                session_id=session.session_id,
-                                idle_time=idle_time,
-                            )
-                            await self._remove_session(session)
-                        else:
-                            await self._idle_sessions.put(session)
-                    else:
-                        logger.warning(
-                            "Removing dead session",
-                            session_id=session.session_id,
-                        )
-                        await self._remove_session(session)
+                # Run health check
+                await self._run_health_check_once()
                 
-                # Check if warmup needed after health check removals
-                self._check_warmup_needed()
+                logger.debug(
+                    "Health check completed",
+                    runs=self._metrics.health_check_runs,
+                    triggers=self._metrics.health_check_triggers,
+                )
                 
             except Exception as e:
                 logger.error("Health check error", error=str(e))
+                # Back off on error
+                await asyncio.sleep(1.0)
+    
+    async def _health_check_loop(self) -> None:
+        """Legacy health check loop - replaced by _health_check_worker."""
+        # This method is no longer used but kept for reference
+        pass
     
     def get_metrics(self) -> PoolMetrics:
         """Get pool metrics.
@@ -605,6 +686,12 @@ class SessionPool:
         if self._metrics.acquisition_success > 0:
             self._metrics.avg_acquisition_time = (
                 self._metrics.total_acquisition_time / self._metrics.acquisition_success
+            )
+        
+        # Calculate health check efficiency
+        if self._metrics.health_check_triggers > 0:
+            self._metrics.health_check_efficiency = (
+                self._metrics.health_check_runs / self._metrics.health_check_triggers
             )
         
         return self._metrics
@@ -644,6 +731,14 @@ class SessionPool:
                     metrics.warmup_loop_iterations / max(1, metrics.warmup_triggers)
                     if metrics.warmup_triggers > 0 else 0.0
                 ),
+                # Hybrid health check metrics
+                "health_check_runs": metrics.health_check_runs,
+                "health_check_triggers": metrics.health_check_triggers,
+                "sessions_removed_by_health": metrics.sessions_removed_by_health,
+                "health_check_efficiency": (
+                    metrics.health_check_runs / max(1, metrics.health_check_triggers)
+                    if metrics.health_check_triggers > 0 else 0.0
+                ),
             },
         }
 
@@ -671,3 +766,8 @@ class PoolMetrics:
     warmup_triggers: int = 0
     warmup_loop_iterations: int = 0
     sessions_created_from_warmup: int = 0
+    # Hybrid health check metrics
+    health_check_runs: int = 0
+    health_check_triggers: int = 0
+    sessions_removed_by_health: int = 0
+    health_check_efficiency: float = 0.0
