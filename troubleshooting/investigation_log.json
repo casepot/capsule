@@ -1132,5 +1132,21 @@
     "falsification_steps": null,
     "outcome": "PyREPL3 cancellation mechanism production-ready with both cooperative and hard fallback modes",
     "notes": "Architecture follows Jupyter-style execution control. Two-tier system: cooperative via trace injection, hard via worker restart. Maintains single-reader invariant and async/sync separation."
+  },
+  {
+    "timestamp": "2025-08-27T00:20:00Z",
+    "tags": [
+      "analysis",
+      "design_decision",
+      "sys_settrace",
+      "threading",
+      "refinement"
+    ],
+    "summary": "Validated sys.settrace is correct choice over threading.settrace",
+    "details": "Analyzed whether to use sys.settrace() or threading.settrace() for cooperative cancellation. Investigation revealed sys.settrace() is correct for our architecture because: 1) We set the trace from WITHIN the already-running execution thread in ThreadedExecutor.execute_code(), 2) threading.settrace() only affects threads created AFTER it's called - it wouldn't affect our already-running thread, 3) Our pattern: Worker creates thread -> thread runs execute_code() -> execute_code() calls sys.settrace(tracer) to install trace in current thread. Since we're inside the thread when setting trace, sys.settrace() is appropriate. threading.settrace() is for setting default traces on future threads before creation. Also removed redundant sys._getframe().f_trace = tracer line since sys.settrace() already sets the frame trace.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Design validated - sys.settrace() is architecturally correct for thread-internal trace installation",
+    "notes": "Key insight: The location WHERE trace is set determines which API to use. Setting from within thread = sys.settrace(). Setting for future threads = threading.settrace(). Our architecture correctly uses sys.settrace() since ThreadedExecutor sets trace inside the execution thread. The critical fix was dont_inherit=False, not the trace API choice."
   }
 ]
