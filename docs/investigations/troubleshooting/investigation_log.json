@@ -1516,7 +1516,7 @@
     "summary": "Pattern 6 Rate limiter polling identified",
     "details": "Investigation of RateLimiter.acquire() in src/protocol/framing.py:174-182 reveals while loop with sleep for token replenishment. Issues: 1) Unbounded wakeups under contention (one per 1/rate seconds), 2) Many tasks sleeping/waking simultaneously under load, 3) No exact wait calculation - always sleeps full interval. The rate limiter uses polling loop even when partial token available. Good news: RateLimiter currently unused in codebase, allowing clean refactoring without breaking changes.",
     "hypothesis": "On-demand token computation will eliminate polling and provide exact timing",
-    "falsification_steps": "1. Calculate exact wait time based on token deficit, 2. Sleep once for exact duration, 3. Verify ≤1 wakeup per acquire",
+    "falsification_steps": "1. Calculate exact wait time based on token deficit, 2. Sleep once for exact duration, 3. Verify \u22641 wakeup per acquire",
     "outcome": "Pattern confirmed - polling causes unnecessary wakeups",
     "notes": "RateLimiter exists but unused - perfect candidate for improvement"
   },
@@ -1585,10 +1585,93 @@
       "metrics"
     ],
     "summary": "Pattern 6 Rate limiter successfully converted to on-demand",
-    "details": "Successfully eliminated rate limiter polling pattern. Implementation: Replaced while loop with on-demand calculation, added exact wait computation, optional metrics tracking, zero rate validation. Results: ≤1 wakeup per acquire (vs unbounded), exact timing calculations, zero CPU when not rate limited, simpler code without polling logic. No API changes, fully backward compatible (though currently unused in codebase).",
+    "details": "Successfully eliminated rate limiter polling pattern. Implementation: Replaced while loop with on-demand calculation, added exact wait computation, optional metrics tracking, zero rate validation. Results: \u22641 wakeup per acquire (vs unbounded), exact timing calculations, zero CPU when not rate limited, simpler code without polling logic. No API changes, fully backward compatible (though currently unused in codebase).",
     "hypothesis": null,
     "falsification_steps": null,
     "outcome": "Production-ready on-demand rate limiter with proven efficiency",
     "notes": "Fourth of 6 polling patterns fixed. Mathematical approach provides exact timing without polling overhead."
+  },
+  {
+    "timestamp": "2025-08-27T05:59:52Z",
+    "tags": [
+      "testing",
+      "validation",
+      "breakthrough"
+    ],
+    "summary": "Bidirectional communication works",
+    "details": "Successfully sent execute and received 3 responses. Types: ['heartbeat', 'output', 'result']",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Worker processes messages correctly",
+    "notes": "Issue must be in Session/PipeTransport layer"
+  },
+  {
+    "timestamp": "2025-08-27T05:59:52Z",
+    "tags": [
+      "testing",
+      "validation"
+    ],
+    "summary": "Simple execution works",
+    "details": "Code executed successfully. Received 2 messages",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Basic execution functioning",
+    "notes": "Message types: [<MessageType.OUTPUT: 'output'>, <MessageType.RESULT: 'result'>]"
+  },
+  {
+    "timestamp": "2025-08-27T05:59:53Z",
+    "tags": [
+      "testing",
+      "validation",
+      "root_cause"
+    ],
+    "summary": "main.py runs successfully",
+    "details": "main.py completed all demos in 0.725s without hanging",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Issue resolved - all fixes working",
+    "notes": "Worker communication and async issues fixed"
+  },
+  {
+    "timestamp": "2025-08-27T05:59:55Z",
+    "tags": [
+      "testing",
+      "investigation",
+      "observation"
+    ],
+    "summary": "Direct subprocess communication test",
+    "details": "Subprocess started and sent data. Length=175, decoded=True",
+    "hypothesis": "Transport layer encoding/decoding mismatch",
+    "falsification_steps": null,
+    "outcome": "Worker sends data but may have encoding issues",
+    "notes": null
+  },
+  {
+    "timestamp": "2025-08-27T05:59:59Z",
+    "tags": [
+      "testing",
+      "validation",
+      "breakthrough"
+    ],
+    "summary": "Execute message successfully processed",
+    "details": "Worker processed execute message and sent 2 responses. Types: ['output', 'result']",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Fix confirmed - messages are being routed correctly",
+    "notes": "Issue was in transport layer timeout causing race conditions"
+  },
+  {
+    "timestamp": "2025-08-27T06:00:00Z",
+    "tags": [
+      "testing",
+      "validation",
+      "breakthrough"
+    ],
+    "summary": "Worker startup successful",
+    "details": "Worker started in 0.168s and reached READY state",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Worker communication fixed",
+    "notes": "stdin/stdout connection working"
   }
 ]

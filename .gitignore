@@ -201,3 +201,7 @@ TODO.txt
 test_output/
 test_results/
 *.test.log
+
+# Development archives
+.dev/
+.archive/
