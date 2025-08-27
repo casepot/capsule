@@ -21,6 +21,7 @@ from ..protocol.messages import (
     ShutdownMessage,
 )
 from ..protocol.transport import PipeTransport
+from .config import SessionConfig
 
 logger = structlog.get_logger()
 
@@ -61,10 +62,12 @@ class Session:
         session_id: Optional[str] = None,
         python_path: str = sys.executable,
         warmup_code: Optional[str] = None,
+        config: Optional[SessionConfig] = None,
     ) -> None:
         self.session_id = session_id or str(uuid.uuid4())
         self._python_path = python_path
         self._warmup_code = warmup_code
+        self._config = config or SessionConfig()
         self._process: Optional[asyncio.subprocess.Process] = None
         self._transport: Optional[PipeTransport] = None
         self._state = SessionState.CREATING
@@ -76,8 +79,15 @@ class Session:
         )
         self._lock = asyncio.Lock()
         self._ready_event = asyncio.Event()
+        self._cancel_event = asyncio.Event()  # Event for cancellation
         self._message_handlers: Dict[str, asyncio.Queue[Message]] = {}
         self._receive_task: Optional[asyncio.Task[None]] = None
+        
+        # Metrics collection
+        self._metrics = {
+            'cancel_event_triggers': 0,
+            'executions_cancelled': 0,
+        }
     
     @property
     def info(self) -> SessionInfo:
@@ -217,6 +227,75 @@ class Session:
             self._message_handlers["general"] = asyncio.Queue()
         await self._message_handlers["general"].put(message)
     
+    async def _wait_for_message_cancellable(
+        self,
+        queue: asyncio.Queue[Message],
+        timeout: Optional[float] = None,
+    ) -> Message:
+        """Wait for a message with cancellable timeout.
+        
+        This method provides an event-driven alternative to chunked timeouts,
+        allowing for immediate cancellation response and reducing CPU wakeups.
+        
+        Args:
+            queue: The message queue to wait on
+            timeout: Optional timeout in seconds (uses monotonic time)
+            
+        Returns:
+            The received message
+            
+        Raises:
+            asyncio.TimeoutError: If timeout is reached
+            asyncio.CancelledError: If session is cancelled/terminated
+        """
+        cancel_ev = self._cancel_event
+        deadline = (time.monotonic() + timeout) if timeout else None
+        
+        queue_get = asyncio.create_task(queue.get())
+        cancel_wait = asyncio.create_task(cancel_ev.wait())
+        
+        try:
+            if deadline is not None:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError("Execution timeout")
+                    
+                    done, pending = await asyncio.wait(
+                        {queue_get, cancel_wait},
+                        timeout=remaining,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    
+                    if queue_get in done:
+                        return queue_get.result()
+                    
+                    if cancel_wait in done:
+                        if self._config.enable_metrics:
+                            self._metrics['cancel_event_triggers'] += 1
+                        raise asyncio.CancelledError("Session cancelled/terminating")
+            else:
+                done, _ = await asyncio.wait(
+                    {queue_get, cancel_wait},
+                    return_when=asyncio.FIRST_COMPLETED
+                )
+                
+                if queue_get in done:
+                    return queue_get.result()
+                else:
+                    if self._config.enable_metrics:
+                        self._metrics['cancel_event_triggers'] += 1
+                    raise asyncio.CancelledError("Session cancelled/terminating")
+        finally:
+            # Clean up tasks
+            for t in (queue_get, cancel_wait):
+                if not t.done():
+                    t.cancel()
+                    try:
+                        await t
+                    except asyncio.CancelledError:
+                        pass
+    
     async def execute(
         self,
         message: ExecuteMessage,
@@ -261,11 +340,11 @@ class Session:
                     raise asyncio.TimeoutError("Execution timeout")
                 
                 try:
-                    # Wait for message with timeout
+                    # Wait for message using event-driven cancellable wait
                     queue = self._message_handlers[queue_key]
-                    msg = await asyncio.wait_for(
-                        queue.get(),
-                        timeout=min(remaining, 1.0) if remaining else 1.0
+                    msg = await self._wait_for_message_cancellable(
+                        queue,
+                        timeout=remaining
                     )
                     
                     # Check if this is related to our execution
@@ -279,9 +358,18 @@ class Session:
                             break
                     
                 except asyncio.TimeoutError:
-                    if deadline and time.time() >= deadline:
-                        raise
-                    continue
+                    # Timeout means we hit the deadline
+                    raise
+                except asyncio.CancelledError:
+                    # Session was cancelled/terminated
+                    if self._config.enable_metrics:
+                        self._metrics['executions_cancelled'] += 1
+                    logger.debug(
+                        "Execution cancelled via event",
+                        session_id=self.session_id,
+                        execution_id=execution_id
+                    )
+                    raise
                     
         finally:
             # Clean up message handler
@@ -412,8 +500,9 @@ class Session:
                 raise asyncio.TimeoutError("Receive timeout")
             
             try:
-                msg = await asyncio.wait_for(
-                    queue.get(),
+                # Use event-driven cancellable wait
+                msg = await self._wait_for_message_cancellable(
+                    queue,
                     timeout=remaining
                 )
                 
@@ -425,6 +514,13 @@ class Session:
                 
             except asyncio.TimeoutError:
                 raise
+            except asyncio.CancelledError:
+                # Session was cancelled/terminated
+                logger.debug(
+                    "Receive cancelled via event",
+                    session_id=self.session_id
+                )
+                raise
     
     async def shutdown(self, reason: str = "Requested", checkpoint: bool = True) -> None:
         """Gracefully shutdown the session.
@@ -435,6 +531,9 @@ class Session:
         """
         if self._state == SessionState.TERMINATED:
             return
+        
+        # Set cancel event to interrupt any waiting operations
+        self._cancel_event.set()
         
         async with self._lock:
             self._state = SessionState.SHUTTING_DOWN
@@ -473,6 +572,9 @@ class Session:
     
     async def terminate(self) -> None:
         """Forcefully terminate the session."""
+        # Set cancel event to interrupt any waiting operations
+        self._cancel_event.set()
+        
         async with self._lock:
             self._state = SessionState.TERMINATED
         
