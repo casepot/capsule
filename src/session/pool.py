@@ -73,6 +73,7 @@ class SessionPool:
         self._all_sessions: Dict[str, Session] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
+        self._warmup_needed = asyncio.Event()  # Event-driven warmup trigger
         self._warmup_task: Optional[asyncio.Task[None]] = None
         self._health_check_task: Optional[asyncio.Task[None]] = None
         self._metrics = PoolMetrics()
@@ -88,9 +89,11 @@ class SessionPool:
         # Pre-warm sessions if configured
         if self._config.pre_warm_on_start:
             await self.ensure_min_sessions()
+            # Ensure warmup worker will check watermark
+            self._check_warmup_needed()
         
         # Start background tasks
-        self._warmup_task = asyncio.create_task(self._warmup_loop())
+        self._warmup_task = asyncio.create_task(self._warmup_worker())
         self._health_check_task = asyncio.create_task(self._health_check_loop())
     
     async def stop(self) -> None:
@@ -116,7 +119,8 @@ class SessionPool:
         # Shutdown all sessions
         tasks = []
         for session in self._all_sessions.values():
-            tasks.append(asyncio.create_task(session.shutdown("Pool shutdown")))
+            if session is not None:  # Skip placeholders
+                tasks.append(asyncio.create_task(session.shutdown("Pool shutdown")))
         
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -161,6 +165,9 @@ class SessionPool:
                         acquisition_time=time.time() - start_time,
                     )
                     
+                    # Check if warmup needed after taking from idle pool
+                    self._check_warmup_needed()
+                    
                     return session
                 else:
                     # Session is dead, remove it
@@ -176,22 +183,29 @@ class SessionPool:
             
             if can_create:
                 # Create new session without holding lock
-                session = await self._create_session()
-                
-                async with self._lock:
-                    self._active_sessions.add(session)
-                
-                self._metrics.acquisition_success += 1
-                self._metrics.total_acquisition_time += time.time() - start_time
-                self._metrics.pool_misses += 1
-                
-                logger.debug(
-                    "Created new session",
-                    session_id=session.session_id,
-                    acquisition_time=time.time() - start_time,
-                )
-                
-                return session
+                try:
+                    session = await self._create_session()
+                except RuntimeError as e:
+                    if "max capacity" in str(e):
+                        # Pool filled by concurrent operation, wait for available
+                        pass
+                    else:
+                        raise
+                else:
+                    async with self._lock:
+                        self._active_sessions.add(session)
+                    
+                    self._metrics.acquisition_success += 1
+                    self._metrics.total_acquisition_time += time.time() - start_time
+                    self._metrics.pool_misses += 1
+                    
+                    logger.debug(
+                        "Created new session",
+                        session_id=session.session_id,
+                        acquisition_time=time.time() - start_time,
+                    )
+                    
+                    return session
             
             # Wait for session to become available
             if deadline:
@@ -271,6 +285,8 @@ class SessionPool:
                     logger.error("Failed to restart session", session_id=session.session_id, error=str(e))
             
             await self._remove_session(session)
+            # Check if warmup needed after removing session
+            self._check_warmup_needed()
             return
         
         # Return to idle pool
@@ -287,25 +303,44 @@ class SessionPool:
         
         Returns:
             New session
+            
+        Raises:
+            RuntimeError: If pool is at max capacity
         """
-        session = Session(warmup_code=self._config.warmup_code)
-        
-        # Start session
-        await session.start()
-        
-        # Register session
+        # Double-check capacity with lock before creating
         async with self._lock:
-            self._all_sessions[session.session_id] = session
+            if len(self._all_sessions) >= self._config.max_sessions:
+                raise RuntimeError("Pool at max capacity")
+            # Reserve slot by incrementing count with placeholder
+            placeholder_id = f"creating-{time.time()}"
+            self._all_sessions[placeholder_id] = None
         
-        self._metrics.sessions_created += 1
-        
-        logger.info(
-            "Created session",
-            session_id=session.session_id,
-            total_sessions=len(self._all_sessions),
-        )
-        
-        return session
+        try:
+            session = Session(warmup_code=self._config.warmup_code)
+            
+            # Start session
+            await session.start()
+            
+            # Replace placeholder with actual session
+            async with self._lock:
+                del self._all_sessions[placeholder_id]
+                self._all_sessions[session.session_id] = session
+            
+            self._metrics.sessions_created += 1
+            
+            logger.info(
+                "Created session",
+                session_id=session.session_id,
+                total_sessions=len(self._all_sessions),
+            )
+            
+            return session
+        except Exception:
+            # Remove placeholder on failure
+            async with self._lock:
+                if placeholder_id in self._all_sessions:
+                    del self._all_sessions[placeholder_id]
+            raise
     
     async def _remove_session(self, session: Session) -> None:
         """Remove a session from the pool.
@@ -330,6 +365,9 @@ class SessionPool:
             session_id=session.session_id,
             total_sessions=len(self._all_sessions),
         )
+        
+        # Check if warmup needed after removal
+        self._check_warmup_needed()
     
     async def _recycle_session(self, session: Session) -> None:
         """Recycle a session by restarting it.
@@ -357,6 +395,8 @@ class SessionPool:
                 error=str(e),
             )
             await self._remove_session(session)
+            # Check if warmup needed after recycle failure
+            self._check_warmup_needed()
     
     async def ensure_min_sessions(self) -> None:
         """Ensure minimum number of idle sessions are available."""
@@ -390,9 +430,16 @@ class SessionPool:
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             
+            created = 0
             for result in results:
                 if isinstance(result, Exception):
                     logger.error("Failed to pre-warm session", error=str(result))
+                else:
+                    created += 1
+                    self._metrics.sessions_created_from_warmup += 1
+            
+            if created > 0:
+                self._metrics.warmup_loop_iterations += 1
     
     async def _create_and_add_session(self) -> None:
         """Create a session and add it to the idle pool."""
@@ -403,16 +450,96 @@ class SessionPool:
             logger.error("Failed to create session", error=str(e))
             raise
     
-    async def _warmup_loop(self) -> None:
-        """Background task to maintain minimum idle sessions."""
+    async def _warmup_worker(self) -> None:
+        """Event-driven background task to maintain minimum idle sessions.
+        
+        Waits on warmup event instead of polling. Coalesces multiple triggers
+        by looping until watermark is satisfied.
+        """
+        # Trigger once at startup to ensure initial watermark
+        self._warmup_needed.set()
+        
         while not self._shutdown:
+            # Wait for warmup signal
+            await self._warmup_needed.wait()
+            self._warmup_needed.clear()
+            
+            logger.debug("Warmup worker activated", triggers=self._metrics.warmup_triggers)
+            
             try:
-                await self.ensure_min_sessions()
-                await asyncio.sleep(10.0)  # Check every 10 seconds
-                
+                # Loop until watermark is satisfied (handles burst signals)
+                while not self._shutdown:
+                    self._metrics.warmup_loop_iterations += 1
+                    
+                    # Check current state
+                    async with self._lock:
+                        current_idle = self._idle_sessions.qsize()
+                        current_total = len(self._all_sessions)
+                        needed = self._config.min_idle - current_idle
+                        available_slots = self._config.max_sessions - current_total
+                        needed = min(needed, available_slots)
+                    
+                    if needed <= 0:
+                        # Watermark satisfied
+                        logger.debug(
+                            "Warmup complete",
+                            idle=current_idle,
+                            min_idle=self._config.min_idle,
+                        )
+                        break
+                    
+                    # Create sessions to reach watermark
+                    logger.debug(
+                        "Creating sessions for warmup",
+                        needed=needed,
+                        current_idle=current_idle,
+                    )
+                    
+                    tasks = []
+                    for _ in range(needed):
+                        task = asyncio.create_task(self._create_and_add_session())
+                        tasks.append(task)
+                    
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    created = 0
+                    for result in results:
+                        if isinstance(result, Exception):
+                            logger.error("Failed to create session during warmup", error=str(result))
+                        else:
+                            created += 1
+                            self._metrics.sessions_created_from_warmup += 1
+                    
+                    if created > 0:
+                        # Successfully created at least one, loop to check if more needed
+                        await asyncio.sleep(0)  # Yield to event loop
+                    else:
+                        # All creations failed, back off before retry
+                        logger.warning("All warmup session creations failed, backing off")
+                        await asyncio.sleep(0.5)
+                        break
+                        
             except Exception as e:
-                logger.error("Warmup loop error", error=str(e))
-                await asyncio.sleep(10.0)
+                logger.error("Warmup worker error", error=str(e))
+                # Back off before next attempt
+                await asyncio.sleep(0.5)
+    
+    def _check_warmup_needed(self) -> None:
+        """Check if warmup is needed and trigger if so.
+        
+        Should be called after any operation that reduces idle sessions.
+        Uses qsize() which is thread-safe for checking watermark.
+        """
+        if self._idle_sessions.qsize() < self._config.min_idle:
+            # Only count as trigger if event wasn't already set
+            if not self._warmup_needed.is_set():
+                self._metrics.warmup_triggers += 1
+            self._warmup_needed.set()
+            logger.debug(
+                "Warmup needed",
+                idle=self._idle_sessions.qsize(),
+                min_idle=self._config.min_idle,
+            )
     
     async def _health_check_loop(self) -> None:
         """Background task to check session health."""
@@ -452,6 +579,9 @@ class SessionPool:
                             session_id=session.session_id,
                         )
                         await self._remove_session(session)
+                
+                # Check if warmup needed after health check removals
+                self._check_warmup_needed()
                 
             except Exception as e:
                 logger.error("Health check error", error=str(e))
@@ -506,6 +636,14 @@ class SessionPool:
                 "sessions_recycled": metrics.sessions_recycled,
                 "sessions_restarted": metrics.sessions_restarted,
                 "acquisition_timeouts": metrics.acquisition_timeouts,
+                # Event-driven warmup metrics
+                "warmup_triggers": metrics.warmup_triggers,
+                "warmup_loop_iterations": metrics.warmup_loop_iterations,
+                "sessions_created_from_warmup": metrics.sessions_created_from_warmup,
+                "warmup_efficiency": (
+                    metrics.warmup_loop_iterations / max(1, metrics.warmup_triggers)
+                    if metrics.warmup_triggers > 0 else 0.0
+                ),
             },
         }
 
@@ -529,3 +667,7 @@ class PoolMetrics:
     acquisition_timeouts: int = 0
     total_acquisition_time: float = 0.0
     avg_acquisition_time: float = 0.0
+    # Event-driven warmup metrics
+    warmup_triggers: int = 0
+    warmup_loop_iterations: int = 0
+    sessions_created_from_warmup: int = 0
