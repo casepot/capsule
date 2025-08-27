@@ -521,8 +521,6 @@ class ThreadedExecutor:
             # Set tracer for the current thread
             # This is required for the tracer to work in exec/eval frames
             sys.settrace(tracer)
-            # Also set the tracer on the current frame to ensure it's active
-            sys._getframe().f_trace = tracer
         monitoring_id = None
         
         try:
