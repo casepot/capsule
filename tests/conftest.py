@@ -31,8 +31,8 @@ def event_loop():
 async def session() -> AsyncGenerator[Session, None]:
     """Create a test session that's properly cleaned up."""
     session = Session(config=SessionConfig(
-        startup_timeout=5.0,
-        execute_timeout=5.0,
+        default_execute_timeout=5.0,
+        ready_timeout=5.0,
         shutdown_timeout=2.0,
     ))
     await session.start()

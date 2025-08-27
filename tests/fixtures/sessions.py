@@ -17,14 +17,26 @@ async def create_session(
 ) -> AsyncGenerator[Session, None]:
     """Create a session with automatic cleanup."""
     config = SessionConfig(
-        warmup_code=warmup_code,
-        startup_timeout=startup_timeout,
-        execute_timeout=execute_timeout,
+        default_execute_timeout=execute_timeout,
+        ready_timeout=startup_timeout,
         shutdown_timeout=2.0,
     )
     session = Session(config=config)
     try:
         await session.start()
+        
+        # Execute warmup code if provided
+        if warmup_code:
+            from src.protocol.messages import ExecuteMessage
+            import time
+            msg = ExecuteMessage(
+                id="warmup",
+                timestamp=time.time(),
+                code=warmup_code
+            )
+            async for _ in session.execute(msg):
+                pass
+        
         yield session
     finally:
         await session.shutdown()
