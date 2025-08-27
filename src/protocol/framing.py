@@ -141,48 +141,74 @@ class StreamMultiplexer:
 
 
 class RateLimiter:
-    """Rate limiter for protocol messages."""
+    """Rate limiter for protocol messages with on-demand token computation.
+    
+    Eliminates polling by calculating exact wait time for next token.
+    """
     
     def __init__(
         self,
         max_messages_per_second: int = 1000,
         burst_size: int = 100,
+        enable_metrics: bool = False,
     ) -> None:
+        if max_messages_per_second <= 0:
+            raise ValueError("max_messages_per_second must be positive")
+        
         self._max_rate = max_messages_per_second
         self._burst_size = burst_size
         self._tokens = float(burst_size)
-        self._last_update = asyncio.get_event_loop().time()
+        self._last_update = asyncio.get_running_loop().time()
         self._lock = asyncio.Lock()
+        
+        # Optional metrics
+        self._enable_metrics = enable_metrics
+        if enable_metrics:
+            self.metrics = {
+                'acquires': 0,
+                'waits': 0,
+                'total_wait_time': 0.0,
+                'wakeups': 0,
+            }
         
     async def acquire(self) -> None:
         """Acquire permission to send a message.
         
-        This will block if rate limit is exceeded.
+        Uses on-demand computation to calculate exact wait time,
+        eliminating polling loops.
         """
-        async with self._lock:
-            now = asyncio.get_event_loop().time()
-            elapsed = now - self._last_update
-            self._last_update = now
-            
-            # Replenish tokens
-            self._tokens = min(
-                self._burst_size,
-                self._tokens + elapsed * self._max_rate
-            )
-            
-            # Wait if no tokens available
-            while self._tokens < 1:
-                await asyncio.sleep(1.0 / self._max_rate)
-                now = asyncio.get_event_loop().time()
+        if self._enable_metrics:
+            self.metrics['acquires'] += 1
+        
+        while True:
+            async with self._lock:
+                now = asyncio.get_running_loop().time()
+                # Replenish tokens based on elapsed time
                 elapsed = now - self._last_update
-                self._last_update = now
                 self._tokens = min(
                     self._burst_size,
                     self._tokens + elapsed * self._max_rate
                 )
+                self._last_update = now
+                
+                if self._tokens >= 1.0:
+                    # Token available immediately
+                    self._tokens -= 1.0
+                    return
+                
+                # Calculate exact wait time for next token
+                deficit = 1.0 - self._tokens
+                wait_seconds = deficit / self._max_rate
+                
+                if self._enable_metrics:
+                    self.metrics['waits'] += 1
+                    self.metrics['total_wait_time'] += wait_seconds
             
-            # Consume token
-            self._tokens -= 1
+            # Sleep outside lock for exact duration
+            if self._enable_metrics:
+                self.metrics['wakeups'] += 1
+            await asyncio.sleep(wait_seconds)
+            # Loop back to try again
     
     def try_acquire(self) -> bool:
         """Try to acquire permission without blocking.
@@ -190,7 +216,15 @@ class RateLimiter:
         Returns:
             True if acquired, False if rate limit exceeded
         """
-        now = asyncio.get_event_loop().time()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No event loop running, use time.time() as fallback
+            import time
+            now = time.time()
+        else:
+            now = loop.time()
+        
         elapsed = now - self._last_update
         self._last_update = now
         
@@ -203,6 +237,8 @@ class RateLimiter:
         # Check if token available
         if self._tokens >= 1:
             self._tokens -= 1
+            if hasattr(self, '_enable_metrics') and self._enable_metrics:
+                self.metrics['acquires'] += 1
             return True
         
         return False

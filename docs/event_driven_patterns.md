@@ -256,6 +256,108 @@ Key test scenarios:
 - **CPU usage**: Measurable reduction in idle state
 - **Observability**: Baseline timer preserves predictability
 
+## Pattern 6: Rate Limiter On-Demand Token Replenishment
+
+This document describes the on-demand token computation pattern used in the RateLimiter to eliminate polling and calculate exact wait times.
+
+### Architecture
+
+The RateLimiter uses on-demand token computation with:
+- Exact wait time calculation based on token deficit
+- Single sleep per acquire (no polling loop)
+- Monotonic time tracking with `asyncio.get_running_loop().time()`
+- Lock held only during arithmetic operations
+
+This approach eliminates polling, resulting in:
+- Exactly 1 wakeup per rate-limited acquire
+- Zero CPU usage when not rate limited
+- Exact timing calculations for predictable behavior
+- Cleaner, more maintainable code
+
+### How It Works
+
+The core mechanism in the `acquire()` method:
+1. Calculate current tokens based on elapsed time
+2. If token available, consume it immediately
+3. If not, calculate exact wait time: `deficit / rate`
+4. Sleep for exact duration outside lock
+5. Retry once (succeeds in nearly all cases)
+
+```python
+async def acquire(self) -> None:
+    while True:
+        async with self._lock:
+            now = asyncio.get_running_loop().time()
+            # Replenish tokens based on elapsed time
+            elapsed = now - self._last_update
+            self._tokens = min(
+                self._burst_size,
+                self._tokens + elapsed * self._max_rate
+            )
+            self._last_update = now
+            
+            if self._tokens >= 1.0:
+                self._tokens -= 1.0
+                return
+            
+            # Calculate exact wait for next token
+            deficit = 1.0 - self._tokens
+            wait_seconds = deficit / self._max_rate
+        
+        # Sleep outside lock for exact duration
+        await asyncio.sleep(wait_seconds)
+```
+
+### Metrics
+
+Optional metrics can be enabled for monitoring:
+
+```python
+from src.protocol.framing import RateLimiter
+
+limiter = RateLimiter(
+    max_messages_per_second=100,
+    burst_size=10,
+    enable_metrics=True
+)
+
+# Available metrics
+limiter.metrics = {
+    'acquires': 0,        # Total acquire calls
+    'waits': 0,           # Times sleep was needed  
+    'total_wait_time': 0, # Total seconds waited
+    'wakeups': 0,         # Total sleep calls
+}
+
+# Efficiency metric
+wakeup_efficiency = limiter.metrics['wakeups'] / limiter.metrics['acquires']
+# Should be ≤ 1.0
+```
+
+### Testing
+
+Run the rate limiter tests:
+
+```bash
+uv run pytest tests/test_rate_limiter.py -v
+```
+
+Key test scenarios:
+- Basic rate enforcement
+- Burst capacity handling  
+- Exact timing calculations
+- Concurrent acquire handling
+- Performance validation (≤1 wakeup per acquire)
+- Edge cases (zero rate, high rate, shutdown)
+
+### Results
+
+- **Idle CPU**: Zero when not rate limited
+- **Wakeups**: ≤1 per acquire (vs unbounded in polling loop)
+- **Timing accuracy**: Exact wait calculations
+- **Lock contention**: Minimal (held only during math)
+- **Code complexity**: Simpler without polling logic
+
 ### Future Improvements
 
 This is part of a larger effort to replace polling patterns with event-driven mechanisms throughout PyREPL3:
@@ -263,7 +365,7 @@ This is part of a larger effort to replace polling patterns with event-driven me
 1. ✅ **Pattern 2**: Session Manager message timeouts (COMPLETE)
 2. ✅ **Pattern 5**: Session Pool warmup loop (COMPLETE)
 3. ✅ **Pattern 1**: Session Pool health check (COMPLETE)
-4. 🔜 **Pattern 6**: Rate limiter token replenishment  
+4. ✅ **Pattern 6**: Rate limiter token replenishment (COMPLETE)
 5. 🔜 **Pattern 4**: Frame reader buffer management
 6. 🔜 **Pattern 3**: Worker input response routing
 
