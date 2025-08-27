@@ -13,6 +13,7 @@ import structlog
 from ..protocol.messages import (
     CancelMessage,
     ExecuteMessage,
+    InputMessage,
     InputResponseMessage,
     InterruptMessage,
     Message,
@@ -105,7 +106,11 @@ class Session:
         """Check if session process is alive."""
         if not self._process:
             return False
-        return self._process.returncode is None
+        # Check process state and session state
+        return (
+            self._process.returncode is None and
+            self._state not in [SessionState.TERMINATED, SessionState.SHUTTING_DOWN, SessionState.ERROR, SessionState.CREATING]
+        )
     
     async def start(self) -> None:
         """Start the subprocess session."""
@@ -352,10 +357,14 @@ class Session:
                         yield msg
                         
                         # Check if this completes the execution
+                        # Note: InputMessage doesn't complete execution
                         if msg.type in [MessageType.RESULT, MessageType.ERROR]:
                             if msg.type == MessageType.ERROR:
                                 self._info.error_count += 1
                             break
+                        elif msg.type == MessageType.INPUT:
+                            # Input request - continue waiting for more messages
+                            continue
                     
                 except asyncio.TimeoutError:
                     # Timeout means we hit the deadline

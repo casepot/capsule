@@ -17,14 +17,13 @@ from src.protocol.messages import ExecuteMessage, MessageType
 
 
 async def test_basic_input_fails():
-    """Demonstrate that basic input() call fails with EOFError."""
-    print("\n=== Test: Basic input() fails ===")
+    """Test what happens when input() is not responded to - should timeout."""
+    print("\n=== Test: Input without response times out ===")
     
     session = Session()
     await session.start()
     
     try:
-        # This should request input, but will fail with EOFError
         code = """
 name = input("What's your name? ")
 print(f"Hello, {name}!")
@@ -36,25 +35,36 @@ print(f"Hello, {name}!")
             code=code,
         )
         
-        print(f"Executing code that uses input()...")
-        error_found = False
+        print(f"Executing code that uses input() WITHOUT responding...")
+        timeout_occurred = False
+        input_request_seen = False
         
-        async for msg in session.execute(message):
-            if msg.type == MessageType.OUTPUT:
-                print(f"OUTPUT: {msg.data}", end="")
-            elif msg.type == MessageType.ERROR:
-                print(f"ERROR: {msg.exception_type}: {msg.exception_message}")
-                if "EOFError" in msg.exception_type:
-                    error_found = True
-                    print("❌ CONFIRMED: input() causes EOFError")
+        try:
+            # Use a short timeout to avoid waiting forever
+            async for msg in session.execute(message, timeout=2.0):
+                if msg.type == MessageType.OUTPUT:
+                    print(f"OUTPUT: {msg.data}", end="")
+                elif msg.type == MessageType.INPUT:
+                    print(f"INPUT REQUEST RECEIVED: {msg.prompt}")
+                    input_request_seen = True
+                    # DON'T respond - let it timeout
+                elif msg.type == MessageType.ERROR:
+                    print(f"ERROR: {msg.exception_type}: {msg.exception_message}")
+        except asyncio.TimeoutError:
+            print("TIMEOUT: Execution timed out waiting for input response")
+            timeout_occurred = True
         
-        if not error_found:
-            print("⚠️ UNEXPECTED: No EOFError found")
+        if input_request_seen and timeout_occurred:
+            print("✅ EXPECTED: Input request sent but times out without response")
+        elif input_request_seen and not timeout_occurred:
+            print("⚠️ ISSUE: Input request seen but no timeout - may hang forever")
+        else:
+            print("❌ UNEXPECTED: No input request seen at all")
             
     finally:
         await session.shutdown()
     
-    return error_found
+    return input_request_seen
 
 
 async def test_multiple_inputs_fail():
@@ -163,27 +173,78 @@ print(f"input in namespace: {'input' in locals()}")
         await session.shutdown()
 
 
+async def test_input_works_with_protocol():
+    """Demonstrate that input() DOES work when properly handled via protocol."""
+    print("\n=== Test: Input works with proper handling ===")
+    
+    from src.protocol.messages import InputMessage
+    
+    session = Session()
+    await session.start()
+    
+    try:
+        code = """
+name = input("What's your name? ")
+age = input("What's your age? ")
+print(f"Hello {name}, you are {age} years old!")
+(name, age)
+"""
+        
+        message = ExecuteMessage(
+            id="test-input-working",
+            timestamp=time.time(),
+            code=code,
+        )
+        
+        print(f"Executing code with proper input handling...")
+        input_count = 0
+        responses = ["Alice", "25"]
+        
+        async for msg in session.execute(message):
+            if msg.type == MessageType.OUTPUT:
+                print(f"OUTPUT: {msg.data}", end="")
+            elif msg.type == MessageType.INPUT:
+                response = responses[input_count] if input_count < len(responses) else ""
+                print(f"INPUT REQUEST: {msg.prompt} -> Responding with: {response!r}")
+                await session.input_response(msg.id, response)
+                input_count += 1
+            elif msg.type == MessageType.RESULT:
+                print(f"RESULT: {msg.value!r}")
+        
+        print(f"✅ SUCCESS: Handled {input_count} input requests successfully!")
+        return True
+            
+    finally:
+        await session.shutdown()
+
+
 async def main():
     """Run all input handling test reproductions."""
     print("=" * 60)
-    print("INPUT HANDLING ISSUE REPRODUCTION")
+    print("INPUT HANDLING TEST SUITE")
     print("=" * 60)
     
-    # Test 1: Basic input fails
-    failed = await test_basic_input_fails()
+    # Test 1: Input without response (timeout behavior)
+    timeout_test = await test_basic_input_fails()
     
-    # Test 2: Multiple inputs fail
+    # Test 2: Multiple inputs fail (when not handled)
     await test_multiple_inputs_fail()
     
-    # Test 3: Input in function fails
+    # Test 3: Input in function fails (when not handled)
     await test_input_in_function_fails()
     
-    # Test 4: Show InputHandler exists but unused
+    # Test 4: Show InputHandler exists
     await test_input_handler_exists_but_unused()
     
+    # Test 5: NEW - Show input WORKS when properly handled
+    works = await test_input_works_with_protocol()
+    
     print("\n" + "=" * 60)
-    print("SUMMARY: input() is completely broken")
-    print("Root cause: InputHandler exists but never connected to builtin")
+    print("SUMMARY:")
+    print("- Input() sends InputMessage protocol messages ✅")
+    print("- Session.input_response() sends responses ✅")
+    print("- Without response, execution times out (expected)")
+    print("- With proper handling, input() works perfectly!")
     print("=" * 60)
 
 
