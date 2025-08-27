@@ -95,6 +95,15 @@ addopts = [
     "--cov-report=term-missing",
     "--cov-report=html",
 ]
+markers = [
+    "unit: Fast unit tests",
+    "integration: Component integration tests",
+    "e2e: End-to-end tests",
+    "slow: Tests that take >1s",
+    "stress: Performance and stress tests",
+    "regression: Regression tests for fixed bugs",
+    "skip_ci: Skip in CI environments",
+]
 
 [tool.coverage.run]
 branch = true
