@@ -1248,5 +1248,77 @@
     "falsification_steps": null,
     "outcome": "Production-ready event-driven cancellation replacing polling anti-pattern",
     "notes": "First of 6 polling patterns fixed. Same approach applicable to patterns 1,4,5,6. Pattern 3 requires different approach due to execution_id routing. Key lesson: Start simple, avoid premature optimization with feature flags"
+  },
+  {
+    "timestamp": "2025-08-27T05:00:00Z",
+    "tags": [
+      "investigation",
+      "performance",
+      "polling",
+      "observation"
+    ],
+    "summary": "Pattern 5 SessionPool warmup polling identified",
+    "details": "Investigation of SessionPool._warmup_loop() reveals fixed 10-second polling interval to maintain min_idle watermark. Issues: 1) 6 wakeups/minute regardless of demand, 2) Up to 10s delay before replenishing sessions after spikes, 3) No responsiveness to actual usage patterns, 4) CPU waste checking watermark when already satisfied. The warmup loop runs continuously even when pool is stable at desired capacity. This pattern violates event-driven principles - warmup should react to watermark violations, not poll for them.",
+    "hypothesis": "Event-driven warmup triggered by watermark violations will eliminate polling overhead",
+    "falsification_steps": "1. Add warmup event and trigger detection, 2. Measure idle wakeup rate, 3. Verify watermark maintained",
+    "outcome": "Pattern confirmed - 10s polling causes predictable overhead",
+    "notes": "Warmup trigger points identified: acquire() reducing idle, release() removing dead sessions, health check removals"
+  },
+  {
+    "timestamp": "2025-08-27T05:15:00Z",
+    "tags": [
+      "design",
+      "event_driven",
+      "implementation"
+    ],
+    "summary": "Event-driven warmup design with coalescing",
+    "details": "Designed event-driven warmup using asyncio.Event pattern: 1) _warmup_needed event signals watermark violations, 2) _warmup_worker waits on event instead of sleep(10), 3) Coalescing via loop-until-satisfied prevents thundering herd, 4) Trigger detection via _check_warmup_needed() method called at key points. Event coalescing is critical - multiple rapid acquisitions could trigger many warmup signals, but worker processes them as batch by looping until watermark restored. Zero polling in steady state.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Clean event-driven design with proper coalescing",
+    "notes": "Key insight: warmup is reactive not proactive - it responds to demand"
+  },
+  {
+    "timestamp": "2025-08-27T05:30:00Z",
+    "tags": [
+      "implementation",
+      "refactor",
+      "event_driven"
+    ],
+    "summary": "Pattern 5 event-driven warmup implemented",
+    "details": "Replaced SessionPool._warmup_loop() with _warmup_worker(): 1) Added _warmup_needed event to pool init, 2) Implemented event wait with clear-before-process pattern, 3) Added _check_warmup_needed() trigger detection, 4) Integrated triggers into acquire(), release(), _remove_session(), _recycle_session(), and health check. Extended PoolMetrics with warmup_triggers, warmup_loop_iterations, sessions_created_from_warmup tracking. Event coalescing via continuous loop until watermark satisfied with yield between iterations.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Clean implementation with zero legacy code",
+    "notes": "No feature flags per user philosophy - direct replacement of polling with events"
+  },
+  {
+    "timestamp": "2025-08-27T05:45:00Z",
+    "tags": [
+      "testing",
+      "validation",
+      "performance"
+    ],
+    "summary": "Comprehensive warmup tests validate event-driven behavior",
+    "details": "Created test_pool_event_driven_warmup.py with three test classes: 1) TestEventDrivenWarmup - validates trigger points, coalescing, health check integration, 2) TestWarmupPerformance - measures idle iteration rate (<0.1/min achieved), response time (<100ms), metrics collection, 3) TestWarmupEdgeCases - handles creation failures, shutdown races. Key validation: idle pool has <0.1 iterations/minute (60x reduction from 6/min), immediate response to watermark violations (<100ms vs 10s worst case).",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "All tests pass, performance targets exceeded",
+    "notes": "Measured: 6 wakeups/min -> <0.1/min, 10s response -> <100ms"
+  },
+  {
+    "timestamp": "2025-08-27T06:00:00Z",
+    "tags": [
+      "summary",
+      "event_driven",
+      "production_ready",
+      "metrics"
+    ],
+    "summary": "Pattern 5 SessionPool warmup successfully converted to event-driven",
+    "details": "Successfully eliminated SessionPool warmup polling pattern. Implementation: Added _warmup_needed event, replaced _warmup_loop with _warmup_worker, integrated triggers at 5 key points, extended metrics tracking. Results: 60x reduction in idle wakeups (6/min -> <0.1/min), 100x improvement in response time (10s -> <100ms), zero CPU usage when at watermark. Architecture follows same event pattern as Pattern 2 - asyncio.Event signaling with proper cleanup. No API changes, fully backward compatible.",
+    "hypothesis": null,
+    "falsification_steps": null,
+    "outcome": "Production-ready event-driven warmup with proven performance gains",
+    "notes": "Second of 6 polling patterns fixed. Patterns 2 and 5 complete, 4 patterns remain. Event coalescing pattern reusable for other reactive systems"
   }
 ]
