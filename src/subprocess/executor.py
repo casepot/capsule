@@ -11,7 +11,7 @@ import time
 import traceback
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Union, Literal
+from typing import Any, Callable, Dict, Optional, Union, Literal
 
 from ..protocol.messages import (
     InputMessage,
@@ -44,7 +44,7 @@ class CancelToken:
             self._cancelled = False
 
 
-def _create_cancel_tracer(token: CancelToken, check_interval: int = 100):
+def _create_cancel_tracer(token: CancelToken, check_interval: int = 100) -> Callable[[Any, str, Any], Any]:
     """Create a trace function that checks for cancellation.
     
     Args:
@@ -57,7 +57,7 @@ def _create_cancel_tracer(token: CancelToken, check_interval: int = 100):
     event_count = 0
     checked_count = 0
     
-    def tracer(frame, event, arg):
+    def tracer(frame: Any, event: str, arg: Any) -> Any:  # type: ignore[misc]
         nonlocal event_count, checked_count
         
         # ALWAYS return the tracer to ensure it's installed in new frames
@@ -143,16 +143,16 @@ class ThreadSafeOutput:
             # Send the last complete segment before the final CR
             for segment in cr_parts[:-1]:
                 if segment:  # Don't send empty segments
-                    self._executor._enqueue_from_thread(segment + '\r', self._stream_type)
+                    self._executor.enqueue_output(segment + '\r', self._stream_type)
         
         # Handle newlines
         while '\n' in self._buffer:
             line, self._buffer = self._buffer.split('\n', 1)
             # Chunk very long lines to protect framing (64KB chunks)
-            chunk_size = self._executor._line_chunk_size
+            chunk_size = self._executor.line_chunk_size
             if len(line) <= chunk_size:
                 # Normal case: line fits in one chunk
-                self._executor._enqueue_from_thread(line + '\n', self._stream_type)
+                self._executor.enqueue_output(line + '\n', self._stream_type)
             else:
                 # Long line: send in chunks
                 for i in range(0, len(line), chunk_size):
@@ -160,14 +160,14 @@ class ThreadSafeOutput:
                     # Only add newline to last chunk
                     if i + chunk_size >= len(line):
                         chunk += '\n'
-                    self._executor._enqueue_from_thread(chunk, self._stream_type)
+                    self._executor.enqueue_output(chunk, self._stream_type)
             
         return len(data)
     
     def flush(self) -> None:
         """Flush any remaining buffer to the queue."""
         if self._buffer:
-            self._executor._enqueue_from_thread(self._buffer, self._stream_type)
+            self._executor.enqueue_output(self._buffer, self._stream_type)
             self._buffer = ""
     
     def isatty(self) -> bool:
@@ -206,7 +206,7 @@ class ThreadedExecutor:
         self._loop = loop  # Main async loop for coordination
         self._input_waiters: Dict[str, tuple[threading.Event, Optional[str]]] = {}
         self._result: Any = None
-        self._error: Optional[Exception] = None
+        self._error: Optional[BaseException] = None
         self._input_send_timeout = input_send_timeout
         self._input_wait_timeout = input_wait_timeout
         
@@ -238,7 +238,7 @@ class ThreadedExecutor:
         self._outputs_dropped = 0
         self._max_queue_depth = 0
         
-    def create_protocol_input(self) -> callable:
+    def create_protocol_input(self) -> Callable[[str], str]:
         """Create input function that works in thread context."""
         def protocol_input(prompt: str = "") -> str:
             """Input function that sends protocol message and waits for response."""
@@ -348,7 +348,7 @@ class ThreadedExecutor:
                     return
                 elif self._backpressure == "drop_oldest":
                     # Try to remove one item (best effort)
-                    def try_drop_oldest():
+                    def try_drop_oldest() -> None:
                         try:
                             self._aq.get_nowait()
                         except asyncio.QueueEmpty:
@@ -372,7 +372,7 @@ class ThreadedExecutor:
             pass  # qsize not supported on all platforms
         
         # Enqueue the item - wrap in a function to handle exceptions
-        def safe_enqueue():
+        def safe_enqueue() -> None:
             try:
                 self._aq.put_nowait(_OutputItem(data=data, stream=stream))
             except asyncio.QueueFull:
@@ -403,7 +403,8 @@ class ThreadedExecutor:
                         if isinstance(item, _FlushSentinel):
                             # Flush barrier - signal completion if all sent
                             if self._pending_sends == 0 and self._aq.empty():
-                                self._drain_event.set()
+                                if self._drain_event:
+                                    self._drain_event.set()
                             if not item.future.done():
                                 item.future.set_result(None)
                             continue
@@ -422,7 +423,8 @@ class ThreadedExecutor:
                                 self._capacity.release()
                             # Check if we're drained
                             if self._pending_sends == 0 and self._aq.empty():
-                                self._drain_event.set()
+                                if self._drain_event:
+                                    self._drain_event.set()
                     finally:
                         self._aq.task_done()
             finally:
@@ -591,3 +593,33 @@ class ThreadedExecutor:
             sys.stdout = original_stdout
             sys.stderr = original_stderr
             # DO NOT restore builtins.input - keep protocol override!
+    
+    # Public property accessors for protected members
+    @property
+    def execution_id(self) -> str:
+        """Get the execution ID."""
+        return self._execution_id
+    
+    @property
+    def error(self) -> Optional[BaseException]:
+        """Get the execution error if any."""
+        return self._error
+    
+    @property
+    def result(self) -> Any:
+        """Get the execution result."""
+        return self._result
+    
+    @property
+    def pump_task(self) -> Optional[asyncio.Task[None]]:
+        """Get the output pump task."""
+        return self._pump_task
+    
+    def enqueue_output(self, data: str, stream: StreamType) -> None:
+        """Public method to enqueue output from thread context."""
+        self._enqueue_from_thread(data, stream)
+    
+    @property
+    def line_chunk_size(self) -> int:
+        """Get the line chunk size for output buffering."""
+        return self._line_chunk_size

@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import builtins
 import inspect
 import io
 import sys
@@ -51,25 +50,11 @@ from dataclasses import dataclass
 from types import CodeType
 from typing import Any, Dict, Optional, Callable
 
-try:
-    from ..protocol.messages import (
-        InputMessage,
-        InputResponseMessage,
-        OutputMessage,
-        ResultMessage,
-        ErrorMessage,
-        StreamType,
-    )
-except Exception:  # pragma: no cover
-    # Fallback for sandbox layout
-    from messages import (  # type: ignore
-        InputMessage,
-        InputResponseMessage,
-        OutputMessage,
-        ResultMessage,
-        ErrorMessage,
-        StreamType,
-    )
+from src.protocol.messages import (
+    InputMessage,
+    OutputMessage,
+    StreamType,
+)
 
 try:
     from .code_analyzer import CodeAnalyzer, CodeAnalysis
@@ -101,7 +86,7 @@ class AsyncLineWriter:
         self._stream = stream
         self._buf: str = ""
         self._queue: "asyncio.Queue[str]" = asyncio.Queue()
-        self._pump_task: Optional[asyncio.Task] = None
+        self._pump_task: Optional[asyncio.Task[None]] = None
         self._closed = False
 
     def _ensure_pump(self) -> None:

@@ -145,8 +145,8 @@ class SubprocessWorker:
         """
         logger.info(f"_cancel_with_timeout called for {execution_id}, active: {self._active_executor is not None}")
         
-        if not self._active_executor or self._active_executor._execution_id != execution_id:
-            logger.info(f"Not our execution - active_id={self._active_executor._execution_id if self._active_executor else None}")
+        if not self._active_executor or self._active_executor.execution_id != execution_id:
+            logger.info(f"Not our execution - active_id={self._active_executor.execution_id if self._active_executor else None}")
             return True  # Not our execution
         
         # Request cooperative cancellation
@@ -164,7 +164,7 @@ class SubprocessWorker:
                 return True  # Cancelled successfully
             # Otherwise check if executor was cleared (backward compatibility)
             executor = self._active_executor
-            if executor is None or executor._execution_id != execution_id:
+            if executor is None or executor.execution_id != execution_id:
                 return True  # Cancelled successfully
             
             await asyncio.sleep(0.01)  # Check every 10ms
@@ -252,7 +252,7 @@ class SubprocessWorker:
         
         # Track active executor for input routing
         self._active_executor = executor
-        logger.info(f"Set active executor to {execution_id}, executor._execution_id={executor._execution_id}")
+        logger.info(f"Set active executor to {execution_id}, executor.execution_id={executor.execution_id}")
         
         # Parse code for source tracking before execution
         if message.capture_source:
@@ -283,7 +283,7 @@ class SubprocessWorker:
                 
             # Wait for thread to fully complete
             thread.join(timeout=1.0)
-            logger.info(f"Thread joined for {execution_id}, error={executor._error}")
+            logger.info(f"Thread joined for {execution_id}, error={executor.error}")
             
             # CRITICAL: Drain all outputs before sending result
             # This ensures output messages arrive before ResultMessage
@@ -314,26 +314,26 @@ class SubprocessWorker:
             execution_time = time.time() - start_time
             
             # Check if there was an error
-            if executor._error:
-                logger.info(f"Sending ErrorMessage for {execution_id}: {type(executor._error).__name__}")
+            if executor.error:
+                logger.info(f"Sending ErrorMessage for {execution_id}: {type(executor.error).__name__}")
                 # Error already printed to stderr by executor
                 error_msg = ErrorMessage(
                     id=str(uuid.uuid4()),
                     timestamp=time.time(),
-                    traceback="".join(traceback.format_exception(type(executor._error), executor._error, executor._error.__traceback__)),
-                    exception_type=type(executor._error).__name__,
-                    exception_message=str(executor._error),
+                    traceback="".join(traceback.format_exception(type(executor.error), executor.error, executor.error.__traceback__)),
+                    exception_type=type(executor.error).__name__,
+                    exception_message=str(executor.error),
                     execution_id=execution_id,
                 )
                 await self._transport.send_message(error_msg)
             else:
                 # Send result
-                if executor._result is not None:
+                if executor.result is not None:
                     result_msg = ResultMessage(
                         id=str(uuid.uuid4()),
                         timestamp=time.time(),
-                        value=executor._result if self._is_json_serializable(executor._result) else None,
-                        repr=repr(executor._result),
+                        value=executor.result if self._is_json_serializable(executor.result) else None,
+                        repr=repr(executor.result),
                         execution_id=execution_id,
                         execution_time=execution_time,
                     )
@@ -368,9 +368,9 @@ class SubprocessWorker:
             
             # Shutdown output pump and clean up
             executor.shutdown_pump()
-            if executor._pump_task:
+            if executor.pump_task:
                 try:
-                    await asyncio.wait_for(executor._pump_task, timeout=1.0)
+                    await asyncio.wait_for(executor.pump_task, timeout=1.0)
                 except asyncio.TimeoutError:
                     pass  # Force continue if pump doesn't stop
             
@@ -459,9 +459,11 @@ class SubprocessWorker:
                 elif msg_type == "input_response" or message.type == MessageType.INPUT_RESPONSE:
                     # Route input response to active executor
                     if self._active_executor:
-                        response = message  # type: ignore
-                        logger.debug("Routing input response", token=response.input_id, data=response.data)
-                        self._active_executor.handle_input_response(response.input_id, response.data)
+                        if isinstance(message, InputResponseMessage):
+                            logger.debug("Routing input response", token=message.input_id, data=message.data)
+                            self._active_executor.handle_input_response(message.input_id, message.data)
+                        else:
+                            logger.warning("Unexpected message type for input_response")
                     else:
                         logger.warning("Received input response with no active executor")
                     
@@ -478,7 +480,7 @@ class SubprocessWorker:
                     cancel_msg = message  # type: ignore
                     logger.info("Cancel requested", execution_id=cancel_msg.execution_id, 
                                has_active_executor=self._active_executor is not None,
-                               active_exec_id=self._active_executor._execution_id if self._active_executor else None)
+                               active_exec_id=self._active_executor.execution_id if self._active_executor else None)
                     
                     # Cancel with grace period
                     grace_ms = cancel_msg.grace_timeout_ms or 500
@@ -495,7 +497,7 @@ class SubprocessWorker:
                     interrupt_msg = message  # type: ignore
                     logger.info("Interrupt requested", execution_id=interrupt_msg.execution_id, force_restart=interrupt_msg.force_restart)
                     
-                    if self._active_executor and self._active_executor._execution_id == interrupt_msg.execution_id:
+                    if self._active_executor and self._active_executor.execution_id == interrupt_msg.execution_id:
                         # Cancel the active execution
                         self._active_executor.cancel()
                         
