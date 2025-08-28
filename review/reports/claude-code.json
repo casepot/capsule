@@ -1,0 +1,45 @@
+{
+  "tool": "claude-code",
+  "model": "claude-opus-4.1",
+  "timestamp": "2025-08-28T10:00:00Z",
+  "pr": {
+    "repo": "pyrepl3",
+    "number": 1,
+    "head_sha": "abc123",
+    "branch": "feature-branch",
+    "link": "https://github.com/user/pyrepl3/pull/1"
+  },
+  "summary": "Sample review from Claude Code for testing. The PR looks good overall with no critical issues.",
+  "assumptions": [
+    {
+      "text": "The test suite covers all critical paths",
+      "status": "validated",
+      "evidence": ["All tests pass in tests.txt"]
+    }
+  ],
+  "findings": [
+    {
+      "category": "style",
+      "severity": "low",
+      "file": "src/main.py",
+      "lines": "10-15",
+      "message": "Consider using more descriptive variable names",
+      "suggestion": "Rename 'x' to 'user_input'",
+      "evidence": ["Variable names are single letters"],
+      "must_fix": false
+    }
+  ],
+  "tests": {
+    "executed": true,
+    "command": "pytest tests/",
+    "exit_code": 0,
+    "summary": "All tests passed",
+    "coverage": 85.5
+  },
+  "metrics": {},
+  "evidence": [],
+  "exit_criteria": {
+    "ready_for_pr": true,
+    "reasons": []
+  }
+}
