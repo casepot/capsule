@@ -59,46 +59,64 @@ brew install node@20 python@3.11 gh jq
 
 #### Claude Code
 ```bash
-# Follow official installation guide:
-# https://docs.anthropic.com/en/docs/claude-code/setup
+# macOS (Homebrew):
+brew install claude
 
-# Note: Claude Code sometimes installs to a non-standard location when migrated (~/.claude/local/)
-# Our scripts automatically detect and handle this
+# Or download from https://claude.ai/download
+# Note: Claude Code often installs to ~/.claude/local/ (non-standard path)
+# Our scripts automatically detect and handle this location
 
-# After installation, authenticate with Claude.ai Pro/Max:
-claude  # May need: ~/.claude/local/claude if not aliased
+# After installation, authenticate with Claude.ai Pro/Max subscription:
+claude  # May need: ~/.claude/local/claude if not in PATH
 # Choose: /login
-# Sign in with your Claude.ai Pro/Max account (NOT Console account)
+# Sign in with your Claude.ai Pro/Max account (NOT API Console account)
 
 # Verify installation:
-~/.claude/local/claude --version
+claude --version  # or ~/.claude/local/claude --version
+
+# IMPORTANT: Use Sonnet 4 model for optimal speed/quality balance:
+# --model sonnet (not opus which is slower)
 ```
 
 #### OpenAI Codex CLI
 ```bash
-# Install via npm
-npm install -g @openai/codex
+# Install via Homebrew (recommended):
+brew install codex
 
-# Authenticate with ChatGPT Plus/Pro/Team:
-codex
-# Choose: "Sign in with ChatGPT"
-# Complete OAuth flow with your ChatGPT subscription
+# Current version: 0.25.0
+codex --version
+
+# Authenticate with ChatGPT Plus/Pro/Team subscription:
+codex login
+# Choose: "Sign in with ChatGPT" 
+# Complete OAuth flow in browser with your ChatGPT subscription
+
+# IMPORTANT Configuration:
+# - Model: GPT-5 (default)
+# - Reasoning effort: "low" for faster execution
+# - Sandbox mode: read-only (-s read-only flag required)
+# - Working directory: -C . flag to set correct path
 ```
 
 #### Gemini CLI
 ```bash
-# Install via homebrew (macOS)
+# Install via Homebrew (recommended):
 brew install gemini-cli
 
-# Clone and install from GitHub
-git clone https://github.com/google-gemini/gemini-cli.git
-cd gemini-cli
-npm install -g .
+# Current version: 0.2.1
+gemini --version
 
 # Authenticate with Google OAuth (no API key):
 gemini
-# Choose OAuth login with your Google account
-# DO NOT provide API key
+# Complete OAuth flow in browser with your Google account
+# DO NOT provide API key - use OAuth only
+
+# IMPORTANT Model Selection:
+# - Use: gemini-2.5-pro (production) or gemini-2.5-flash (faster)
+# - AVOID: gemini-2.5-flash-lite (has thinking mode issues)
+# - AVOID: gemini-2.0-* models (outdated)
+
+# Input method: echo "prompt" | gemini -m gemini-2.5-pro -p
 ```
 
 ### 3. Register Self-Hosted Runner
@@ -140,6 +158,23 @@ Set these in GitHub repository settings (Settings → Secrets and variables → 
   - For Python: `pytest tests/`
   - For Node.js: `npm test`
   - For Go: `go test ./...`
+
+### Critical Configuration Files
+
+#### Prompt Files (prompts/ directory)
+- **review.codex.md**: Must specify that Codex CAN read files:
+  ```markdown
+  - You CAN and SHOULD read files (using cat, head, etc.) but do NOT edit/write files.
+  - You CAN run read-only shell commands (ls, cat, head, grep) but do NOT modify anything.
+  ```
+- **review.claude.md**: Use `--permission-mode plan` for read-only analysis
+- **review.gemini.md**: Include explicit JSON output instructions
+
+#### Workflow Configuration (.github/workflows/pr-multimodel-review.yml)
+Ensure these flags are set:
+- Claude: `--model sonnet --permission-mode plan --output-format json`
+- Codex: `-s read-only -C . -c model_reasoning_effort="low"`  
+- Gemini: `-m gemini-2.5-pro -p` (with echo piping)
 
 ### Branch Protection Rules
 1. Go to Settings → Branches
@@ -218,15 +253,13 @@ bash scripts/review-local.sh
 ### Update CLIs
 ```bash
 # Claude Code
-claude --update  # If supported, or reinstall
+brew upgrade claude  # or redownload from claude.ai/download
 
-# Codex CLI
-npm update -g @openai/codex
+# Codex CLI  
+brew upgrade codex
 
 # Gemini CLI
-cd /path/to/gemini-cli
-git pull
-npm install -g .
+brew upgrade gemini-cli
 ```
 
 ### Monitor Runner Health
@@ -251,11 +284,20 @@ journalctl -u actions.runner.*.service -f
 - [ ] Python 3.11+ installed (for PyREPL3)
 - [ ] GitHub CLI (`gh`) installed
 - [ ] jq installed
-- [ ] Claude Code installed and authenticated (Pro/Max)
-- [ ] Codex CLI installed and authenticated (ChatGPT Plus)
-- [ ] Gemini CLI installed and authenticated (OAuth)
-- [ ] NO API keys in environment
+- [ ] Claude Code installed and authenticated (Pro/Max subscription)
+  - [ ] Version check: `claude --version` or `~/.claude/local/claude --version`
+  - [ ] Can run: `claude -p "test" --model sonnet --permission-mode plan`
+- [ ] Codex CLI v0.25.0+ installed and authenticated (ChatGPT Plus subscription)
+  - [ ] Version check: `codex --version`
+  - [ ] Can run: `codex exec -s read-only "echo test"`
+- [ ] Gemini CLI v0.2.1+ installed and authenticated (Google OAuth)
+  - [ ] Version check: `gemini --version`
+  - [ ] Can run: `echo "test" | gemini -m gemini-2.5-pro -p`
+- [ ] NO API keys in environment (check ~/.bashrc, ~/.zshrc)
+  - [ ] `echo $ANTHROPIC_API_KEY` returns empty
+  - [ ] `echo $OPENAI_API_KEY` returns empty
+  - [ ] `echo $GEMINI_API_KEY` returns empty
 - [ ] Runner registered and running
-- [ ] `scripts/auth-check.sh` passes
-- [ ] Local test with `scripts/review-local.sh` works
-- [ ] Test PR triggers workflow successfully
+- [ ] `scripts/auth-check.sh` passes all checks
+- [ ] `scripts/review-local.sh` completes without errors
+- [ ] Test PR triggers workflow and posts review comment

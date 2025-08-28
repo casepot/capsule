@@ -6,7 +6,7 @@ import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 
 const root = process.cwd();
-const schemaPath = path.join(root, 'review', 'report.schema.json');
+const schemaPath = path.join(root, 'report.schema.json');  // Schema in repo root
 const reportsDir = path.join(root, 'review', 'reports');
 const outSummary = path.join(root, 'review', 'summary.md');
 const outGate = path.join(root, 'review', 'gate.txt');

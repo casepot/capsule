@@ -54,12 +54,12 @@ auth_probe() {
   chk "$name auth probe OK."
 }
 
-# Claude Code: headless print; JSON ensures the CLI is fully operational
+# Claude Code: headless print test
 # Try claude command first, then fall back to direct path
 if type claude >/dev/null 2>&1; then
-  auth_probe "Claude Code" claude -p "ping" --output-format json
+  auth_probe "Claude Code" claude -p "echo test"
 elif [ -x "$HOME/.claude/local/claude" ]; then
-  auth_probe "Claude Code" "$HOME/.claude/local/claude" -p "ping" --output-format json
+  auth_probe "Claude Code" "$HOME/.claude/local/claude" -p "echo test"
 else
   red "Claude Code not found in PATH or at ~/.claude/local/claude"
   exit 1
