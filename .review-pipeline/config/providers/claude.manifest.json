@@ -1,0 +1,143 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "claude",
+  "name": "Claude Code",
+  "description": "Anthropic's Claude AI via subscription-based CLI",
+  "cli": {
+    "command": "claude",
+    "detection": [
+      {
+        "type": "command",
+        "value": "claude",
+        "description": "Standard installation via PATH"
+      },
+      {
+        "type": "path",
+        "value": "~/.claude/local/claude",
+        "description": "Non-standard installation location"
+      }
+    ],
+    "version_check": "claude --version"
+  },
+  "authentication": {
+    "method": "subscription",
+    "service": "Claude Pro/Max",
+    "required_subscription": true,
+    "no_api_key": true,
+    "login_command": "claude",
+    "auth_check_command": "claude -p 'echo test' 2>/dev/null",
+    "env_vars_to_unset": ["ANTHROPIC_API_KEY"]
+  },
+  "models": [
+    {
+      "id": "opus",
+      "name": "Claude Opus 4.1",
+      "full_name": "claude-opus-4-1-20250805",
+      "speed": "slow",
+      "quality": "highest",
+      "cost": "high",
+      "recommended_for": ["complex_analysis", "deep_reasoning"],
+      "flags": ["--model", "opus"]
+    },
+    {
+      "id": "sonnet",
+      "name": "Claude Sonnet 4",
+      "full_name": "claude-sonnet-4-20250514",
+      "speed": "fast",
+      "quality": "high",
+      "cost": "medium",
+      "recommended_for": ["code_review", "balanced_tasks"],
+      "flags": ["--model", "sonnet"],
+      "default": true
+    },
+    {
+      "id": "haiku",
+      "name": "Claude Haiku",
+      "full_name": "claude-haiku",
+      "speed": "fastest",
+      "quality": "good",
+      "cost": "low",
+      "recommended_for": ["quick_checks", "simple_tasks"],
+      "flags": ["--model", "haiku"]
+    }
+  ],
+  "capabilities": {
+    "output_formats": ["json", "text"],
+    "permission_modes": {
+      "plan": "Read-only analysis mode (recommended for reviews)",
+      "read": "Can read files",
+      "write": "Can read and write files",
+      "exec": "Can execute commands"
+    },
+    "supports_streaming": true,
+    "supports_sessions": true,
+    "supports_continuation": true,
+    "max_context_tokens": 200000
+  },
+  "required_flags": {
+    "review": {
+      "flags": [
+        "--permission-mode", "plan",
+        "--output-format", "json"
+      ],
+      "description": "Required flags for code review mode"
+    },
+    "non_interactive": {
+      "flags": ["-p"],
+      "description": "Non-interactive prompt mode"
+    }
+  },
+  "optional_flags": {
+    "continue": {
+      "flag": "--continue",
+      "description": "Continue most recent conversation"
+    },
+    "resume": {
+      "flag": "--resume",
+      "param": "session_id",
+      "description": "Resume specific session"
+    },
+    "settings": {
+      "flag": "--settings",
+      "param": "file",
+      "description": "Load settings from JSON file"
+    }
+  },
+  "output_handling": {
+    "format": "json_envelope",
+    "json_path": "result",
+    "error_detection": {
+      "patterns": [
+        "Credit balance is too low",
+        "Path .* was not found",
+        "Claude Code not authenticated"
+      ]
+    },
+    "requires_normalization": true
+  },
+  "performance": {
+    "typical_latency_seconds": {
+      "opus": [60, 120],
+      "sonnet": [30, 60],
+      "haiku": [15, 30]
+    },
+    "recommended_timeout": 120
+  },
+  "common_issues": [
+    {
+      "error": "Credit balance is too low",
+      "cause": "API key environment variable conflicting with subscription auth",
+      "solution": "Unset ANTHROPIC_API_KEY environment variable"
+    },
+    {
+      "error": "Path /private/tmp/... was not found",
+      "cause": "Cached session state issue",
+      "solution": "Clear cache: rm -rf ~/.claude/projects/-Users-*"
+    },
+    {
+      "error": "Command not found: claude",
+      "cause": "Non-standard installation location",
+      "solution": "Add to PATH: export PATH=\"$HOME/.claude/local:$PATH\""
+    }
+  ]
+}

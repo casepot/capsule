@@ -1,0 +1,164 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "codex",
+  "name": "OpenAI Codex CLI",
+  "description": "OpenAI's GPT models via subscription-based CLI",
+  "cli": {
+    "command": "codex",
+    "detection": [
+      {
+        "type": "command",
+        "value": "codex",
+        "description": "Standard installation via Homebrew"
+      }
+    ],
+    "version_check": "codex --version",
+    "minimum_version": "0.25.0"
+  },
+  "authentication": {
+    "method": "subscription",
+    "service": "ChatGPT Plus/Team",
+    "required_subscription": true,
+    "no_api_key": true,
+    "login_command": "codex login",
+    "auth_check_command": "codex exec -s read-only 'echo test' >/dev/null 2>&1",
+    "env_vars_to_unset": ["OPENAI_API_KEY"]
+  },
+  "models": [
+    {
+      "id": "gpt-5",
+      "name": "GPT-5",
+      "speed": "medium",
+      "quality": "high",
+      "cost": "medium",
+      "recommended_for": ["code_review", "analysis"],
+      "default": true,
+      "cli_flag": null,
+      "note": "Default model, no flag needed"
+    }
+  ],
+  "capabilities": {
+    "commands": {
+      "exec": "Run non-interactively (for automation)",
+      "login": "Manage authentication",
+      "apply": "Apply diffs from agent"
+    },
+    "sandbox_modes": {
+      "read-only": "Read files only (recommended for reviews)",
+      "workspace-write": "Write in workspace directory",
+      "danger-full-access": "Full system access (not recommended)"
+    },
+    "reasoning_levels": {
+      "none": "No reasoning",
+      "low": "Fast, minimal reasoning (recommended for speed)",
+      "medium": "Default balanced reasoning",
+      "high": "Deep reasoning (slower)"
+    },
+    "output_modes": {
+      "json": "JSONL event stream",
+      "last_message": "Final message only (recommended)"
+    },
+    "supports_config_overrides": true,
+    "supports_working_directory": true
+  },
+  "required_flags": {
+    "review": {
+      "command": "exec",
+      "flags": [
+        "-s", "read-only",
+        "-C", "."
+      ],
+      "config": {
+        "model_reasoning_effort": "low"
+      },
+      "description": "Required setup for code review mode"
+    },
+    "non_interactive": {
+      "command": "exec",
+      "description": "Use exec command for non-interactive mode"
+    }
+  },
+  "optional_flags": {
+    "output_last_message": {
+      "flag": "--output-last-message",
+      "param": "file",
+      "description": "Save only final message to file (clean output)"
+    },
+    "json": {
+      "flag": "--json",
+      "description": "Output events as JSONL"
+    },
+    "model": {
+      "flag": "-m",
+      "param": "model",
+      "description": "Select specific model"
+    },
+    "color": {
+      "flag": "--color",
+      "param": "mode",
+      "values": ["always", "never", "auto"],
+      "description": "Color output control"
+    }
+  },
+  "config_flags": {
+    "format": "-c key=value",
+    "available": {
+      "model_reasoning_effort": {
+        "values": ["none", "low", "medium", "high"],
+        "default": "medium",
+        "recommended": "low"
+      }
+    }
+  },
+  "output_handling": {
+    "format": "jsonl_stream",
+    "clean_output_method": "--output-last-message",
+    "event_types": [
+      "task_started",
+      "agent_reasoning",
+      "agent_message",
+      "token_count"
+    ],
+    "requires_normalization": true,
+    "stderr_redirect": true
+  },
+  "performance": {
+    "typical_latency_seconds": {
+      "low_reasoning": [45, 90],
+      "medium_reasoning": [60, 120],
+      "high_reasoning": [90, 180]
+    },
+    "recommended_timeout": 150
+  },
+  "common_issues": [
+    {
+      "error": "Reading prompt from stdin...",
+      "cause": "Piping input to codex",
+      "solution": "Pass prompt as argument instead of piping"
+    },
+    {
+      "error": "Verbose output with timestamps",
+      "cause": "Default output mode includes all events",
+      "solution": "Use --output-last-message flag for clean output"
+    },
+    {
+      "error": "Cannot read files",
+      "cause": "Missing sandbox and directory flags",
+      "solution": "Add -s read-only -C . flags"
+    },
+    {
+      "error": "Codex CLI not authenticated",
+      "cause": "Not logged in with subscription",
+      "solution": "Run 'codex login' and sign in with ChatGPT Plus account"
+    }
+  ],
+  "version_notes": {
+    "0.25.0": {
+      "notes": "Current version as of 2025-08",
+      "missing_features": [
+        "No -q/--quiet flag despite documentation",
+        "No standalone --json flag (use with exec)"
+      ]
+    }
+  }
+}

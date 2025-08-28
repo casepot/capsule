@@ -1,0 +1,89 @@
+{
+  "$schema": "./schemas/pipeline.schema.json",
+  "version": "1.0.0",
+  
+  "execution": {
+    "parallel": true,
+    "timeout_seconds": 240,
+    "fail_fast": false,
+    "retry_on_failure": false,
+    "max_retries": 0
+  },
+  
+  "providers": {
+    "claude": {
+      "enabled": true,
+      "model": "sonnet",
+      "timeout_override": null,
+      "flags": {
+        "permission_mode": "plan",
+        "output_format": "json",
+        "continue_session": false
+      },
+      "additional_flags": []
+    },
+    "codex": {
+      "enabled": true,
+      "model": "gpt-5",
+      "timeout_override": null,
+      "reasoning_effort": "low",
+      "sandbox_mode": "read-only",
+      "working_directory": ".",
+      "additional_config": {}
+    },
+    "gemini": {
+      "enabled": true,
+      "model": "gemini-2.5-flash",
+      "timeout_override": null,
+      "flags": {
+        "sandbox": false,
+        "yolo": false,
+        "all_files": false
+      },
+      "additional_flags": []
+    }
+  },
+  
+  "review": {
+    "include_patterns": ["**/*"],
+    "exclude_patterns": [
+      "**/node_modules/**",
+      "**/vendor/**",
+      "**/.git/**",
+      "**/dist/**",
+      "**/build/**",
+      "**/.next/**",
+      "**/__pycache__/**",
+      "**/*.pyc"
+    ],
+    "max_diff_size_kb": 500,
+    "max_files": 100
+  },
+  
+  "output": {
+    "format": "markdown",
+    "include_raw_reports": false,
+    "summary_max_length": 500,
+    "verbose": false
+  },
+  
+  "gating": {
+    "enabled": true,
+    "must_fix_threshold": 1,
+    "block_on_test_failure": true,
+    "require_unanimous_pass": false,
+    "severity_thresholds": {
+      "critical": 0,
+      "high": 0,
+      "medium": 5,
+      "low": 10
+    }
+  },
+  
+  "testing": {
+    "enabled": true,
+    "command": "pytest tests/",
+    "timeout_seconds": 300,
+    "required_pass_rate": 0.95
+  }
+}

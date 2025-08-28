@@ -1,0 +1,202 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "id": "gemini",
+  "name": "Google Gemini CLI",
+  "description": "Google's Gemini models via OAuth-based CLI",
+  "cli": {
+    "command": "gemini",
+    "detection": [
+      {
+        "type": "command",
+        "value": "gemini",
+        "description": "Standard installation via Homebrew"
+      },
+      {
+        "type": "command",
+        "value": "gemini-cli",
+        "description": "Alternative command name"
+      }
+    ],
+    "version_check": "gemini --version",
+    "minimum_version": "0.2.1"
+  },
+  "authentication": {
+    "method": "oauth",
+    "service": "Google Account",
+    "required_subscription": false,
+    "no_api_key": true,
+    "login_command": "gemini",
+    "auth_check_command": "GEMINI_API_KEY='' gemini -p 'ping' 2>/dev/null",
+    "env_vars_to_unset": ["GEMINI_API_KEY"],
+    "oauth_cache": "~/.gemini/oauth_creds.json"
+  },
+  "models": [
+    {
+      "id": "gemini-2.5-pro",
+      "name": "Gemini 2.5 Pro",
+      "speed": "fast",
+      "quality": "highest",
+      "cost": "medium",
+      "recommended_for": ["code_review", "production"],
+      "flags": ["-m", "gemini-2.5-pro"],
+      "default": true,
+      "supports_thinking": true
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "name": "Gemini 2.5 Flash",
+      "speed": "faster",
+      "quality": "high",
+      "cost": "low",
+      "recommended_for": ["quick_analysis", "balanced_tasks"],
+      "flags": ["-m", "gemini-2.5-flash"],
+      "supports_thinking": true
+    },
+    {
+      "id": "gemini-2.5-flash-lite",
+      "name": "Gemini 2.5 Flash Lite",
+      "speed": "fastest",
+      "quality": "good",
+      "cost": "lowest",
+      "recommended_for": ["simple_tasks"],
+      "flags": ["-m", "gemini-2.5-flash-lite"],
+      "supports_thinking": false,
+      "warning": "Has thinking mode issues - avoid for reviews"
+    },
+    {
+      "id": "gemini-2.0-flash",
+      "name": "Gemini 2.0 Flash",
+      "deprecated": true,
+      "warning": "Outdated - use 2.5 series instead"
+    },
+    {
+      "id": "gemini-1.5-pro",
+      "name": "Gemini 1.5 Pro",
+      "deprecated": true,
+      "warning": "Outdated - use 2.5 series instead"
+    }
+  ],
+  "capabilities": {
+    "input_methods": {
+      "stdin_with_prompt": "Echo input | gemini -p (recommended)",
+      "prompt_only": "gemini -p 'prompt' (may timeout)",
+      "interactive": "Default interactive mode"
+    },
+    "flags": {
+      "sandbox": "Run in sandbox mode",
+      "yolo": "Auto-accept all actions",
+      "all_files": "Include all files in context",
+      "debug": "Debug mode"
+    },
+    "supports_streaming": true,
+    "supports_context_files": true
+  },
+  "required_flags": {
+    "review": {
+      "flags": [
+        "-m", "gemini-2.5-pro",
+        "-p"
+      ],
+      "description": "Required flags for code review mode",
+      "input_method": "stdin"
+    },
+    "non_interactive": {
+      "flags": ["-p"],
+      "description": "Non-interactive prompt flag"
+    }
+  },
+  "optional_flags": {
+    "model": {
+      "flag": "-m",
+      "param": "model",
+      "description": "Select specific model",
+      "required": true
+    },
+    "prompt": {
+      "flag": "-p",
+      "param": "prompt",
+      "description": "Non-interactive prompt (appended to stdin if any)"
+    },
+    "prompt_interactive": {
+      "flag": "-i",
+      "description": "Execute prompt then continue interactive"
+    },
+    "sandbox": {
+      "flag": "-s",
+      "description": "Run in sandbox"
+    },
+    "debug": {
+      "flag": "-d",
+      "description": "Debug mode"
+    },
+    "all_files": {
+      "flag": "-a",
+      "description": "Include all files in context"
+    },
+    "yolo": {
+      "flag": "-y",
+      "description": "Auto-accept all actions"
+    }
+  },
+  "output_handling": {
+    "format": "direct_text",
+    "requires_normalization": true,
+    "stderr_redirect": true,
+    "prompt_injection_needed": "CRITICAL: Output ONLY the JSON object, no markdown code fences or other text."
+  },
+  "environment": {
+    "required": {
+      "GEMINI_API_KEY": {
+        "value": "",
+        "description": "Must be empty string to force OAuth"
+      }
+    }
+  },
+  "performance": {
+    "typical_latency_seconds": {
+      "gemini-2.5-pro": [20, 40],
+      "gemini-2.5-flash": [15, 30],
+      "gemini-2.5-flash-lite": [10, 20]
+    },
+    "recommended_timeout": 100
+  },
+  "common_issues": [
+    {
+      "error": "Unable to submit request because Thinking_config.include_thoughts is only enabled when thinking is enabled",
+      "cause": "Using gemini-2.5-flash-lite which has thinking disabled",
+      "solution": "Use gemini-2.5-pro or gemini-2.5-flash instead"
+    },
+    {
+      "error": "No input provided",
+      "cause": "Using -p flag alone without stdin",
+      "solution": "Use echo to pipe prompt: echo 'prompt' | gemini -p"
+    },
+    {
+      "error": "Timeout on prompt",
+      "cause": "Using -p flag with large prompt",
+      "solution": "Combine stdin input with -p flag"
+    },
+    {
+      "error": "API key required",
+      "cause": "GEMINI_API_KEY environment variable is set",
+      "solution": "Unset or set to empty: GEMINI_API_KEY=''"
+    }
+  ],
+  "model_specific_notes": {
+    "gemini-2.5-flash-lite": {
+      "issue": "Thinking mode OFF by default (optimized for speed/cost)",
+      "impact": "Cannot handle complex review tasks",
+      "recommendation": "Do not use for code reviews"
+    }
+  },
+  "version_notes": {
+    "0.2.1": {
+      "notes": "Current version as of 2025-08",
+      "features": [
+        "OAuth authentication",
+        "Multiple model support",
+        "Sandbox mode"
+      ]
+    }
+  }
+}
