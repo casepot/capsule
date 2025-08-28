@@ -9,7 +9,7 @@ import addFormats from 'ajv-formats';
 const scriptDir = path.dirname(new URL(import.meta.url).pathname);
 const packageDir = path.dirname(scriptDir);
 
-const schemaPath = path.join(packageDir, 'config', 'schema.json');
+const schemaPath = path.join(packageDir, 'config', 'schemas', 'report.schema.json');
 const reportsDir = path.join(packageDir, 'workspace', 'reports');
 const outSummary = path.join(packageDir, 'workspace', 'summary.md');
 const outGate = path.join(packageDir, 'workspace', 'gate.txt');

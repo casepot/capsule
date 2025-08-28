@@ -13,8 +13,8 @@
  *   node normalize-json.js file.json
  */
 
-const fs = require('fs');
-const process = require('process');
+import fs from 'fs';
+import process from 'process';
 
 function extractJSON(input) {
   // 1. First try: Check if it's already valid JSON (including Claude envelope)
@@ -197,6 +197,158 @@ function extractJSON(input) {
   }
 }
 
+function normalizeReport(data, tool) {
+  // Ensure required fields
+  if (!data.tool && tool) data.tool = tool;
+  if (!data.timestamp) data.timestamp = new Date().toISOString();
+  if (!data.assumptions) data.assumptions = [];
+  if (!data.findings) data.findings = [];
+  if (!data.metrics) data.metrics = {};
+  if (!data.evidence) data.evidence = [];
+  if (!data.tests) data.tests = {
+    executed: false,
+    command: null,
+    exit_code: null,
+    summary: 'Tests not executed'
+  };
+  if (!data.exit_criteria) data.exit_criteria = {
+    ready_for_pr: false,
+    reasons: []
+  };
+
+  // Ensure summary exists and is a string (truncate if too long)
+  if (!data.summary) {
+    data.summary = 'No summary provided';
+  } else if (data.summary.length > 500) {
+    data.summary = data.summary.substring(0, 497) + '...';
+  }
+
+  // Fix evidence arrays - convert objects to strings
+  if (data.evidence && Array.isArray(data.evidence)) {
+    data.evidence = data.evidence.map(e => {
+      if (typeof e === 'object' && e !== null) {
+        // Convert evidence object to string
+        if (e.file || e.source) {
+          const file = e.file || e.source;
+          const lines = e.lines || '';
+          return lines ? `${file}:${lines}` : file;
+        }
+        return JSON.stringify(e);
+      }
+      return String(e);
+    });
+  }
+
+  // Fix assumptions evidence
+  if (data.assumptions && Array.isArray(data.assumptions)) {
+    data.assumptions = data.assumptions.map(a => {
+      if (a.evidence && Array.isArray(a.evidence)) {
+        a.evidence = a.evidence.map(e => {
+          if (typeof e === 'object' && e !== null) {
+            if (e.file || e.source) {
+              const file = e.file || e.source;
+              const lines = e.lines || '';
+              return lines ? `${file}:${lines}` : file;
+            }
+            return JSON.stringify(e);
+          }
+          return String(e);
+        });
+      }
+      // Ensure falsification_step is string or undefined
+      if (a.falsification_step === null) {
+        delete a.falsification_step;  // Remove null values
+      } else if (a.falsification_step !== undefined) {
+        a.falsification_step = String(a.falsification_step);
+      }
+      return a;
+    });
+  }
+
+  // Fix findings
+  if (data.findings && Array.isArray(data.findings)) {
+    data.findings = data.findings.map(f => {
+      // Fix category - normalize variations
+      if (f.category) {
+        const cat = f.category.toLowerCase();
+        if (cat.includes('design') || cat.includes('architecture')) {
+          f.category = 'architecture';
+        } else if (cat.includes('doc') && !cat.includes('docs')) {
+          f.category = 'docs';
+        } else if (cat === 'docs/style' || cat === 'documentation') {
+          f.category = 'docs';
+        } else if (cat.includes('style') && !cat.includes('docs')) {
+          f.category = 'style';
+        } else if (cat.includes('maintain')) {
+          f.category = 'maintainability';
+        } else if (cat.includes('correct')) {
+          f.category = 'correctness';
+        } else if (cat.includes('test')) {
+          f.category = 'testing';
+        } else if (cat.includes('security')) {
+          f.category = 'security';
+        } else if (cat.includes('performance') || cat.includes('perf')) {
+          f.category = 'performance';
+        } else if (!['security', 'correctness', 'performance', 'testing', 'architecture', 'style', 'maintainability', 'docs'].includes(f.category)) {
+          f.category = 'style'; // Default fallback
+        }
+      }
+
+      // Fix severity - normalize variations
+      if (f.severity) {
+        const sev = f.severity.toLowerCase();
+        if (sev === 'critical' || sev === 'blocker') {
+          f.severity = 'critical';
+        } else if (sev === 'high' || sev === 'major') {
+          f.severity = 'high';
+        } else if (sev === 'medium' || sev === 'moderate') {
+          f.severity = 'medium';
+        } else if (sev === 'low' || sev === 'minor' || sev === 'trivial') {
+          f.severity = 'low';
+        } else if (!['critical', 'high', 'medium', 'low'].includes(f.severity)) {
+          f.severity = 'low'; // Default fallback
+        }
+      }
+
+      // Fix evidence array
+      if (f.evidence && Array.isArray(f.evidence)) {
+        f.evidence = f.evidence.map(e => {
+          if (typeof e === 'object' && e !== null) {
+            if (e.file || e.source) {
+              const file = e.file || e.source;
+              const lines = e.lines || '';
+              return lines ? `${file}:${lines}` : file;
+            }
+            return JSON.stringify(e);
+          }
+          return String(e);
+        });
+      }
+      return f;
+    });
+  }
+
+  // Fix tests.coverage - ensure it's number or null
+  if (data.tests && data.tests.coverage !== undefined) {
+    if (typeof data.tests.coverage === 'string') {
+      if (data.tests.coverage.toLowerCase() === 'not reported' || 
+          data.tests.coverage === '') {
+        data.tests.coverage = null;
+      } else {
+        const parsed = parseFloat(data.tests.coverage);
+        data.tests.coverage = isNaN(parsed) ? null : parsed;
+      }
+    } else if (typeof data.tests.coverage === 'object') {
+      // Coverage might be an empty object
+      data.tests.coverage = null;
+    } else if (typeof data.tests.coverage !== 'number') {
+      data.tests.coverage = null;
+    }
+  }
+
+  return data;
+}
+
 // Main
 async function main() {
   let input;
@@ -223,7 +375,21 @@ async function main() {
   }
   
   try {
-    const json = extractJSON(input);
+    let json = extractJSON(input);
+    
+    // Apply normalization if this looks like a review report
+    if (json.findings || json.assumptions || json.tests) {
+      // Try to detect tool from filename or content
+      let tool = json.tool;
+      if (!tool && process.argv[2]) {
+        const filename = process.argv[2].toLowerCase();
+        if (filename.includes('claude')) tool = 'claude-code';
+        else if (filename.includes('codex')) tool = 'codex-cli';
+        else if (filename.includes('gemini')) tool = 'gemini-cli';
+      }
+      json = normalizeReport(json, tool);
+    }
+    
     console.log(JSON.stringify(json, null, 2));
     process.exit(0);
   } catch (e) {
@@ -236,7 +402,8 @@ async function main() {
   }
 }
 
-if (require.main === module) {
+// Check if script is run directly (ES module equivalent)
+if (import.meta.url === `file://${process.argv[1]}`) {
   main().catch(err => {
     console.error(`Unexpected error: ${err.message}`);
     process.exit(1);
