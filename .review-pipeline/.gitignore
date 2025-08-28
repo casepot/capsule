@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Runtime workspace (generated files)
+workspace/
+
+# Local configuration overrides
+config/local.json
+config/*.local.json
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.bak
+*~
+# Review pipeline workspace
+.review-pipeline/workspace/
+.review-pipeline/node_modules/
+.review-pipeline/package-lock.json

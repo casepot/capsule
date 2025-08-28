@@ -5,11 +5,14 @@ import process from 'node:process';
 import Ajv from 'ajv';
 import addFormats from 'ajv-formats';
 
-const root = process.cwd();
-const schemaPath = path.join(root, 'report.schema.json');  // Schema in repo root
-const reportsDir = path.join(root, 'review', 'reports');
-const outSummary = path.join(root, 'review', 'summary.md');
-const outGate = path.join(root, 'review', 'gate.txt');
+// Get the package directory (parent of scripts/)
+const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+const packageDir = path.dirname(scriptDir);
+
+const schemaPath = path.join(packageDir, 'config', 'schema.json');
+const reportsDir = path.join(packageDir, 'workspace', 'reports');
+const outSummary = path.join(packageDir, 'workspace', 'summary.md');
+const outGate = path.join(packageDir, 'workspace', 'gate.txt');
 
 const mustFiles = {
   'claude-code': path.join(reportsDir, 'claude-code.json'),

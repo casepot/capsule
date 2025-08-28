@@ -1,0 +1,12 @@
+{
+  "timeout": 120,
+  "models": {
+    "claude": "sonnet",
+    "codex": "gpt-5",
+    "gemini": "gemini-2.5-pro"
+  },
+  "test_command": "pytest tests/",
+  "reasoning_effort": "low",
+  "parallel": true,
+  "max_summary_length": 500
+}
