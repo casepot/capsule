@@ -14,9 +14,14 @@ jobs:
     runs-on: self-hosted
     if: github.event.pull_request.draft == false  # Skip draft PRs
     env:
-      TEST_CMD: ${{ vars.TEST_CMD || 'pytest tests/' }}
-      REVIEW_TIMEOUT: ${{ vars.REVIEW_TIMEOUT || '120' }}  # Seconds per provider
-      GH_TOKEN: ${{ github.token }} # for gh CLI comments
+      # Environment variable overrides (mapped via env.mapping.json)
+      TEST_CMD: ${{ vars.TEST_CMD }}                      # Testing command
+      REVIEW_TIMEOUT: ${{ vars.REVIEW_TIMEOUT }}          # Global timeout
+      CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}              # Claude model override
+      CODEX_REASONING: ${{ vars.CODEX_REASONING }}        # Codex reasoning level
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}              # Gemini model override
+      REVIEW_PARALLEL: ${{ vars.REVIEW_PARALLEL }}        # Parallel execution
+      GH_TOKEN: ${{ github.token }}                       # GitHub CLI token
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +40,12 @@ jobs:
             export PATH="$HOME/.claude/local:$PATH"
           fi
           bash .review-pipeline/scripts/auth-check.sh
+
+      - name: Validate configuration
+        run: |
+          cd .review-pipeline
+          npm install --no-audit --no-fund
+          node lib/config-loader.js validate || echo "Warning: Configuration validation failed, using defaults"
 
       - name: Build review context
         shell: bash
@@ -58,65 +69,106 @@ jobs:
             git diff HEAD~1 > .review-pipeline/workspace/context/diff.patch || git diff --cached > .review-pipeline/workspace/context/diff.patch || echo "No diff available" > .review-pipeline/workspace/context/diff.patch
             git diff --name-only HEAD~1 > .review-pipeline/workspace/context/files.txt || git diff --name-only --cached > .review-pipeline/workspace/context/files.txt || echo "No files changed" > .review-pipeline/workspace/context/files.txt
           fi
+          # Get test command from configuration or environment
+          TEST_CMD="${TEST_CMD:-$(node .review-pipeline/lib/config-loader.js show 2>/dev/null | jq -r '.testing.command // "pytest tests/"' || echo 'pytest tests/')}"
+          
           # Optional tests
           if [ -n "${TEST_CMD}" ]; then
             set +e
             echo "\$ ${TEST_CMD}" > .review-pipeline/workspace/context/tests.txt
-            ${TEST_CMD} >> .review-pipeline/workspace/context/tests.txt 2>&1
+            timeout 300 bash -c "${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt 2>&1
             echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
             set -e
           fi
 
-      - name: Provider reviews (run in parallel)
+      - name: Provider reviews (configuration-based)
         shell: bash
         timeout-minutes: 5  # Prevent hanging reviews
         run: |
           set -euo pipefail
+          cd .review-pipeline
+          
           # Ensure Claude Code is in PATH if installed in non-standard location
           if [ -x "$HOME/.claude/local/claude" ]; then
             export PATH="$HOME/.claude/local:$PATH"
           fi
+          
           # Unset any API key envs to prevent metered billing
           unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY
           
-          # Claude Code - use Sonnet 4 for speed
-          ( (timeout ${REVIEW_TIMEOUT:-120} claude -p "$(cat .review-pipeline/prompts/review.claude.md; echo; cat .review-pipeline/prompts/review.core.md)" \
-              --model sonnet \
-              --permission-mode plan \
-              --output-format json \
-              2>/dev/null \
-              | node .review-pipeline/scripts/normalize-json.js \
-              > .review-pipeline/workspace/reports/claude-code.json) || \
-            echo '{"tool":"claude-code","model":"claude-sonnet-4-20250514","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","pr":{"repo":"'${{ github.event.repository.name }}'","number":'${{ github.event.pull_request.number }}',"head_sha":"'${{ github.event.pull_request.head.sha }}'","branch":"'${{ github.event.pull_request.head.ref }}'","link":"'${{ github.event.pull_request.html_url }}'"},"summary":"Provider failed to respond","assumptions":[],"findings":[],"tests":{"executed":false,"command":"","exit_code":null,"summary":"Not executed","coverage":null},"metrics":{},"evidence":[],"exit_criteria":{"ready_for_pr":false,"reasons":["Provider error occurred"]}}' > .review-pipeline/workspace/reports/claude-code.json ) &
+          # Get configuration settings
+          PARALLEL_ENABLED=$(node lib/config-loader.js show 2>/dev/null | jq -r '.execution.parallel // true' || echo 'true')
+          GLOBAL_TIMEOUT=$(node lib/config-loader.js show 2>/dev/null | jq -r '.execution.timeout_seconds // 120' || echo '120')
           
-          # Codex CLI 0.25.0 - use fast reasoning effort
-          ( (timeout ${REVIEW_TIMEOUT:-120} codex exec --output-last-message .review-pipeline/workspace/reports/codex-cli.raw.txt \
-              -s read-only \
-              -C . \
-              -c model_reasoning_effort="low" \
-              "$(cat .review-pipeline/prompts/review.codex.md; echo; cat .review-pipeline/prompts/review.core.md)" \
-              >/dev/null 2>&1 && \
-              cat .review-pipeline/workspace/reports/codex-cli.raw.txt | node .review-pipeline/scripts/normalize-json.js > .review-pipeline/workspace/reports/codex-cli.json && \
-              rm -f .review-pipeline/workspace/reports/codex-cli.raw.txt) || \
-            echo '{"tool":"codex-cli","model":"gpt-5","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","pr":{"repo":"'${{ github.event.repository.name }}'","number":'${{ github.event.pull_request.number }}',"head_sha":"'${{ github.event.pull_request.head.sha }}'","branch":"'${{ github.event.pull_request.head.ref }}'","link":"'${{ github.event.pull_request.html_url }}'"},"summary":"Provider failed to respond","assumptions":[],"findings":[],"tests":{"executed":false,"command":"","exit_code":null,"summary":"Not executed","coverage":null},"metrics":{},"evidence":[],"exit_criteria":{"ready_for_pr":false,"reasons":["Provider error occurred"]}}' > .review-pipeline/workspace/reports/codex-cli.json ) &
+          # Get enabled providers
+          ENABLED_PROVIDERS=$(node -e "
+            import('./lib/config-loader.js').then(async (module) => {
+              const ConfigLoader = module.default;
+              const loader = new ConfigLoader();
+              await loader.load();
+              console.log(loader.getEnabledProviders().join(' '));
+            }).catch(() => console.log('claude codex gemini'));
+          " 2>/dev/null || echo 'claude codex gemini')
           
-          # Gemini CLI - use 2.5 Pro for production quality
-          ( (echo "$(cat .review-pipeline/prompts/review.gemini.md; echo; \
-              echo 'CRITICAL: Output ONLY the JSON object, no markdown code fences or other text.'; \
-              cat .review-pipeline/prompts/review.core.md)" | \
-              timeout ${REVIEW_TIMEOUT:-120} sh -c 'GEMINI_API_KEY="" gemini -m gemini-2.5-pro -p') \
-              2>/dev/null \
-              | node .review-pipeline/scripts/normalize-json.js \
-              > .review-pipeline/workspace/reports/gemini-cli.json) || \
-            echo '{"tool":"gemini-cli","model":"gemini-2.5-pro","timestamp":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","pr":{"repo":"'${{ github.event.repository.name }}'","number":'${{ github.event.pull_request.number }}',"head_sha":"'${{ github.event.pull_request.head.sha }}'","branch":"'${{ github.event.pull_request.head.ref }}'","link":"'${{ github.event.pull_request.html_url }}'"},"summary":"Provider failed to respond","assumptions":[],"findings":[],"tests":{"executed":false,"command":"","exit_code":null,"summary":"Not executed","coverage":null},"metrics":{},"evidence":[],"exit_criteria":{"ready_for_pr":false,"reasons":["Provider error occurred"]}}' > .review-pipeline/workspace/reports/gemini-cli.json ) &
+          echo "Configuration:"
+          echo "  Parallel: $PARALLEL_ENABLED"
+          echo "  Timeout: $GLOBAL_TIMEOUT seconds"
+          echo "  Enabled providers: $ENABLED_PROVIDERS"
           
-          # Wait for all background jobs
-          wait
+          # Run provider reviews based on configuration
+          run_provider() {
+            local provider="$1"
+            local timeout="${2:-$GLOBAL_TIMEOUT}"
+            
+            # Check if provider is enabled
+            local enabled=$(node -e "
+              import('./lib/config-loader.js').then(async (module) => {
+                const ConfigLoader = module.default;
+                const loader = new ConfigLoader();
+                await loader.load();
+                console.log(loader.isProviderEnabled('$provider'));
+              }).catch(() => console.log('true'));
+            " 2>/dev/null || echo 'true')
+            
+            if [ "$enabled" != "true" ]; then
+              echo "Skipping $provider (disabled)"
+              return 0
+            fi
+            
+            # Get provider-specific timeout if configured
+            timeout=$(node -e "
+              import('./lib/config-loader.js').then(async (module) => {
+                const ConfigLoader = module.default;
+                const loader = new ConfigLoader();
+                await loader.load();
+                const config = loader.getProviderConfig('$provider');
+                console.log(config.timeout);
+              }).catch(() => console.log('$timeout'));
+            " 2>/dev/null || echo "$timeout")
+            
+            echo "Running $provider review (timeout: ${timeout}s)..."
+            bash scripts/run-provider-review.sh "$provider" "$timeout" || true
+          }
           
-          # Verify reports were created
-          for report in claude-code codex-cli gemini-cli; do
-            if [ ! -f ".review-pipeline/workspace/reports/${report}.json" ]; then
-              echo "::warning::Missing report: ${report}.json"
+          # Execute reviews based on parallel configuration
+          if [ "$PARALLEL_ENABLED" = "true" ]; then
+            echo "Running reviews in parallel..."
+            for provider in $ENABLED_PROVIDERS; do
+              run_provider "$provider" &
+            done
+            wait
+          else
+            echo "Running reviews sequentially..."
+            for provider in $ENABLED_PROVIDERS; do
+              run_provider "$provider"
+            done
+          fi
+          
+          # Verify reports were created for enabled providers
+          for provider in $ENABLED_PROVIDERS; do
+            report_file="workspace/reports/${provider}-$([ "$provider" = "claude" ] && echo "code" || echo "cli").json"
+            if [ ! -f "$report_file" ]; then
+              echo "::warning::Missing report: $report_file"
             fi
           done
 
