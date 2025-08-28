@@ -36,11 +36,15 @@ claude        # Login with Claude.ai Pro/Max account
 codex login   # Login with ChatGPT Plus account  
 gemini        # OAuth with Google account
 
-# Verify authentication
-bash scripts/auth-check.sh
+# Verify authentication (two options)
+./auth-check                                      # Convenience wrapper
+# OR
+bash .review-pipeline/scripts/auth-check.sh      # Direct path
 
-# Test locally
-bash scripts/review-local.sh
+# Test locally (two options) 
+./review-local                                    # Convenience wrapper  
+# OR
+bash .review-pipeline/scripts/review-local.sh     # Direct path
 ```
 
 ## Documentation
@@ -49,38 +53,46 @@ bash scripts/review-local.sh
 |----------|---------|
 | [RUNNER_SETUP.md](RUNNER_SETUP.md) | Complete runner installation and configuration guide |
 | [PROVIDER_CONFIGURATION.md](PROVIDER_CONFIGURATION.md) | Detailed CLI configuration, models, and troubleshooting |
-| [report.schema.json](report.schema.json) | JSON schema for provider outputs |
+| [.review-pipeline/config/schema.json](.review-pipeline/config/schema.json) | JSON schema for provider outputs |
 
 ## Project Structure
 
 ```
+# Convenience wrappers (project root)
+./auth-check                     # → .review-pipeline/scripts/auth-check.sh
+./review-local                   # → .review-pipeline/scripts/review-local.sh
+
 .github/workflows/
 ├── pr-multimodel-review.yml    # GitHub Actions workflow
 
-scripts/
-├── auth-check.sh               # Verify CLI authentication
-├── review-local.sh             # Local testing script
-├── aggregate-reviews.mjs       # Aggregate and validate reports
-└── normalize-json.js           # Extract JSON from various formats
-
-prompts/
-├── review.core.md              # Core review instructions (all providers)
-├── review.claude.md            # Claude-specific overlay
-├── review.codex.md             # Codex-specific overlay  
-└── review.gemini.md            # Gemini-specific overlay
-
-review/                         # Generated during review
-├── context/                    # PR metadata and diffs
-│   ├── pr.json
-│   ├── diff.patch
-│   ├── files.txt
-│   └── tests.txt
-├── reports/                    # Individual provider reports
-│   ├── claude-code.json
-│   ├── codex-cli.json
-│   └── gemini-cli.json
-├── summary.md                  # Aggregated summary
-└── gate.txt                    # pass/fail decision
+.review-pipeline/
+├── config/                     # Configuration files
+│   ├── defaults.json
+│   └── schema.json             # JSON schema for provider outputs
+├── scripts/                    # Review scripts
+│   ├── auth-check.sh           # Verify CLI authentication
+│   ├── review-local.sh         # Local testing script
+│   ├── aggregate-reviews.mjs   # Aggregate and validate reports
+│   └── normalize-json.js       # Extract JSON from various formats
+├── prompts/                    # Review prompts
+│   ├── review.core.md          # Core review instructions (all providers)
+│   ├── review.claude.md        # Claude-specific overlay
+│   ├── review.codex.md         # Codex-specific overlay  
+│   └── review.gemini.md        # Gemini-specific overlay
+├── workspace/                  # Generated during review
+│   ├── context/                # PR metadata and diffs
+│   │   ├── pr.json
+│   │   ├── diff.patch
+│   │   ├── files.txt
+│   │   └── tests.txt
+│   ├── reports/                # Individual provider reports
+│   │   ├── claude-code.json
+│   │   ├── codex-cli.json
+│   │   └── gemini-cli.json
+│   ├── summary.md              # Aggregated summary
+│   └── gate.txt                # pass/fail decision
+├── package.json                # Node.js dependencies
+└── README.md                   # Package-specific docs
 ```
 
 ## Configuration
@@ -110,7 +122,7 @@ review/                         # Generated during review
 
 ### Codex File Access Issues
 - **"Cannot read files"**: Add `-s read-only -C .` flags
-- **"No PR metadata"**: Update `prompts/review.codex.md` to clarify file reading is allowed
+- **"No PR metadata"**: Update `.review-pipeline/prompts/review.codex.md` to clarify file reading is allowed
 
 ### Gemini Model Issues  
 - **Thinking mode error**: Use `gemini-2.5-pro` or `gemini-2.5-flash`, NOT `gemini-2.5-flash-lite`
@@ -130,12 +142,14 @@ echo "# Test" >> README.md
 git add README.md
 git commit -m "Test review"
 
-# Run review
-bash scripts/review-local.sh
+# Run review (two options)
+./review-local                                    # Convenience wrapper
+# OR  
+bash .review-pipeline/scripts/review-local.sh     # Direct path
 
 # Check results
-cat review/summary.md
-cat review/gate.txt  # Should show "pass" or "fail"
+cat .review-pipeline/workspace/summary.md
+cat .review-pipeline/workspace/gate.txt  # Should show "pass" or "fail"
 ```
 
 ### GitHub Actions Testing

@@ -136,7 +136,7 @@ gemini
 Run the auth check script to verify all CLIs are installed and authenticated:
 ```bash
 cd /path/to/your/repo
-bash scripts/auth-check.sh
+bash .review-pipeline/scripts/auth-check.sh
 ```
 
 Expected output:
@@ -245,7 +245,7 @@ Before pushing to GitHub, test locally:
 export TEST_CMD="pytest tests/"
 
 # Run local review
-bash scripts/review-local.sh
+bash .review-pipeline/scripts/review-local.sh
 ```
 
 ## Maintenance
@@ -298,6 +298,6 @@ journalctl -u actions.runner.*.service -f
   - [ ] `echo $OPENAI_API_KEY` returns empty
   - [ ] `echo $GEMINI_API_KEY` returns empty
 - [ ] Runner registered and running
-- [ ] `scripts/auth-check.sh` passes all checks
-- [ ] `scripts/review-local.sh` completes without errors
+- [ ] `.review-pipeline/scripts/auth-check.sh` passes all checks
+- [ ] `.review-pipeline/scripts/review-local.sh` completes without errors
 - [ ] Test PR triggers workflow and posts review comment

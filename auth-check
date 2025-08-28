@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Convenience wrapper for .review-pipeline/scripts/auth-check.sh
+exec .review-pipeline/scripts/auth-check.sh "$@"
