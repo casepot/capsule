@@ -28,9 +28,12 @@ jobs:
 
       - name: Setup Claude Authentication
         run: |
-          # Extract Claude OAuth token from macOS Keychain
-          # The token is stored by Claude.ai/Max login, not API key
-          export ANTHROPIC_AUTH_TOKEN="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null || echo '')"
+          # Extract Claude OAuth credentials from macOS Keychain
+          # The credentials are stored as JSON by Claude.ai/Max login
+          CLAUDE_CREDS="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null || echo '{}')"
+          
+          # Parse the OAuth access token from the JSON
+          export ANTHROPIC_AUTH_TOKEN="$(echo "$CLAUDE_CREDS" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || echo '')"
           
           # Ensure we're NOT using API key (we want Max/Pro subscription)
           unset ANTHROPIC_API_KEY
@@ -42,8 +45,10 @@ jobs:
           # Verify token was extracted
           if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
             echo "::warning::Could not extract Claude token from Keychain. Claude review may fail."
+            echo "::warning::The keychain may be locked or credentials not found."
           else
-            echo "✓ Claude OAuth token extracted from Keychain"
+            echo "✓ Claude OAuth token extracted from Keychain (Max/Pro subscription)"
+            echo "  Token format: ${ANTHROPIC_AUTH_TOKEN:0:15}..."
           fi
 
       - name: Ensure Node.js
