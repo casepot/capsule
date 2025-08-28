@@ -1,0 +1,56 @@
+{
+  "tool": "gemini-cli",
+  "model": "gemini-1.5-pro",
+  "timestamp": "2025-08-28T10:02:00Z",
+  "pr": {
+    "repo": "pyrepl3",
+    "number": 1,
+    "head_sha": "abc123",
+    "branch": "feature-branch",
+    "link": "https://github.com/user/pyrepl3/pull/1"
+  },
+  "summary": "Gemini analysis complete. Identified performance and security concerns.",
+  "assumptions": [
+    {
+      "text": "The session pool size is appropriate for production load",
+      "status": "uncertain",
+      "evidence": [],
+      "falsification_step": "Load test with 100+ concurrent sessions"
+    }
+  ],
+  "findings": [
+    {
+      "category": "performance",
+      "severity": "medium",
+      "file": "src/pool.py",
+      "lines": "120-125",
+      "message": "Inefficient loop could cause performance degradation with large pools",
+      "suggestion": "Use dict lookup instead of linear search",
+      "evidence": ["O(n) search in hot path"],
+      "must_fix": false
+    },
+    {
+      "category": "security",
+      "severity": "high",
+      "file": "src/executor.py",
+      "lines": "45-50",
+      "message": "Command injection risk in subprocess execution",
+      "suggestion": "Sanitize inputs before passing to subprocess",
+      "evidence": ["Unsanitized user input in subprocess call"],
+      "must_fix": true
+    }
+  ],
+  "tests": {
+    "executed": true,
+    "command": "pytest tests/",
+    "exit_code": 0,
+    "summary": "All tests passed",
+    "coverage": 85.5
+  },
+  "metrics": {},
+  "evidence": [],
+  "exit_criteria": {
+    "ready_for_pr": false,
+    "reasons": ["Security issue needs resolution"]
+  }
+}

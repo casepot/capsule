@@ -1,0 +1,97 @@
+name: PR Multi-Model Review (HITL, self-hosted)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: self-hosted
+    env:
+      TEST_CMD: ${{ vars.TEST_CMD || 'pytest tests/' }}
+      GH_TOKEN: ${{ github.token }} # for gh CLI comments
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Guardrails (auth + no API keys + CLIs present)
+        run: |
+          # Ensure Claude Code is in PATH if installed in non-standard location
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          bash scripts/auth-check.sh
+
+      - name: Build review context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p review/context review/reports
+          # PR metadata
+          gh pr view ${{ github.event.pull_request.number }} --json number,state,headRefName,baseRefName,headRefOid,permalink,author --repo "${{ github.repository }}" > review/context/pr.json
+          # Diff & files
+          gh pr diff ${{ github.event.pull_request.number }} --patch --repo "${{ github.repository }}" > review/context/diff.patch
+          gh pr view ${{ github.event.pull_request.number }} --json files --repo "${{ github.repository }}" | jq -r '.files[].path' > review/context/files.txt
+          # Optional tests
+          if [ -n "${TEST_CMD}" ]; then
+            set +e
+            echo "\$ ${TEST_CMD}" > review/context/tests.txt
+            ${TEST_CMD} >> review/context/tests.txt 2>&1
+            echo "== exit:$? ==" >> review/context/tests.txt
+            set -e
+          fi
+
+      - name: Provider reviews (run in parallel)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Ensure Claude Code is in PATH if installed in non-standard location
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          # Unset any API key envs to prevent metered billing
+          unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY
+          # Claude Code
+          ( claude -p "$(cat prompts/review.claude.md; echo; cat prompts/review.core.md)" \
+              --permission-mode plan --output-format json \
+              > review/reports/claude-code.json ) &
+          # Codex CLI
+          ( codex exec "$(cat prompts/review.codex.md; echo; cat prompts/review.core.md)" \
+              > review/reports/codex-cli.json ) &
+          # Gemini CLI
+          ( GEMINI_API_KEY="" gemini -p "$(cat prompts/review.gemini.md; echo; cat prompts/review.core.md)" \
+              > review/reports/gemini-cli.json ) &
+          wait
+
+      - name: Aggregate & gate
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund ajv@8 ajv-formats@3
+          node scripts/aggregate-reviews.mjs
+
+      - name: Attach summary as PR comment
+        if: always()
+        shell: bash
+        run: |
+          if [ -f review/summary.md ]; then
+            gh pr comment ${{ github.event.pull_request.number }} --body-file review/summary.md --repo "${{ github.repository }}"
+          else
+            echo "No summary generated."
+          fi
+
+      - name: Fail if gate failed
+        shell: bash
+        run: |
+          if [ -f review/gate.txt ] && [ "$(cat review/gate.txt)" = "fail" ]; then
+            echo "Gate failed."
+            exit 1
+          fi
