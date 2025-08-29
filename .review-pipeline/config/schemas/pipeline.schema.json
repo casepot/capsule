@@ -31,7 +31,6 @@
           "type": "integer",
           "description": "Global timeout per provider in seconds",
           "minimum": 30,
-          "maximum": 600,
           "default": 120
         },
         "fail_fast": {
@@ -210,7 +209,6 @@
           "type": "integer",
           "description": "Test execution timeout",
           "minimum": 10,
-          "maximum": 1800,
           "default": 300
         },
         "required_pass_rate": {
@@ -244,7 +242,6 @@
           "type": ["integer", "null"],
           "description": "Provider-specific timeout override",
           "minimum": 30,
-          "maximum": 600,
           "default": null
         },
         "flags": {
@@ -297,7 +294,6 @@
           "type": ["integer", "null"],
           "description": "Provider-specific timeout override",
           "minimum": 30,
-          "maximum": 600,
           "default": null
         },
         "reasoning_effort": {
@@ -353,7 +349,6 @@
           "type": ["integer", "null"],
           "description": "Provider-specific timeout override",
           "minimum": 30,
-          "maximum": 600,
           "default": null
         },
         "flags": {
