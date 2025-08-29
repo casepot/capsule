@@ -53,11 +53,14 @@ function extractJSON(input) {
               branch: 'unknown',
               link: 'https://github.com/'
             },
-            summary: summary.length >= 50 ? summary : (summary + ' '.repeat(50 - summary.length)),
+            // Ensure minimum length by appending an explicit note rather than padding spaces
+            summary: (summary + ' — [normalized unstructured output]').slice(0, 500),
             assumptions: [],
             findings: [],
             tests: { executed: false, command: null, exit_code: null, summary: 'Tests not executed' },
-            exit_criteria: { ready_for_pr: true, reasons: [] }
+            // Conservative: not ready unless provider produced structured verdict
+            exit_criteria: { ready_for_pr: false, reasons: ['claude result was unstructured; normalized without findings'] },
+            error: 'unstructured_output'
           };
         }
       } else if (typeof parsed.result === 'object') {
@@ -229,11 +232,9 @@ function normalizeReport(data, tool) {
     reasons: []
   };
 
-  // Ensure summary exists and is a string (truncate if too long)
+  // Ensure summary exists and is a string (do not truncate)
   if (!data.summary) {
     data.summary = 'No summary provided';
-  } else if (data.summary.length > 500) {
-    data.summary = data.summary.substring(0, 497) + '...';
   }
 
   // Fix evidence arrays - convert objects to strings

@@ -62,11 +62,12 @@ async function generateProviderCommand(provider, options = {}) {
         command.push(cliCmd);
         
         // Build prompt with optional project criteria
-        let promptCmd = '$(cat "$PACKAGE_DIR/prompts/review.claude.md"; echo; cat "$PACKAGE_DIR/prompts/review.core.md"';
+        // Wrap substitution in quotes so entire prompt is a single argument
+        let promptCmd = '"$(cat "$PACKAGE_DIR/prompts/review.claude.md"; echo; cat "$PACKAGE_DIR/prompts/review.core.md"';
         if (projectCriteriaPath) {
           promptCmd += `; echo; cat "${projectCriteriaPath}"`;
         }
-        promptCmd += ')';
+        promptCmd += ')"';
         
         command.push('-p', promptCmd);
         command.push('--model', model);
