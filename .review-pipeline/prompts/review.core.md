@@ -110,6 +110,11 @@ Produce a single JSON document with this exact structure:
     "branch": "[Branch name]",
     "link": "[PR URL]"
   },
+  <!-- TODO: Remove timestamp and pr fields from LLM output spec
+       These should be injected by normalize-json.js since we know:
+       - Exact execution timestamp
+       - All PR details from pr.json
+       LLMs should focus on analysis, not reporting known facts -->
   "summary": "[Critical assessment in <500 chars: key issues, risks, and recommendation]",
   "assumptions": [
     {
@@ -137,6 +142,9 @@ Produce a single JSON document with this exact structure:
     "exit_code": [number or null],
     "summary": "[Test coverage and quality assessment]",
     "coverage": [percentage or null]
+    <!-- TODO: Only 'summary' should come from LLM
+         We know: executed, command, exit_code from pipeline execution
+         LLM should analyze/interpret test results, not report raw data -->
   },
   "metrics": {
     "[Optional: lines_added, complexity_increase, etc.]"

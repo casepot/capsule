@@ -255,6 +255,16 @@ function normalizeReport(data, tool) {
   // Always use our known tool and model values (don't trust LLM self-identification)
   if (tool) data.tool = tool;
   if (process.env.MODEL) data.model = process.env.MODEL;
+  
+  // TODO: Remove more fields from LLM responsibility:
+  // - timestamp: We know when we executed the review, use Date.now()
+  // - pr.*: We have all PR data in pr.json, inject it here
+  // - tests.executed: We know if we ran tests from pipeline config
+  // - tests.command: We know the test command from pipeline.config.json
+  // - tests.exit_code: We have the actual exit code from test execution
+  // The LLM should only provide analysis (summary, findings, assumptions)
+  // not report factual data we already know from the execution environment
+  
   if (!data.timestamp) data.timestamp = new Date().toISOString();
   if (!data.pr || typeof data.pr !== 'object') {
     data.pr = {};
