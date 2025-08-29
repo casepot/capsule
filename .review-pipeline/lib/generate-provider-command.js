@@ -100,6 +100,8 @@ async function generateProviderCommand(provider, options = {}) {
         
         command.push(cliCmd);
         command.push('exec');
+        // Ensure model is explicitly passed to Codex CLI
+        command.push('-m', model);
         command.push('--output-last-message', '"$PACKAGE_DIR/workspace/reports/codex-cli.raw.txt"');
         command.push('-s', sandbox);
         command.push('-C', workdir);

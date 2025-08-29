@@ -27,6 +27,20 @@ case "$PROVIDER" in
   gemini) export TOOL="gemini-cli"  ;;
 esac
 
+# Provide PR/run context to normalizer
+export RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+export PR_REPO="${GITHUB_REPOSITORY#*/}"
+export PR_NUMBER
+export PR_BRANCH="${GITHUB_REF_NAME:-}"
+export HEAD_SHA="${GITHUB_SHA:-}"
+
+# Expose configured model for the provider
+MODEL_FROM_CONFIG=$(node "$PACKAGE_DIR/lib/config-loader.js" show 2>/dev/null | jq -r \
+  ".providers.${PROVIDER}.model // (\"gpt-5\")" 2>/dev/null || true)
+if [ -n "$MODEL_FROM_CONFIG" ] && [ "$MODEL_FROM_CONFIG" != "null" ]; then
+  export MODEL="$MODEL_FROM_CONFIG"
+fi
+
 # Generate provider command from configuration
 CMD=$(node "$PACKAGE_DIR/lib/generate-provider-command.js" "$PROVIDER" --no-timeout 2>/dev/null)
 

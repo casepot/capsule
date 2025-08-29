@@ -254,6 +254,19 @@ function extractJSON(input) {
 function normalizeReport(data, tool) {
   // Ensure required fields
   if (!data.tool && tool) data.tool = tool;
+  if (!data.model && process.env.MODEL) data.model = process.env.MODEL;
+  if (!data.timestamp) data.timestamp = new Date().toISOString();
+  if (!data.pr || typeof data.pr !== 'object') {
+    data.pr = {};
+  }
+  if (!data.pr.repo) data.pr.repo = process.env.PR_REPO || 'unknown';
+  if (data.pr.number === undefined) {
+    const n = parseInt(process.env.PR_NUMBER || '0', 10);
+    data.pr.number = Number.isFinite(n) ? n : 0;
+  }
+  if (!data.pr.head_sha) data.pr.head_sha = process.env.HEAD_SHA || '';
+  if (!data.pr.branch) data.pr.branch = process.env.PR_BRANCH || 'unknown';
+  if (!data.pr.link) data.pr.link = process.env.RUN_URL || 'https://github.com/';
   if (!data.timestamp) data.timestamp = new Date().toISOString();
   if (!data.assumptions) data.assumptions = [];
   if (!data.findings) data.findings = [];
