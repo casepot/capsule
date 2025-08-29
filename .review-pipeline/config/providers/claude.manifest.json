@@ -77,7 +77,7 @@
   "required_flags": {
     "review": {
       "flags": [
-        "--permission-mode", "plan",
+        "--permission-mode", "default",
         "--output-format", "json"
       ],
       "description": "Required flags for code review mode"
