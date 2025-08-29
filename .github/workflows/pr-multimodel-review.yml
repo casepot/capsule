@@ -88,7 +88,8 @@ jobs:
               --arg repo "${{ github.event.repository.name }}" \
               --arg sha "${{ github.sha }}" \
               --arg branch "${{ github.ref_name }}" \
-              '{repo:$repo, number:0, head_sha:$sha, branch:$branch, link:"manual"}' \
+              --arg url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              '{repo:$repo, number:0, head_sha:$sha, branch:$branch, link:$url}' \
               > .review-pipeline/workspace/context/pr.json
           fi
           # Diff & files

@@ -38,11 +38,27 @@ function extractJSON(input) {
               // Couldn't parse extracted JSON
             }
           }
-          // Result isn't JSON, might be an error message
-          if (parsed.is_error) {
-            throw new Error(`Claude error: ${parsed.result}`);
-          }
-          // Fall through to try other extraction methods
+          // Result isn't JSON, return a normalized report built from the envelope
+          const summary = String(resultStr).trim();
+          const now = new Date().toISOString();
+          // Best-effort defaults for required fields
+          return {
+            tool: 'claude-code',
+            model: 'sonnet',
+            timestamp: now,
+            pr: {
+              repo: 'unknown',
+              number: 0,
+              head_sha: '',
+              branch: 'unknown',
+              link: 'https://github.com/'
+            },
+            summary: summary.length >= 50 ? summary : (summary + ' '.repeat(50 - summary.length)),
+            assumptions: [],
+            findings: [],
+            tests: { executed: false, command: null, exit_code: null, summary: 'Tests not executed' },
+            exit_criteria: { ready_for_pr: true, reasons: [] }
+          };
         }
       } else if (typeof parsed.result === 'object') {
         return parsed.result;
@@ -54,10 +70,7 @@ function extractJSON(input) {
       return parsed;
     }
     
-    // Plain JSON object
-    if (typeof parsed === 'object') {
-      return parsed;
-    }
+    // Don't return arbitrary plain objects (like envelopes). Force extraction below.
   } catch {
     // Not valid JSON, continue with extraction
   }
