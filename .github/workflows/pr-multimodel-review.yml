@@ -46,6 +46,18 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Runner Diagnostics (Claude OAuth)
+        run: |
+          set -euo pipefail
+          echo "whoami: $(whoami)"
+          echo "HOME: $HOME"
+          # Keychain info (no secrets)
+          security show-keychain-info ~/Library/Keychains/login.keychain-db || true
+          security find-generic-password -s 'Claude Code-credentials' || true
+          # Claude probe (headless)
+          if [ -x "$HOME/.claude/local/claude" ]; then export PATH="$HOME/.claude/local:$PATH"; fi
+          claude -p "echo test" --output-format text || true
+
       - name: Guardrails (auth + no API keys + CLIs present)
         run: |
           # Ensure Claude Code is in PATH if installed in non-standard location
