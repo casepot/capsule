@@ -116,15 +116,15 @@ Produce a single JSON document with this exact structure:
   "assumptions": [
     {
       "text": "[Assumption about code behavior or requirements]",
-      "status": "[validated|uncertain|falsified]",
+      "status": "[ENUM: Must be exactly one of: validated, uncertain, falsified]",
       "evidence": ["[Supporting evidence]"],
       "falsification_step": "[How to verify if uncertain]"
     }
   ],
   "findings": [
     {
-      "category": "[security|correctness|performance|testing|architecture|style|maintainability|docs]",
-      "severity": "[critical|high|medium|low]",
+      "category": "[ENUM: Must be exactly one of: security, correctness, performance, testing, architecture, style, maintainability, docs]",
+      "severity": "[ENUM: Must be exactly one of: critical, high, medium, low]",
       "file": "[File path]",
       "lines": "[Line numbers e.g. '45' or '100-150']",
       "message": "[What is wrong and why it matters]",

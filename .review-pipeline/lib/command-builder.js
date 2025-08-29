@@ -314,7 +314,25 @@ export default class CommandBuilder {
     const corePrompt = await fs.readFile(corePath, 'utf8');
     sections.push(corePrompt);
 
-    // THIRD: Model instruction if needed
+    // THIRD: Inject PR context if available
+    const prPath = path.join(this.packageDir, 'workspace', 'context', 'pr.json');
+    try {
+      const prData = JSON.parse(await fs.readFile(prPath, 'utf8'));
+      sections.push('\n=== PULL REQUEST CONTEXT ===');
+      sections.push(`Repository: ${prData.url?.split('/')[4] || 'unknown'}`);
+      sections.push(`PR Number: ${prData.number}`);
+      sections.push(`Branch: ${prData.headRefName} -> ${prData.baseRefName}`);
+      sections.push(`Head SHA: ${prData.headRefOid}`);
+      sections.push(`URL: ${prData.url}`);
+      sections.push('Use these values for the "pr" field in your JSON output.');
+      sections.push('=== END PR CONTEXT ===\n');
+    } catch (error) {
+      if (this.verbose) {
+        console.warn(`Could not load PR context: ${error.message}`);
+      }
+    }
+
+    // FOURTH: Model instruction if needed
     if (provider === 'claude' && config.model) {
       sections.push(`\nSet the model field to "${config.model}" in your JSON output.`);
     }
