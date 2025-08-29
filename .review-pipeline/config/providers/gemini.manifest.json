@@ -15,6 +15,16 @@
         "type": "command",
         "value": "gemini-cli",
         "description": "Alternative command name"
+      },
+      {
+        "type": "path",
+        "value": "/opt/homebrew/bin/gemini",
+        "description": "macOS Homebrew ARM64 location"
+      },
+      {
+        "type": "path",
+        "value": "/usr/local/bin/gemini",
+        "description": "macOS Homebrew Intel location"
       }
     ],
     "version_check": "gemini --version",

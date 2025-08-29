@@ -10,6 +10,16 @@
         "type": "command",
         "value": "codex",
         "description": "Standard installation via Homebrew"
+      },
+      {
+        "type": "path",
+        "value": "/opt/homebrew/bin/codex",
+        "description": "macOS Homebrew ARM64 location"
+      },
+      {
+        "type": "path",
+        "value": "/usr/local/bin/codex",
+        "description": "macOS Homebrew Intel location"
       }
     ],
     "version_check": "codex --version",

@@ -10,6 +10,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import ConfigLoader from './config-loader.js';
 import ContextInjector from './context-injector.js';
 import CriteriaBuilder from './criteria-builder.js';
@@ -34,6 +35,52 @@ export default class CommandBuilder {
   async loadConfiguration() {
     await this.configLoader.load();
     return this.configLoader;
+  }
+
+  /**
+   * Detect the actual command path for a provider
+   */
+  async detectCommandPath(manifest) {
+    // First try the main command
+    const mainCommand = manifest.cli?.command;
+    if (mainCommand) {
+      // Check if it's available in PATH
+      try {
+        const { execSync } = await import('node:child_process');
+        execSync(`which ${mainCommand}`, { stdio: 'ignore' });
+        if (this.verbose) {
+          console.error(`Found ${mainCommand} in PATH`);
+        }
+        return mainCommand;
+      } catch {
+        // Not in PATH, continue checking
+        if (this.verbose) {
+          console.error(`${mainCommand} not found in PATH, checking detection paths...`);
+        }
+      }
+    }
+
+    // Check detection paths
+    if (manifest.cli?.detection) {
+      for (const detection of manifest.cli.detection) {
+        if (detection.type === 'path') {
+          // Expand tilde to home directory
+          const expandedPath = detection.value.replace(/^~/, os.homedir());
+          try {
+            await fs.access(expandedPath, fs.constants.X_OK);
+            if (this.verbose) {
+              console.error(`Found ${mainCommand} at: ${expandedPath}`);
+            }
+            return expandedPath;
+          } catch {
+            // Path doesn't exist or not executable, continue
+          }
+        }
+      }
+    }
+
+    // Fall back to the main command and hope it's in PATH
+    return mainCommand || manifest.cli?.command;
   }
 
   /**
@@ -78,6 +125,9 @@ export default class CommandBuilder {
     const model = config.model || 'opus';
     const timeout = config.timeout || 1500;
     
+    // Detect the actual command path
+    const commandPath = await this.detectCommandPath(manifest);
+    
     // Build command arguments
     const args = [];
     
@@ -108,7 +158,7 @@ export default class CommandBuilder {
     const prompt = await this.buildPromptWithContext('claude', config, options);
 
     return {
-      command: manifest.cli.command || 'claude',
+      command: commandPath,
       args,
       stdin: prompt,
       env: {
@@ -132,6 +182,9 @@ export default class CommandBuilder {
     const reasoning = config.reasoning_effort || 'high';
     const sandbox = config.sandbox_mode || 'read-only';
     const workdir = config.working_directory || '.';
+    
+    // Detect the actual command path
+    const commandPath = await this.detectCommandPath(manifest);
     
     // Build command arguments
     const args = ['exec'];
@@ -164,7 +217,7 @@ export default class CommandBuilder {
     args.push(prompt);
 
     return {
-      command: manifest.cli.command || 'codex',
+      command: commandPath,
       args,
       stdin: null, // Codex takes prompt as argument, not stdin
       env: {
@@ -188,6 +241,9 @@ export default class CommandBuilder {
     const model = config.model || 'gemini-2.5-pro';
     const timeout = config.timeout || 1500;
     const flags = config.flags || {};
+    
+    // Detect the actual command path
+    const commandPath = await this.detectCommandPath(manifest);
     
     // Build command arguments
     const args = [];
@@ -221,7 +277,7 @@ export default class CommandBuilder {
     const prompt = await this.buildPromptWithContext('gemini', config, options);
 
     return {
-      command: manifest.cli.command || 'gemini',
+      command: commandPath,
       args,
       stdin: prompt,
       env: {
