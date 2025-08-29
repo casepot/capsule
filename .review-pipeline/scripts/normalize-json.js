@@ -252,8 +252,8 @@ function extractJSON(input) {
 }
 
 function normalizeReport(data, tool) {
-  // Ensure required fields
-  if (!data.tool && tool) data.tool = tool;
+  // Always use our known tool and model values (don't trust LLM self-identification)
+  if (tool) data.tool = tool;
   if (process.env.MODEL) data.model = process.env.MODEL;
   if (!data.timestamp) data.timestamp = new Date().toISOString();
   if (!data.pr || typeof data.pr !== 'object') {

@@ -332,10 +332,7 @@ export default class CommandBuilder {
       }
     }
 
-    // FOURTH: Model instruction if needed
-    if (provider === 'claude' && config.model) {
-      sections.push(`\nSet the model field to "${config.model}" in your JSON output.`);
-    }
+    // FOURTH: Provider-specific output instructions if needed
     if (provider === 'gemini') {
       sections.push('\nCRITICAL: Output ONLY the JSON object, no markdown code fences or other text.');
     }

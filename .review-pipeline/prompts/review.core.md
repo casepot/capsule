@@ -102,8 +102,6 @@ When tests are provided in `.review-pipeline/workspace/context/tests.txt`:
 Produce a single JSON document with this exact structure:
 
 {
-  "tool": "[Set by provider overlay]",
-  "model": "[Your model identifier]",
   "timestamp": "[ISO 8601: YYYY-MM-DDTHH:MM:SSZ]",
   "pr": {
     "repo": "[Repository name from context]",
