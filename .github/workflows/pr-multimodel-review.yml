@@ -110,10 +110,13 @@ jobs:
               '{repo:$repo, number:0, head_sha:$sha, branch:$branch, link:$url}' \
               > .review-pipeline/workspace/context/pr.json
           fi
-          # Diff & files
+          # Diff & files - show only what will be merged (not cumulative history)
           if [ -n "${PR_NUMBER:-}" ]; then
-            gh pr diff "$PR_NUMBER" --patch --repo "${{ github.repository }}" > .review-pipeline/workspace/context/diff.patch
-            gh pr view "$PR_NUMBER" --json files --repo "${{ github.repository }}" | jq -r '.files[].path' > .review-pipeline/workspace/context/files.txt
+            # Get PR base and head for accurate diff
+            PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName --repo "${{ github.repository }}" -q '.baseRefName')
+            # Generate diff showing only final state to be merged (three-dot diff)
+            git diff "origin/${PR_BASE}...HEAD" --patch > .review-pipeline/workspace/context/diff.patch
+            git diff "origin/${PR_BASE}...HEAD" --name-only > .review-pipeline/workspace/context/files.txt
           else
             # Manual trigger - use git diff
             if git rev-parse -q --verify HEAD~1 >/dev/null 2>&1; then
