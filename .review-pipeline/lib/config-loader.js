@@ -380,7 +380,7 @@ export class ConfigLoader {
           enabled: true,
           model: 'sonnet',
           flags: {
-            permission_mode: 'plan',
+            permission_mode: 'default',
             output_format: 'json'
           }
         },

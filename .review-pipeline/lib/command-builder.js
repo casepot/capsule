@@ -12,8 +12,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import ConfigLoader from './config-loader.js';
-import ContextInjector from './context-injector.js';
-import CriteriaBuilder from './criteria-builder.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,10 +21,6 @@ export default class CommandBuilder {
     this.packageDir = options.packageDir || path.dirname(__dirname);
     this.verbose = options.verbose || false;
     this.configLoader = new ConfigLoader();
-    this.contextInjector = new ContextInjector({ 
-      packageDir: this.packageDir,
-      verbose: this.verbose 
-    });
   }
 
   /**
@@ -336,63 +330,6 @@ export default class CommandBuilder {
     if (provider === 'gemini') {
       sections.push('\nCRITICAL: Output ONLY the JSON object, no markdown code fences or other text.');
     }
-
-    return sections.join('\n');
-  }
-
-  /**
-   * Build complete prompt with injected context (DEPRECATED - too large)
-   */
-  async buildPromptWithContext(provider, config, options) {
-    const sections = [];
-
-    // FIRST: Inject workspace context (annotated hunks, diff, etc.)
-    const context = await this.contextInjector.buildContext();
-    if (context) {
-      sections.push('=== WORKSPACE CONTEXT ===');
-      sections.push(context);
-      sections.push('=== END WORKSPACE CONTEXT ===\n');
-    }
-
-    // SECOND: Provider-specific prompt overlay
-    const overlayPath = path.join(this.packageDir, 'prompts', `review.${provider}.md`);
-    try {
-      const overlay = await fs.readFile(overlayPath, 'utf8');
-      sections.push(overlay);
-    } catch (error) {
-      if (this.verbose) {
-        console.warn(`No provider overlay found at ${overlayPath}`);
-      }
-    }
-
-    // Add critical instruction for Gemini about output format
-    if (provider === 'gemini') {
-      sections.push('\nCRITICAL: Output ONLY the JSON object, no markdown code fences or other text.');
-    }
-
-    // THIRD: Core review prompt
-    const corePath = path.join(this.packageDir, 'prompts', 'review.core.md');
-    const corePrompt = await fs.readFile(corePath, 'utf8');
-    sections.push(corePrompt);
-
-    // FOURTH: Project-specific criteria if available
-    if (!options.skipProjectCriteria) {
-      const criteriaBuilder = new CriteriaBuilder({
-        projectRoot: options.projectRoot || process.cwd(),
-        verbose: this.verbose
-      });
-      
-      const projectCriteria = await criteriaBuilder.build();
-      if (projectCriteria) {
-        sections.push('\n=== PROJECT-SPECIFIC REVIEW CRITERIA ===');
-        sections.push(projectCriteria);
-        sections.push('=== END PROJECT CRITERIA ===');
-      }
-    }
-
-    // FIFTH: Model identifier instruction
-    const model = config.model || this.getDefaultModel(provider);
-    sections.push(`\nSet the model field to "${model}" in your JSON output.`);
 
     return sections.join('\n');
   }

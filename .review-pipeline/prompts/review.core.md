@@ -177,36 +177,37 @@ When blocking merge, provide specific, actionable reasons.
 </quality_criteria>
 
 <review_inputs>
-You will receive an ENHANCED DIFF that combines both the changes AND line numbers in a single format:
+You have access to context files in `.review-pipeline/workspace/context/` that you should read to understand the changes:
 
-**Enhanced Diff Format Legend:**
+**Required reading:**
+- `.review-pipeline/workspace/context/enhanced_diff.txt` - The ENHANCED DIFF with line numbers for citations
+- `.review-pipeline/workspace/context/pr.json` - Pull request metadata (number, SHA, branch, etc.)
+- `.review-pipeline/workspace/context/files.txt` - List of all modified files
+
+**Optional reading (if they exist):**
+- `.review-pipeline/workspace/context/tests.txt` - Test execution results and output
+- `.review-pipeline/workspace/context/diff.patch` - Raw git diff output
+- Repository files - You can read any file in the repository for additional context
+
+**Enhanced Diff Format (in enhanced_diff.txt):**
 - `+ 123|` = Added line (new in this version, exists at line 123)
 - `-    |` = Removed line (deleted from old version, no line number in new file)
 - `  456|` = Unchanged context line (exists in both versions, at line 456 in new file)
 
-This unified format shows:
-1. What was removed from the old version
-2. What was added in the new version
-3. The exact line numbers for citation in the new file
-
-Additional context files available:
-- `.review-pipeline/workspace/context/pr.json` - Pull request metadata
-- `.review-pipeline/workspace/context/files.txt` - List of modified files
-- `.review-pipeline/workspace/context/tests.txt` - Test execution results (if present)
-- Repository files for additional context (read-only)
-- `docs/context/` for codebase documentation (if available)
+This unified format shows what was removed, what was added, and the exact line numbers for citation.
 </review_inputs>
 
 <citation_rules>
-You MUST use the line numbers from the ENHANCED DIFF for all code citations:
+You MUST use the line numbers from `.review-pipeline/workspace/context/enhanced_diff.txt` for all code citations:
 
 - **Citation format**: `file:path/to/file lines:START-END`
-- **Line numbers**: Use ONLY the numbers shown in the enhanced diff (the numbers before the `|` symbol)
+- **Line numbers**: Use ONLY the numbers shown in enhanced_diff.txt (the numbers before the `|` symbol)
 - **Added lines**: Lines with `+` prefix have line numbers you can cite
 - **Removed lines**: Lines with `-` prefix have NO line numbers (they don't exist in the new version)
 - **Context lines**: Lines with space prefix have line numbers you can cite
 
 Important:
+- Read enhanced_diff.txt FIRST before making any citations
 - Do NOT invent line numbers not present in the enhanced diff
 - If a finding relates to removed code (- lines), you can reference it but cannot cite a line number
 - If you cannot find a precise line range in the enhanced diff, mark the finding as `uncertain`

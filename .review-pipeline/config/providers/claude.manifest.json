@@ -64,7 +64,8 @@
   "capabilities": {
     "output_formats": ["json", "text"],
     "permission_modes": {
-      "plan": "Read-only analysis mode (recommended for reviews)",
+      "default": "Standard mode with appropriate permissions for the task",
+      "plan": "Read-only analysis mode (outputs plan but doesn't execute)",
       "read": "Can read files",
       "write": "Can read and write files",
       "exec": "Can execute commands"

@@ -24,7 +24,7 @@ import path from 'node:path';
 const workspaceDir = path.resolve('.review-pipeline/workspace');
 const ctxDir = path.join(workspaceDir, 'context');
 const diffPath = path.join(ctxDir, 'diff.patch');
-const outPath = path.join(workspaceDir, 'enhanced_diff.txt');
+const outPath = path.join(ctxDir, 'enhanced_diff.txt');
 
 function parseHunkHeader(line) {
   // @@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@
@@ -179,14 +179,6 @@ async function main() {
     
     console.log(`Enhanced diff written to: ${outPath}`);
     console.log(`Total lines: ${output.length}`);
-    
-    // Also create a symlink for backward compatibility
-    const legacyPath = path.join(workspaceDir, 'annotated_hunks.txt');
-    try {
-      await fs.unlink(legacyPath);
-    } catch {}
-    await fs.symlink('enhanced_diff.txt', legacyPath);
-    console.log(`Symlink created: annotated_hunks.txt -> enhanced_diff.txt`);
     
   } catch (error) {
     console.error('Failed to generate enhanced diff:', error);
