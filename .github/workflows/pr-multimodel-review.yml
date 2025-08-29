@@ -26,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history to enable proper diffs
 
       - name: Setup Claude Authentication (OAuth)
         run: |
@@ -114,6 +116,8 @@ jobs:
           if [ -n "${PR_NUMBER:-}" ]; then
             # Get PR base and head for accurate diff
             PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName --repo "${{ github.repository }}" -q '.baseRefName')
+            # Fetch the base branch to ensure we have the merge base
+            git fetch origin "${PR_BASE}:refs/remotes/origin/${PR_BASE}"
             # Generate diff showing only final state to be merged (three-dot diff)
             git diff "origin/${PR_BASE}...HEAD" --patch > .review-pipeline/workspace/context/diff.patch
             git diff "origin/${PR_BASE}...HEAD" --name-only > .review-pipeline/workspace/context/files.txt
