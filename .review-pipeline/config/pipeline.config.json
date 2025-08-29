@@ -26,7 +26,7 @@
       "enabled": true,
       "model": "gpt-5",
       "timeout_override": null,
-      "reasoning_effort": "none",
+      "reasoning_effort": "minimal",
       "sandbox_mode": "read-only",
       "working_directory": ".",
       "additional_config": {}
