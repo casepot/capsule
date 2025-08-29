@@ -251,8 +251,8 @@
           "properties": {
             "permission_mode": {
               "type": "string",
-              "enum": ["plan", "read", "write", "exec"],
-              "default": "plan"
+              "enum": ["default", "plan", "read", "write", "exec"],
+              "default": "default"
             },
             "output_format": {
               "type": "string",
