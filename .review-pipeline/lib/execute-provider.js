@@ -280,66 +280,93 @@ export default class ProviderExecutor {
    * Normalize JSON output from providers
    */
   async normalizeJson(input) {
-    // Import normalize-json logic
+    // Use the actual normalize-json.js script that handles all edge cases
     const normalizePath = path.join(this.packageDir, 'scripts', 'normalize-json.js');
     
-    try {
-      // Try to extract JSON from the input
-      let jsonStr = input;
-      
-      // Remove markdown code fences if present
-      jsonStr = jsonStr.replace(/^```json?\s*\n?/gm, '');
-      jsonStr = jsonStr.replace(/\n?```\s*$/gm, '');
-      
-      // Try to find JSON object in the text
-      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        jsonStr = jsonMatch[0];
-      }
-      
-      // Parse and validate
-      const parsed = JSON.parse(jsonStr);
-      
-      // Ensure required fields
-      if (!parsed.tool) {
-        parsed.tool = process.env.TOOL || 'unknown';
-      }
-      if (!parsed.model) {
-        parsed.model = process.env.MODEL || 'unknown';
-      }
-      if (!parsed.timestamp) {
-        parsed.timestamp = new Date().toISOString();
-      }
-      
-      // Add PR context if available
-      if (!parsed.pr && process.env.PR_NUMBER) {
-        parsed.pr = {
-          repo: process.env.PR_REPO || 'unknown',
-          number: parseInt(process.env.PR_NUMBER) || 0,
-          head_sha: process.env.HEAD_SHA || 'unknown',
-          branch: process.env.PR_BRANCH || 'unknown',
-          link: process.env.RUN_URL || ''
-        };
-      }
-      
-      return JSON.stringify(parsed, null, 2);
-    } catch (error) {
-      // If normalization fails, return error JSON
-      const errorJson = {
-        tool: process.env.TOOL || 'unknown',
-        model: process.env.MODEL || 'unknown',
-        timestamp: new Date().toISOString(),
-        error: `Failed to parse output: ${error.message}`,
-        raw_output: input.substring(0, 1000),
-        findings: [],
-        exit_criteria: {
-          ready_for_pr: false,
-          reasons: ['Failed to generate valid review']
+    return new Promise((resolve, reject) => {
+      const proc = spawn('node', [normalizePath], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          // Pass environment for normalize-json.js to use
+          TOOL: process.env.TOOL || 'unknown',
+          MODEL: process.env.MODEL || 'unknown',
+          PR_NUMBER: process.env.PR_NUMBER || '',
+          PR_REPO: process.env.PR_REPO || '',
+          HEAD_SHA: process.env.HEAD_SHA || '',
+          PR_BRANCH: process.env.PR_BRANCH || '',
+          RUN_URL: process.env.RUN_URL || ''
         }
-      };
+      });
       
-      return JSON.stringify(errorJson, null, 2);
-    }
+      let stdout = '';
+      let stderr = '';
+      
+      // Send input to normalize-json.js
+      proc.stdin.write(input);
+      proc.stdin.end();
+      
+      // Collect stdout (the normalized JSON)
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      // Collect stderr (error messages)
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      // Handle process exit
+      proc.on('exit', (code) => {
+        if (code === 0) {
+          // Success - return the normalized JSON
+          resolve(stdout);
+        } else {
+          // Normalization failed - create error JSON
+          if (this.verbose && stderr) {
+            console.error('normalize-json.js error:', stderr);
+          }
+          
+          const errorJson = {
+            tool: process.env.TOOL || 'unknown',
+            model: process.env.MODEL || 'unknown',
+            timestamp: new Date().toISOString(),
+            error: `Failed to normalize output: ${stderr || 'Unknown error'}`,
+            raw_output: input.substring(0, 1000),
+            findings: [],
+            exit_criteria: {
+              ready_for_pr: false,
+              reasons: ['Failed to generate valid review']
+            }
+          };
+          
+          resolve(JSON.stringify(errorJson, null, 2));
+        }
+      });
+      
+      // Handle process errors
+      proc.on('error', (error) => {
+        if (this.verbose) {
+          console.error('Failed to spawn normalize-json.js:', error);
+        }
+        
+        // Can't spawn normalizer - return error JSON
+        const errorJson = {
+          tool: process.env.TOOL || 'unknown',
+          model: process.env.MODEL || 'unknown',
+          timestamp: new Date().toISOString(),
+          error: `Failed to run normalizer: ${error.message}`,
+          raw_output: input.substring(0, 1000),
+          findings: [],
+          exit_criteria: {
+            ready_for_pr: false,
+            reasons: ['Failed to normalize output']
+          }
+        };
+        
+        resolve(JSON.stringify(errorJson, null, 2));
+      });
+    });
   }
 
   /**
