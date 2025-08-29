@@ -4,7 +4,7 @@
   
   "execution": {
     "parallel": true,
-    "timeout_seconds": 240,
+    "timeout_seconds": 1500,
     "fail_fast": false,
     "retry_on_failure": false,
     "max_retries": 0
@@ -13,7 +13,7 @@
   "providers": {
     "claude": {
       "enabled": true,
-      "model": "sonnet",
+      "model": "opus",
       "timeout_override": null,
       "flags": {
         "permission_mode": "plan",
@@ -26,14 +26,14 @@
       "enabled": true,
       "model": "gpt-5",
       "timeout_override": null,
-      "reasoning_effort": "low",
+      "reasoning_effort": "high",
       "sandbox_mode": "read-only",
       "working_directory": ".",
       "additional_config": {}
     },
     "gemini": {
       "enabled": true,
-      "model": "gemini-2.5-flash",
+      "model": "gemini-2.5-pro",
       "timeout_override": null,
       "flags": {
         "sandbox": false,
