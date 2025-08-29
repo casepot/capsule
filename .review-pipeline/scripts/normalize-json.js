@@ -16,49 +16,88 @@
 import fs from 'fs';
 import process from 'process';
 
+// Helper: safely JSON.parse
+function tryParseJSON(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+// Helper: extract a JSON value from arbitrary text
+function extractJSONFromText(text) {
+  // 1) try whole text
+  const whole = tryParseJSON(text);
+  if (whole && typeof whole === 'object') return whole;
+
+  // 2) fenced blocks (prefer ```json ... ```)
+  const fenceJson = text.match(/```json\s*[\r\n]+([\s\S]*?)```/i);
+  if (fenceJson) {
+    const p = tryParseJSON(fenceJson[1]);
+    if (p && typeof p === 'object') return p;
+  }
+  const fenceAny = text.match(/```\s*[\r\n]+([\s\S]*?)```/);
+  if (fenceAny) {
+    const p = tryParseJSON(fenceAny[1]);
+    if (p && typeof p === 'object') return p;
+  }
+
+  // 3) first balanced JSON object/array in text
+  const firstBrace = text.indexOf('{');
+  const firstBracket = text.indexOf('[');
+  let startIdx = -1; let endChar = '';
+  if (firstBrace >= 0 && (firstBracket < 0 || firstBrace < firstBracket)) {
+    startIdx = firstBrace; endChar = '}';
+  } else if (firstBracket >= 0) {
+    startIdx = firstBracket; endChar = ']';
+  }
+  if (startIdx >= 0) {
+    let depth = 0, inString = false, escaped = false, endIdx = -1;
+    for (let i = startIdx; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\') { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') { depth--; if (depth === 0 && ch === endChar) { endIdx = i; break; } }
+    }
+    if (endIdx > startIdx) {
+      const slice = text.slice(startIdx, endIdx + 1);
+      const p = tryParseJSON(slice);
+      if (p && typeof p === 'object') return p;
+    }
+  }
+
+  throw new Error('No JSON found in text');
+}
+
 function extractJSON(input) {
   // 1. First try: Check if it's already valid JSON (including Claude envelope)
   try {
     const parsed = JSON.parse(input);
-    
+
     // Claude's --output-format json envelope
-    if (parsed.type === 'result' && parsed.result) {
+    if (parsed && parsed.type === 'result' && parsed.result !== undefined) {
       if (typeof parsed.result === 'string') {
-        // First try parsing the whole result as JSON
+        const resultStr = parsed.result;
+        // Try to parse JSON from the string (fenced or balanced)
         try {
-          return JSON.parse(parsed.result);
+          return extractJSONFromText(resultStr);
         } catch {
-          // Result contains text + JSON, extract the JSON part
-          const resultStr = parsed.result;
-          const jsonMatch = resultStr.match(/\{[\s\S]*\}$/);
-          if (jsonMatch) {
-            try {
-              return JSON.parse(jsonMatch[0]);
-            } catch {
-              // Couldn't parse extracted JSON
-            }
-          }
-          // Result isn't JSON, return a normalized report built from the envelope
-          const summary = String(resultStr).trim();
+          // Unstructured result: build conservative, transparent report
           const now = new Date().toISOString();
-          // Best-effort defaults for required fields
           return {
             tool: 'claude-code',
-            model: 'sonnet',
+            model: parsed.model || 'sonnet',
             timestamp: now,
             pr: {
-              repo: 'unknown',
-              number: 0,
-              head_sha: '',
-              branch: 'unknown',
-              link: 'https://github.com/'
+              repo: 'unknown', number: 0, head_sha: '', branch: 'unknown', link: 'https://github.com/'
             },
-            // Ensure minimum length by appending an explicit note rather than padding spaces
-            summary: (summary + ' — [normalized unstructured output]').slice(0, 500),
-            assumptions: [],
-            findings: [],
+            summary: String(resultStr).trim() + ' — [normalized unstructured output]',
+            assumptions: [], findings: [], metrics: {}, evidence: [],
             tests: { executed: false, command: null, exit_code: null, summary: 'Tests not executed' },
-            // Conservative: not ready unless provider produced structured verdict
             exit_criteria: { ready_for_pr: false, reasons: ['claude result was unstructured; normalized without findings'] },
             error: 'unstructured_output'
           };
@@ -67,15 +106,14 @@ function extractJSON(input) {
         return parsed.result;
       }
     }
-    
-    // Check if it's already a valid review JSON
-    if (parsed.tool && parsed.model && parsed.findings) {
+
+    // Already a valid report
+    if (parsed && parsed.tool && parsed.model && parsed.findings !== undefined) {
       return parsed;
     }
-    
-    // Don't return arbitrary plain objects (like envelopes). Force extraction below.
+    // Fall through to text extraction
   } catch {
-    // Not valid JSON, continue with extraction
+    // Not JSON; will try to extract
   }
   
   // 2. Handle Codex 0.25.0 JSONL format (--json flag outputs events)
