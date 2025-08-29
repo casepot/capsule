@@ -198,6 +198,10 @@ TODO.txt
 *.todo
 
 # Test outputs
+ 
+# Keep review pipeline library tracked
+!.review-pipeline/lib/
+!.review-pipeline/lib/**
 test_output/
 test_results/
 *.test.log
