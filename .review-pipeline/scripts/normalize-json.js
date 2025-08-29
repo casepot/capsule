@@ -73,11 +73,46 @@ function extractJSONFromText(text) {
   throw new Error('No JSON found in text');
 }
 
+// Extract PR info from environment variables
+function extractPRInfo() {
+  return {
+    repo: process.env.PR_REPO || 'unknown',
+    number: parseInt(process.env.PR_NUMBER || '0', 10),
+    head_sha: process.env.HEAD_SHA || '',
+    branch: process.env.PR_BRANCH || 'unknown',
+    link: process.env.RUN_URL || 'https://github.com/'
+  };
+}
+
 function extractJSON(input) {
   // 1. First try: Check if it's already valid JSON (including Claude envelope)
   try {
     const parsed = JSON.parse(input);
 
+    // Check if this looks like a config file rather than a review (e.g. Gemini outputting .reviewrc.json)
+    if (parsed && !parsed.tool && !parsed.findings && !parsed.summary && 
+        (parsed.testing || parsed.review_overrides || parsed.providers)) {
+      // This is likely a config file, not a review - create error report
+      const now = new Date().toISOString();
+      return {
+        tool: process.env.TOOL || 'unknown',
+        model: process.env.MODEL || 'unknown',
+        timestamp: now,
+        pr: extractPRInfo(),
+        summary: 'Provider output appears to be a configuration file rather than a review',
+        assumptions: [],
+        findings: [],
+        metrics: {},
+        evidence: [],
+        tests: { executed: false, command: null, exit_code: null, summary: 'Tests not executed' },
+        exit_criteria: { 
+          ready_for_pr: false, 
+          reasons: ['Provider did not produce a valid review - output was configuration data']
+        },
+        error: 'invalid_output_format'
+      };
+    }
+    
     // Handle Claude error responses
     if (parsed && parsed.type === 'result' && parsed.subtype === 'error_during_execution') {
       const now = new Date().toISOString();
