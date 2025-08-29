@@ -127,16 +127,24 @@ jobs:
 
           # Generate enhanced diff with line numbers for both added/removed lines
           node .review-pipeline/scripts/generate-enhanced-diff.js || echo "::warning::Failed to generate enhanced diff"
-          # Get test command from configuration or environment
-          TEST_CMD="${TEST_CMD:-$(node .review-pipeline/lib/config-loader.js show 2>/dev/null | jq -r '.testing.command // "pytest tests/"' || echo 'pytest tests/')}"
           
-          # Optional tests
-          if [ -n "${TEST_CMD}" ]; then
-            set +e
-            echo "\$ ${TEST_CMD}" > .review-pipeline/workspace/context/tests.txt
-            timeout 300 bash -c "${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt 2>&1
-            echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
-            set -e
+          # SECURITY: Only use TEST_CMD from repository variables, never from project config
+          # This prevents arbitrary code execution from PR-controlled .reviewrc.json
+          # If TEST_CMD is not set in repository variables, skip tests entirely
+          if [ -n "${TEST_CMD:-}" ]; then
+            # Clear sensitive environment variables before running tests
+            (
+              unset GH_TOKEN
+              unset GITHUB_TOKEN
+              set +e
+              echo "Running tests with command from repository variables only" > .review-pipeline/workspace/context/tests.txt
+              echo "\$ ${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt
+              # Execute directly without bash -c to prevent shell injection
+              timeout 300 ${TEST_CMD} >> .review-pipeline/workspace/context/tests.txt 2>&1
+              echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
+            )
+          else
+            echo "No tests configured (TEST_CMD not set in repository variables)" > .review-pipeline/workspace/context/tests.txt
           fi
 
       - name: Provider reviews (configuration-based)

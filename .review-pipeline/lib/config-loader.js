@@ -265,9 +265,9 @@ export class ConfigLoader {
    * Get test command with proper defaults
    */
   getTestCommand() {
-    return this.config.testing?.command || 
-           process.env.TEST_CMD || 
-           'pytest tests/';
+    // SECURITY: Only use TEST_CMD from environment (repository variables)
+    // Never load test commands from project config to prevent arbitrary code execution
+    return process.env.TEST_CMD || '';
   }
 
   /**

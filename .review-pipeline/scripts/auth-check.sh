@@ -74,17 +74,8 @@ get_provider_cli_path() {
   return 1
 }
 
-# Get auth check command from manifest
-get_auth_check_cmd() {
-  local provider="$1"
-  local manifest="$PACKAGE_DIR/config/providers/${provider}.manifest.json"
-  
-  if [ ! -f "$manifest" ]; then
-    return 1
-  fi
-  
-  jq -r '.authentication.auth_check_command // empty' < "$manifest" 2>/dev/null
-}
+# Note: auth check commands are hardcoded in check_provider_auth() for security
+# Never execute commands from manifest files to prevent command injection
 
 # Get environment variables to unset from manifest
 get_env_vars_to_unset() {
@@ -200,15 +191,37 @@ check_provider_auth() {
     fi
   fi
   
-  # Get auth check command from manifest
-  local auth_cmd=$(get_auth_check_cmd "$provider")
-  if [ -z "$auth_cmd" ]; then
-    ylw "Warning: No auth check command defined for $display_name"
-    return 0
-  fi
+  # Run auth check using hardcoded commands for security
+  # Never use eval with user-controlled input
+  local auth_success=false
   
-  # Run auth check
-  if eval "$auth_cmd" 2>/dev/null; then
+  case "$provider" in
+    claude)
+      # Hardcoded auth check for Claude
+      if claude -p 'echo test' 2>/dev/null; then
+        auth_success=true
+      fi
+      ;;
+    codex)
+      # Hardcoded auth check for Codex
+      if codex exec -s read-only 'echo test' >/dev/null 2>&1; then
+        auth_success=true
+      fi
+      ;;
+    gemini)
+      # Hardcoded auth check for Gemini
+      # Set GEMINI_API_KEY to empty to force OAuth auth
+      if GEMINI_API_KEY='' gemini -p 'ping' 2>/dev/null; then
+        auth_success=true
+      fi
+      ;;
+    *)
+      ylw "Warning: Unknown provider '$provider' for auth check"
+      return 0
+      ;;
+  esac
+  
+  if [ "$auth_success" = "true" ]; then
     grn "✓ $display_name authenticated"
     return 0
   else
