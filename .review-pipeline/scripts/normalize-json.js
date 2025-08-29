@@ -431,8 +431,8 @@ async function main() {
     
     // Apply normalization if this looks like a review report
     if (json.findings || json.assumptions || json.tests) {
-      // Try to detect tool from filename or content
-      let tool = json.tool;
+      // Detect tool from env hint, filename, or content
+      let tool = json.tool || process.env.TOOL || null;
       if (!tool && process.argv[2]) {
         const filename = process.argv[2].toLowerCase();
         if (filename.includes('claude')) tool = 'claude-code';

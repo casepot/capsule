@@ -20,6 +20,13 @@ if [[ "$PROVIDER" == "claude" ]] && [ -x "$HOME/.claude/local/claude" ]; then
   export PATH="$HOME/.claude/local:$PATH"
 fi
 
+# Hint tool name to normalizer via env
+case "$PROVIDER" in
+  claude) export TOOL="claude-code" ;;
+  codex)  export TOOL="codex-cli"  ;;
+  gemini) export TOOL="gemini-cli"  ;;
+esac
+
 # Generate provider command from configuration
 CMD=$(node "$PACKAGE_DIR/lib/generate-provider-command.js" "$PROVIDER" --no-timeout 2>/dev/null)
 
