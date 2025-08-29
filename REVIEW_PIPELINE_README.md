@@ -117,7 +117,7 @@ bash .review-pipeline/scripts/review-local.sh     # Direct path
 
 ### Installation Problems
 - **Claude not found**: Check `~/.claude/local/claude` (non-standard path)
-- **API key policy**: Do not set `ANTHROPIC_API_KEY` in this pipeline (CI or local). Always unset `OPENAI_API_KEY` and `GEMINI_API_KEY` unless explicitly testing those providers.
+- **API key conflicts**: Unset `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`
 - **Auth failures**: Re-authenticate with subscription accounts, not API consoles
 
 ### Codex File Access Issues

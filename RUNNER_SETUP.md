@@ -212,7 +212,7 @@ Ensure these flags are set:
   ```bash
   unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY
   ```
-  - Check your shell profile (~/.bashrc, ~/.zshrc) and remove any API key exports
+- Check your shell profile (~/.bashrc, ~/.zshrc) and remove any API key exports
 
 ### Missing Commands
 If CLIs are installed but not found:
@@ -294,8 +294,7 @@ journalctl -u actions.runner.*.service -f
   - [ ] Version check: `gemini --version`
   - [ ] Can run: `echo "test" | gemini -m gemini-2.5-pro -p`
 - [ ] NO API keys in environment (check ~/.bashrc, ~/.zshrc)
-  - [ ] Locally: `echo $ANTHROPIC_API_KEY` returns empty
-  - [ ] CI: `ANTHROPIC_API_KEY` configured as a GitHub Secret
+  - [ ] `echo $ANTHROPIC_API_KEY` returns empty
   - [ ] `echo $OPENAI_API_KEY` returns empty
   - [ ] `echo $GEMINI_API_KEY` returns empty
 - [ ] Runner registered and running
