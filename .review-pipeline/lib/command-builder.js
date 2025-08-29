@@ -8,6 +8,7 @@
  */
 
 import fs from 'node:fs/promises';
+import { constants } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
@@ -61,7 +62,7 @@ export default class CommandBuilder {
           // Expand tilde to home directory
           const expandedPath = detection.value.replace(/^~/, os.homedir());
           try {
-            await fs.access(expandedPath, fs.constants.X_OK);
+            await fs.access(expandedPath, constants.X_OK);
             if (this.verbose) {
               console.error(`Found ${mainCommand} at: ${expandedPath}`);
             }
