@@ -96,9 +96,12 @@ export default class ProviderExecutor {
         }, cmd.timeout * 1000);
       }
 
-      // Provide stdin if specified
+      // Provide stdin if specified, or close it
       if (cmd.stdin) {
         proc.stdin.write(cmd.stdin);
+        proc.stdin.end();
+      } else {
+        // Close stdin if no content to prevent hanging
         proc.stdin.end();
       }
 
