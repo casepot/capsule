@@ -12,6 +12,7 @@ permissions:
 jobs:
   review:
     runs-on: self-hosted
+    timeout-minutes: 45  # Overall job timeout (providers may take 25+ minutes)
     if: github.event.pull_request.draft == false  # Skip draft PRs
     env:
       # Environment variable overrides (mapped via env.mapping.json)
@@ -140,7 +141,7 @@ jobs:
 
       - name: Provider reviews (configuration-based)
         shell: bash
-        timeout-minutes: 5  # Prevent hanging reviews
+        timeout-minutes: 30  # Allow for 25-minute provider timeout plus overhead
         run: |
           set -euo pipefail
           cd .review-pipeline
