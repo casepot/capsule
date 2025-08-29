@@ -52,7 +52,6 @@ export PACKAGE_DIR
 cd "$PACKAGE_DIR/../"
 
 # Execute with built-in timeout handling
-echo "Running $PROVIDER review (timeout: ${TIMEOUT}s)..."
 if command -v node >/dev/null 2>&1; then
   # Use the secure Node.js executor
   node "$PACKAGE_DIR/lib/execute-provider.js" "$PROVIDER" --timeout "$TIMEOUT" || {

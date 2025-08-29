@@ -88,6 +88,11 @@ git diff --name-only "origin/$DEFAULT_BRANCH" 2>/dev/null > "$PACKAGE_DIR/worksp
   git diff --name-only HEAD~1 2>/dev/null > "$PACKAGE_DIR/workspace/context/files.txt" || \
   echo "No files changed" > "$PACKAGE_DIR/workspace/context/files.txt"
 
+# Generate enhanced diff with line numbers
+if [ -f "$PACKAGE_DIR/scripts/generate-enhanced-diff.js" ]; then
+  node "$PACKAGE_DIR/scripts/generate-enhanced-diff.js" 2>/dev/null || echo "Failed to generate enhanced diff"
+fi
+
 # Create mock PR metadata
 cat > "$PACKAGE_DIR/workspace/context/pr.json" <<JSON
 {
@@ -137,11 +142,18 @@ run_provider() {
   
   echo "Starting $display_name review..."
   
-  # Generate command from configuration
-  local cmd=$(node "$PACKAGE_DIR/lib/generate-provider-command.js" "$provider" --no-timeout 2>/dev/null)
+  # Check if provider is enabled
+  local enabled=$(node -e "
+    import('$PACKAGE_DIR/lib/config-loader.js').then(async (module) => {
+      const ConfigLoader = module.default;
+      const loader = new ConfigLoader();
+      await loader.load();
+      console.log(loader.isProviderEnabled('$provider'));
+    }).catch(() => console.log('true'));
+  " 2>/dev/null || echo 'true')
   
-  if [ -z "$cmd" ]; then
-    ylw "  Skipping $display_name (disabled or not configured)"
+  if [ "$enabled" != "true" ]; then
+    ylw "  Skipping $display_name (disabled)"
     return 0
   fi
   
@@ -156,8 +168,8 @@ run_provider() {
     }).catch(() => console.log('120'));
   " 2>/dev/null || echo '120')
   
-  # Run with timeout
-  if timeout "$timeout" bash -c "cd '$PACKAGE_DIR/../' && export PACKAGE_DIR='$PACKAGE_DIR' && $cmd" 2>/dev/null; then
+  # Run provider using secure execution script
+  if bash "$PACKAGE_DIR/scripts/run-provider-review.sh" "$provider" "$timeout"; then
     grn "  ✓ $display_name review completed"
   else
     red "  ✗ $display_name review failed or timed out"
