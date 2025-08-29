@@ -67,6 +67,8 @@ async function generateProviderCommand(provider, options = {}) {
         if (projectCriteriaPath) {
           promptCmd += `; echo; cat "${projectCriteriaPath}"`;
         }
+        // Instruct provider to set the actual model identifier
+        promptCmd += `; echo; echo 'Set the model field to "${model}" in your JSON output.'`;
         promptCmd += ')"';
         
         command.push('-p', promptCmd);
@@ -121,6 +123,8 @@ async function generateProviderCommand(provider, options = {}) {
         if (projectCriteriaPath) {
           codexPrompt += `; echo; cat "${projectCriteriaPath}"`;
         }
+        // Instruct provider to set the actual model identifier
+        codexPrompt += `; echo; echo 'Set the model field to "${model}" in your JSON output.'`;
         codexPrompt += ')"';
         command.push(codexPrompt);
         
@@ -144,6 +148,8 @@ async function generateProviderCommand(provider, options = {}) {
         if (projectCriteriaPath) {
           preCommand.push(`; echo; cat "${projectCriteriaPath}"`);
         }
+        // Instruct provider to set the actual model identifier
+        preCommand.push(`; echo; echo 'Set the model field to "${model}" in your JSON output.'`);
         preCommand.push(')" |');
         
         // Environment variable

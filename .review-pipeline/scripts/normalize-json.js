@@ -254,7 +254,7 @@ function extractJSON(input) {
 function normalizeReport(data, tool) {
   // Ensure required fields
   if (!data.tool && tool) data.tool = tool;
-  if (!data.model && process.env.MODEL) data.model = process.env.MODEL;
+  if (process.env.MODEL) data.model = process.env.MODEL;
   if (!data.timestamp) data.timestamp = new Date().toISOString();
   if (!data.pr || typeof data.pr !== 'object') {
     data.pr = {};
