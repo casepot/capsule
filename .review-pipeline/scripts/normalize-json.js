@@ -78,6 +78,31 @@ function extractJSON(input) {
   try {
     const parsed = JSON.parse(input);
 
+    // Handle Claude error responses
+    if (parsed && parsed.type === 'result' && parsed.subtype === 'error_during_execution') {
+      const now = new Date().toISOString();
+      return {
+        tool: process.env.TOOL || 'claude-code',
+        model: process.env.MODEL || 'opus',
+        timestamp: now,
+        pr: extractPRInfo(),
+        summary: 'Claude encountered an error during execution and could not complete the review',
+        assumptions: [],
+        findings: [],
+        metrics: {
+          duration_ms: parsed.duration_ms || 0,
+          cost_usd: parsed.total_cost_usd || 0
+        },
+        evidence: [],
+        tests: { executed: false, command: null, exit_code: null, summary: 'Tests not executed' },
+        exit_criteria: { 
+          ready_for_pr: false, 
+          reasons: ['Claude error during execution - review could not be completed']
+        },
+        error: 'claude_execution_error'
+      };
+    }
+    
     // Claude's --output-format json envelope
     if (parsed && parsed.type === 'result' && parsed.result !== undefined) {
       if (typeof parsed.result === 'string') {
