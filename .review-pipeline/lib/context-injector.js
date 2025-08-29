@@ -41,27 +41,33 @@ export default class ContextInjector {
   async buildContext() {
     const sections = [];
 
-    // Critical: Annotated hunks for line number citations
-    const annotatedHunks = await this.readFileSafe(
-      path.join(this.workspaceDir, 'annotated_hunks.txt'),
-      '# No annotated hunks available\n'
+    // Enhanced diff with line numbers for citations and full change context
+    // Try enhanced_diff.txt first, fall back to annotated_hunks.txt for compatibility
+    let enhancedDiff = await this.readFileSafe(
+      path.join(this.workspaceDir, 'enhanced_diff.txt'),
+      ''
     );
-    if (annotatedHunks && annotatedHunks.trim()) {
-      sections.push('=== ANNOTATED HUNKS (USE FOR LINE CITATIONS) ===');
-      sections.push(annotatedHunks);
-      sections.push('=== END ANNOTATED HUNKS ===\n');
+    
+    // Fallback to annotated_hunks.txt if enhanced diff doesn't exist
+    if (!enhancedDiff || !enhancedDiff.trim()) {
+      enhancedDiff = await this.readFileSafe(
+        path.join(this.workspaceDir, 'annotated_hunks.txt'),
+        '# No diff available\n'
+      );
+    }
+    
+    if (enhancedDiff && enhancedDiff.trim()) {
+      sections.push('=== ENHANCED DIFF WITH LINE NUMBERS ===');
+      sections.push('FORMAT LEGEND:');
+      sections.push('  + 123| Added line (new in this version, line 123)');
+      sections.push('  -    | Removed line (deleted, no line number)');
+      sections.push('    456| Unchanged context line (exists at line 456)');
+      sections.push('');
+      sections.push(enhancedDiff);
+      sections.push('=== END ENHANCED DIFF ===\n');
     }
 
-    // Git diff for understanding changes
-    const diff = await this.readFileSafe(
-      path.join(this.contextDir, 'diff.patch'),
-      '# No diff available\n'
-    );
-    if (diff && diff.trim() && diff !== '# No diff available') {
-      sections.push('=== GIT DIFF ===');
-      sections.push(diff);
-      sections.push('=== END GIT DIFF ===\n');
-    }
+    // Note: Git diff removed - now included in enhanced diff above
 
     // PR metadata
     const prJson = await this.readFileSafe(
@@ -106,17 +112,26 @@ export default class ContextInjector {
   async buildContextCommands() {
     const commands = [];
     
-    // Always include annotated hunks first (most important)
-    commands.push('if [ -f "$PACKAGE_DIR/workspace/annotated_hunks.txt" ]; then');
+    // Include enhanced diff (or fall back to annotated hunks)
+    commands.push('if [ -f "$PACKAGE_DIR/workspace/enhanced_diff.txt" ]; then');
+    commands.push('  echo "=== ENHANCED DIFF WITH LINE NUMBERS ==="');
+    commands.push('  echo "FORMAT LEGEND:"');
+    commands.push('  echo "  + 123| Added line (new in this version, line 123)"');
+    commands.push('  echo "  -    | Removed line (deleted, no line number)"');
+    commands.push('  echo "    456| Unchanged context line (exists at line 456)"');
+    commands.push('  echo');
+    commands.push('  cat "$PACKAGE_DIR/workspace/enhanced_diff.txt"');
+    commands.push('  echo "=== END ENHANCED DIFF ==="');
+    commands.push('  echo');
+    commands.push('elif [ -f "$PACKAGE_DIR/workspace/annotated_hunks.txt" ]; then');
     commands.push('  echo "=== ANNOTATED HUNKS (USE FOR LINE CITATIONS) ==="');
     commands.push('  cat "$PACKAGE_DIR/workspace/annotated_hunks.txt"');
     commands.push('  echo "=== END ANNOTATED HUNKS ==="');
     commands.push('  echo');
     commands.push('fi');
 
-    // Include other context files
+    // Include other context files (diff.patch removed - now in enhanced diff)
     const contextFiles = [
-      { path: 'context/diff.patch', label: 'GIT DIFF' },
       { path: 'context/pr.json', label: 'PR METADATA' },
       { path: 'context/files.txt', label: 'MODIFIED FILES' },
       { path: 'context/tests.txt', label: 'TEST RESULTS' }

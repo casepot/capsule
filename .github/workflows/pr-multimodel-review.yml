@@ -125,8 +125,8 @@ jobs:
             fi
           fi
 
-          # Generate annotated hunks with absolute new-file line numbers for precise citations
-          node .review-pipeline/scripts/generate-annotated-hunks.js || echo "::warning::Failed to generate annotated hunks"
+          # Generate enhanced diff with line numbers for both added/removed lines
+          node .review-pipeline/scripts/generate-enhanced-diff.js || echo "::warning::Failed to generate enhanced diff"
           # Get test command from configuration or environment
           TEST_CMD="${TEST_CMD:-$(node .review-pipeline/lib/config-loader.js show 2>/dev/null | jq -r '.testing.command // "pytest tests/"' || echo 'pytest tests/')}"
           

@@ -9,12 +9,18 @@ Conduct a systematic review with a critical mindset:
 
 1. **Understand the intent**: Analyze the PR changes to grasp what problem is being solved and how. Consider if the implementation truly solves the stated problem.
 
-2. **Validate assumptions**: Any assumptions about the code's behavior or requirements should be:
+2. **Use your tools to reason about changes**: Since you receive the complete diff upfront, actively use your available tools to:
+   - Search for related code patterns and potential impacts
+   - Understand the broader context of changes
+   - Identify dependencies and side effects
+   - Validate assumptions through code exploration
+
+3. **Validate assumptions**: Any assumptions about the code's behavior or requirements should be:
    - `validated`: Confirmed through evidence in the code or tests
    - `uncertain`: Cannot be definitively confirmed - provide a falsification step
    - `falsified`: Contradicted by evidence - explain the contradiction
 
-3. **Analyze for defects across dimensions** (think like an attacker/user/maintainer):
+4. **Analyze for defects across dimensions** (think like an attacker/user/maintainer):
    - **Security**: Injection points, authentication flaws, data exposure, unsafe deserialization, TOCTOU bugs
    - **Correctness**: Off-by-one errors, race conditions, null pointer exceptions, incorrect business logic
    - **Performance**: O(n²) when O(n) exists, N+1 queries, memory leaks, synchronous blocking in async code
@@ -24,7 +30,7 @@ Conduct a systematic review with a critical mindset:
    - **Maintainability**: Functions > 50 lines, cyclomatic complexity > 10, copy-pasted code, hardcoded values
    - **Docs**: Undocumented breaking changes, wrong examples, missing API contracts, outdated README
 
-4. **Focus on production impact**: Will this cause outages, data loss, security breaches, or make the code unmaintainable?
+5. **Focus on production impact**: Will this cause outages, data loss, security breaches, or make the code unmaintainable?
 </review_methodology>
 
 <critical_review_standards>
@@ -165,21 +171,38 @@ When blocking merge, provide specific, actionable reasons.
 </quality_criteria>
 
 <review_inputs>
-Analyze these files in the workspace:
+You will receive an ENHANCED DIFF that combines both the changes AND line numbers in a single format:
+
+**Enhanced Diff Format Legend:**
+- `+ 123|` = Added line (new in this version, exists at line 123)
+- `-    |` = Removed line (deleted from old version, no line number in new file)
+- `  456|` = Unchanged context line (exists in both versions, at line 456 in new file)
+
+This unified format shows:
+1. What was removed from the old version
+2. What was added in the new version
+3. The exact line numbers for citation in the new file
+
+Additional context files available:
 - `.review-pipeline/workspace/context/pr.json` - Pull request metadata
-- `.review-pipeline/workspace/context/diff.patch` - Code changes to review
 - `.review-pipeline/workspace/context/files.txt` - List of modified files
 - `.review-pipeline/workspace/context/tests.txt` - Test execution results (if present)
-- `.review-pipeline/workspace/annotated_hunks.txt` - Annotated new-side hunks with absolute new file line numbers
 - Repository files for additional context (read-only)
 - `docs/context/` for codebase documentation (if available)
 </review_inputs>
 
 <citation_rules>
-You MUST use only the annotated_hunks.txt for code line citations. Cite using absolute new-file line numbers exactly as shown in that file.
+You MUST use the line numbers from the ENHANCED DIFF for all code citations:
 
-- Allowed evidence format: `file:path/to/file lines:START-END`
-- Do NOT invent line numbers. Do NOT cite lines not present in annotated_hunks.txt.
-- If a finding depends on removed code that is not present in the new version, mark the finding as `uncertain` and provide a falsification step.
-- If you cannot find a precise line range to support a claim, mark the finding as `uncertain`.
+- **Citation format**: `file:path/to/file lines:START-END`
+- **Line numbers**: Use ONLY the numbers shown in the enhanced diff (the numbers before the `|` symbol)
+- **Added lines**: Lines with `+` prefix have line numbers you can cite
+- **Removed lines**: Lines with `-` prefix have NO line numbers (they don't exist in the new version)
+- **Context lines**: Lines with space prefix have line numbers you can cite
+
+Important:
+- Do NOT invent line numbers not present in the enhanced diff
+- If a finding relates to removed code (- lines), you can reference it but cannot cite a line number
+- If you cannot find a precise line range in the enhanced diff, mark the finding as `uncertain`
+- Use your tools to explore related code and understand the impact of changes shown in the diff
 </citation_rules>
