@@ -38,7 +38,7 @@
       "flags": {
         "sandbox": false,
         "yolo": false,
-        "all_files": false
+        "all_files": true
       },
       "additional_flags": []
     }
@@ -82,7 +82,7 @@
   
   "testing": {
     "enabled": true,
-    "command": "pytest tests/",
+    "command": "./run-tests.sh tests/",
     "timeout_seconds": 300,
     "required_pass_rate": 0.95
   }
