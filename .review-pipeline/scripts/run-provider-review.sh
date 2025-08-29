@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run a single provider review based on configuration
+# Run a single provider review using secure command execution
 # Usage: run-provider-review.sh <provider> <timeout>
 set -euo pipefail
 
@@ -41,30 +41,30 @@ if [ -n "$MODEL_FROM_CONFIG" ] && [ "$MODEL_FROM_CONFIG" != "null" ]; then
   export MODEL="$MODEL_FROM_CONFIG"
 fi
 
-# Generate provider command from configuration
-CMD=$(node "$PACKAGE_DIR/lib/generate-provider-command.js" "$PROVIDER" --no-timeout 2>/dev/null)
-
-if [ -z "$CMD" ]; then
-  echo "Provider $PROVIDER is disabled or not configured"
-  exit 0
-fi
-
-# Execute the command with a portable timeout (prefer gtimeout on macOS)
+# Export PACKAGE_DIR for the execute-provider script
 export PACKAGE_DIR
+
+# Use the new secure execution system
+# This avoids shell injection vulnerabilities by:
+# 1. Using structured commands instead of shell strings
+# 2. Injecting context consistently for all providers
+# 3. Executing binaries directly without bash -c
 cd "$PACKAGE_DIR/../"
 
-# Choose timeout binary if available; fallback to no-timeout
-if command -v gtimeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="gtimeout"
-elif command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="timeout"
+# Execute with built-in timeout handling
+echo "Running $PROVIDER review (timeout: ${TIMEOUT}s)..."
+if command -v node >/dev/null 2>&1; then
+  # Use the secure Node.js executor
+  node "$PACKAGE_DIR/lib/execute-provider.js" "$PROVIDER" --timeout "$TIMEOUT" || {
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 124 ]; then
+      echo "Provider $PROVIDER timed out after ${TIMEOUT} seconds"
+    else
+      echo "Provider $PROVIDER failed with exit code $EXIT_CODE"
+    fi
+    exit $EXIT_CODE
+  }
 else
-  TIMEOUT_BIN=""
-fi
-
-if [ -n "$TIMEOUT_BIN" ]; then
-  "$TIMEOUT_BIN" "$TIMEOUT" bash -c "$CMD"
-else
-  echo "[warn] No timeout command found; running without timeout for provider '$PROVIDER'" >&2
-  bash -c "$CMD"
+  echo "Error: Node.js is required for secure provider execution" >&2
+  exit 1
 fi

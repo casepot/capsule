@@ -13,7 +13,7 @@
   "providers": {
     "claude": {
       "enabled": true,
-      "model": "opus",
+      "model": "sonnet",
       "timeout_override": null,
       "flags": {
         "permission_mode": "plan",
@@ -26,14 +26,14 @@
       "enabled": true,
       "model": "gpt-5",
       "timeout_override": null,
-      "reasoning_effort": "high",
+      "reasoning_effort": "none",
       "sandbox_mode": "read-only",
       "working_directory": ".",
       "additional_config": {}
     },
     "gemini": {
       "enabled": true,
-      "model": "gemini-2.5-pro",
+      "model": "gemini-2.5-flash",
       "timeout_override": null,
       "flags": {
         "sandbox": false,
