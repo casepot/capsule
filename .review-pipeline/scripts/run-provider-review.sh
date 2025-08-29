@@ -20,6 +20,10 @@ if [[ "$PROVIDER" == "claude" ]] && [ -x "$HOME/.claude/local/claude" ]; then
   export PATH="$HOME/.claude/local:$PATH"
 fi
 
+# Unset sensitive environment variables before running providers
+unset GH_TOKEN
+unset GITHUB_TOKEN
+
 # Hint tool name to normalizer via env
 case "$PROVIDER" in
   claude) export TOOL="claude-code" ;;

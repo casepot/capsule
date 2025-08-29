@@ -41,8 +41,9 @@ export default class CommandBuilder {
     if (mainCommand) {
       // Check if it's available in PATH
       try {
-        const { execSync } = await import('node:child_process');
-        execSync(`which ${mainCommand}`, { stdio: 'ignore' });
+        const { execFileSync } = await import('node:child_process');
+        // Use execFileSync with array args to prevent command injection
+        execFileSync('which', [mainCommand], { stdio: 'ignore' });
         if (this.verbose) {
           console.error(`Found ${mainCommand} in PATH`);
         }

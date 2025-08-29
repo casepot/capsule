@@ -638,7 +638,7 @@ async function main() {
 }
 
 // Check if script is run directly (ES module equivalent)
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url.endsWith(process.argv[1])) {
   main().catch(err => {
     console.error(`Unexpected error: ${err.message}`);
     process.exit(1);

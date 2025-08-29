@@ -146,8 +146,8 @@ jobs:
               set +e
               echo "Running tests with command from repository variables only" > .review-pipeline/workspace/context/tests.txt
               echo "\$ ${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt
-              # Execute directly without bash -c to prevent shell injection
-              timeout 300 ${TEST_CMD} >> .review-pipeline/workspace/context/tests.txt 2>&1
+              # Execute with proper quoting to prevent shell injection
+              timeout 300 eval "$TEST_CMD" >> .review-pipeline/workspace/context/tests.txt 2>&1
               echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
             )
           else
