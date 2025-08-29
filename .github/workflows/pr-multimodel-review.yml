@@ -83,8 +83,13 @@ jobs:
           if [ -n "${{ github.event.pull_request.number }}" ]; then
             gh pr view ${{ github.event.pull_request.number }} --json number,state,headRefName,baseRefName,headRefOid,permalink,author --repo "${{ github.repository }}" > .review-pipeline/workspace/context/pr.json
           else
-            # Manual workflow_dispatch fallback
-            echo '{"repo":"'${{ github.event.repository.name }}'","number":0,"head_sha":"'${{ github.sha }}'","branch":"'${{ github.ref_name }}'","link":"manual"}' > .review-pipeline/workspace/context/pr.json
+            # Manual workflow_dispatch fallback (use jq to construct valid JSON)
+            jq -n \
+              --arg repo "${{ github.event.repository.name }}" \
+              --arg sha "${{ github.sha }}" \
+              --arg branch "${{ github.ref_name }}" \
+              '{repo:$repo, number:0, head_sha:$sha, branch:$branch, link:"manual"}' \
+              > .review-pipeline/workspace/context/pr.json
           fi
           # Diff & files
           if [ -n "${{ github.event.pull_request.number }}" ]; then

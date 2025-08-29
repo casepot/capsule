@@ -154,14 +154,24 @@ export class ConfigLoader {
       const envMapping = JSON.parse(await fs.readFile(this.options.envMappingPath, 'utf8'));
       
       for (const mapping of envMapping.mappings || []) {
-        const envValue = process.env[mapping.env];
-        if (envValue !== undefined) {
-          const value = this.coerceValue(envValue, mapping.type);
-          this.setNestedProperty(this.config, mapping.path, value);
-          
-          if (this.options.verbose) {
-            console.log(`Applied env override: ${mapping.env}=${value} -> ${mapping.path}`);
-          }
+        const raw = process.env[mapping.env];
+        if (raw === undefined) continue;           // not set
+        if (typeof raw === 'string' && raw.trim() === '') continue; // ignore empty strings
+
+        const value = this.coerceValue(raw, mapping.type);
+
+        // Skip invalid numeric coercions (NaN)
+        if ((mapping.type === 'integer' || mapping.type === 'number') && Number.isNaN(value)) {
+          continue;
+        }
+        // For booleans, only accept explicit truthy/falsey strings; empty already skipped
+        if (mapping.type === 'boolean' && typeof value !== 'boolean') {
+          continue;
+        }
+
+        this.setNestedProperty(this.config, mapping.path, value);
+        if (this.options.verbose) {
+          console.log(`Applied env override: ${mapping.env}=${value} -> ${mapping.path}`);
         }
       }
     } catch (error) {
@@ -406,7 +416,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   
   const loader = new ConfigLoader({
     projectConfigPath: configPath || path.join(process.cwd(), '.reviewrc.json'),
-    verbose: command === 'show' || command === 'validate'
+    // Keep 'validate' verbose for diagnostics; 'show' should output JSON only
+    verbose: command === 'validate'
   });
   
   try {
@@ -414,8 +425,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     
     switch (command) {
       case 'show':
-        console.log('Configuration loaded successfully:\n');
-        console.log(loader.toJSON());
+        // Output JSON only for downstream tools (jq) to consume
+        process.stdout.write(loader.toJSON());
         break;
         
       case 'validate':
