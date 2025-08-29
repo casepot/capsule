@@ -82,6 +82,15 @@ function extractJSON(input) {
     if (parsed && parsed.type === 'result' && parsed.result !== undefined) {
       if (typeof parsed.result === 'string') {
         const resultStr = parsed.result;
+        // First try to parse as direct JSON (if it's an escaped JSON string)
+        try {
+          const directParse = JSON.parse(resultStr);
+          if (directParse && typeof directParse === 'object') {
+            return directParse;
+          }
+        } catch {
+          // Not direct JSON, try to extract from text/markdown
+        }
         // Try to parse JSON from the string (fenced or balanced)
         try {
           return extractJSONFromText(resultStr);
