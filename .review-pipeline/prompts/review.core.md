@@ -170,6 +170,16 @@ Analyze these files in the workspace:
 - `.review-pipeline/workspace/context/diff.patch` - Code changes to review
 - `.review-pipeline/workspace/context/files.txt` - List of modified files
 - `.review-pipeline/workspace/context/tests.txt` - Test execution results (if present)
+- `.review-pipeline/workspace/annotated_hunks.txt` - Annotated new-side hunks with absolute new file line numbers
 - Repository files for additional context (read-only)
 - `docs/context/` for codebase documentation (if available)
 </review_inputs>
+
+<citation_rules>
+You MUST use only the annotated_hunks.txt for code line citations. Cite using absolute new-file line numbers exactly as shown in that file.
+
+- Allowed evidence format: `file:path/to/file lines:START-END`
+- Do NOT invent line numbers. Do NOT cite lines not present in annotated_hunks.txt.
+- If a finding depends on removed code that is not present in the new version, mark the finding as `uncertain` and provide a falsification step.
+- If you cannot find a precise line range to support a claim, mark the finding as `uncertain`.
+</citation_rules>
