@@ -46,6 +46,23 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Detect PR context (manual runs)
+        run: |
+          # Populate PR_NUMBER for both PR and manual runs
+          if [ -n "${{ github.event.pull_request.number }}" ]; then
+            echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+            echo "Using PR #${{ github.event.pull_request.number }} from event context."
+          else
+            # Try to find an open PR for this branch
+            PR=$(gh pr list --head "${{ github.ref_name }}" --json number -q '.[0].number' || true)
+            if [ -n "$PR" ] && [ "$PR" != "null" ]; then
+              echo "PR_NUMBER=$PR" >> "$GITHUB_ENV"
+              echo "Detected PR #$PR for branch ${{ github.ref_name }}."
+            else
+              echo "No PR detected for branch ${{ github.ref_name }} (manual run)."
+            fi
+          fi
+
       - name: Runner Diagnostics (Claude OAuth)
         run: |
           set -euo pipefail
@@ -80,8 +97,8 @@ jobs:
           set -euo pipefail
           mkdir -p .review-pipeline/workspace/context .review-pipeline/workspace/reports
           # PR metadata
-          if [ -n "${{ github.event.pull_request.number }}" ]; then
-            gh pr view ${{ github.event.pull_request.number }} --json number,state,headRefName,baseRefName,headRefOid,permalink,author --repo "${{ github.repository }}" > .review-pipeline/workspace/context/pr.json
+          if [ -n "${PR_NUMBER:-}" ]; then
+            gh pr view "$PR_NUMBER" --json number,state,headRefName,baseRefName,headRefOid,permalink,author --repo "${{ github.repository }}" > .review-pipeline/workspace/context/pr.json
           else
             # Manual workflow_dispatch fallback (use jq to construct valid JSON)
             jq -n \
@@ -93,13 +110,18 @@ jobs:
               > .review-pipeline/workspace/context/pr.json
           fi
           # Diff & files
-          if [ -n "${{ github.event.pull_request.number }}" ]; then
-            gh pr diff ${{ github.event.pull_request.number }} --patch --repo "${{ github.repository }}" > .review-pipeline/workspace/context/diff.patch
-            gh pr view ${{ github.event.pull_request.number }} --json files --repo "${{ github.repository }}" | jq -r '.files[].path' > .review-pipeline/workspace/context/files.txt
+          if [ -n "${PR_NUMBER:-}" ]; then
+            gh pr diff "$PR_NUMBER" --patch --repo "${{ github.repository }}" > .review-pipeline/workspace/context/diff.patch
+            gh pr view "$PR_NUMBER" --json files --repo "${{ github.repository }}" | jq -r '.files[].path' > .review-pipeline/workspace/context/files.txt
           else
             # Manual trigger - use git diff
-            git diff HEAD~1 > .review-pipeline/workspace/context/diff.patch || git diff --cached > .review-pipeline/workspace/context/diff.patch || echo "No diff available" > .review-pipeline/workspace/context/diff.patch
-            git diff --name-only HEAD~1 > .review-pipeline/workspace/context/files.txt || git diff --name-only --cached > .review-pipeline/workspace/context/files.txt || echo "No files changed" > .review-pipeline/workspace/context/files.txt
+            if git rev-parse -q --verify HEAD~1 >/dev/null 2>&1; then
+              git diff HEAD~1 > .review-pipeline/workspace/context/diff.patch || echo "No diff available" > .review-pipeline/workspace/context/diff.patch
+              git diff --name-only HEAD~1 > .review-pipeline/workspace/context/files.txt || echo "No files changed" > .review-pipeline/workspace/context/files.txt
+            else
+              echo "No diff available" > .review-pipeline/workspace/context/diff.patch
+              echo "No files changed" > .review-pipeline/workspace/context/files.txt
+            fi
           fi
           # Get test command from configuration or environment
           TEST_CMD="${TEST_CMD:-$(node .review-pipeline/lib/config-loader.js show 2>/dev/null | jq -r '.testing.command // "pytest tests/"' || echo 'pytest tests/')}"
@@ -211,15 +233,17 @@ jobs:
           node scripts/aggregate-reviews.mjs || echo "Warning: Aggregation had issues, check reports"
 
       - name: Attach summary as PR comment
-        if: always() && github.event.pull_request.number != ''
+        if: always() && (github.event.pull_request.number != '' || env.PR_NUMBER != '')
         shell: bash
         run: |
           if [ -f .review-pipeline/workspace/summary.md ]; then
             # Check if we already commented on this SHA
-            existing_comments=$(gh pr view ${{ github.event.pull_request.number }} --json comments --repo "${{ github.repository }}" | jq -r '.comments[].body' | grep -c "SHA: ${{ github.event.pull_request.head.sha }}" || true)
+            PR_NUM="${{ github.event.pull_request.number }}"; if [ -z "$PR_NUM" ]; then PR_NUM="$PR_NUMBER"; fi
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"; if [ -z "$HEAD_SHA" ]; then HEAD_SHA="${{ github.sha }}"; fi
+            existing_comments=$(gh pr view "$PR_NUM" --json comments --repo "${{ github.repository }}" | jq -r '.comments[].body' | grep -c "SHA: $HEAD_SHA" || true)
             if [ "$existing_comments" -eq 0 ]; then
-              echo "<!-- Multi-Model Review SHA: ${{ github.event.pull_request.head.sha }} -->" >> .review-pipeline/workspace/summary.md
-              gh pr comment ${{ github.event.pull_request.number }} --body-file .review-pipeline/workspace/summary.md --repo "${{ github.repository }}"
+              echo "<!-- Multi-Model Review SHA: $HEAD_SHA -->" >> .review-pipeline/workspace/summary.md
+              gh pr comment "$PR_NUM" --body-file .review-pipeline/workspace/summary.md --repo "${{ github.repository }}"
             else
               echo "Already commented on this SHA, skipping duplicate."
             fi
