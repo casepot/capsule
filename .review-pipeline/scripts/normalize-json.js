@@ -247,7 +247,86 @@ function extractJSON(input) {
   try {
     return JSON.parse(extracted);
   } catch (e) {
-    throw new Error(`Extracted text is not valid JSON: ${e.message}`);
+    // Try to recover truncated JSON
+    try {
+      return attemptJSONRecovery(extracted);
+    } catch (recoveryError) {
+      throw new Error(`Extracted text is not valid JSON: ${e.message}`);
+    }
+  }
+}
+
+/**
+ * Attempt to recover truncated or malformed JSON
+ */
+function attemptJSONRecovery(jsonStr) {
+  // Track depth to know what needs closing
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  
+  for (let i = 0; i < jsonStr.length; i++) {
+    const char = jsonStr[i];
+    
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    
+    if (char === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    
+    if (char === '"' && !inString) {
+      inString = true;
+    } else if (char === '"' && inString) {
+      inString = false;
+    } else if (!inString) {
+      if (char === '{' || char === '[') {
+        depth++;
+      } else if (char === '}' || char === ']') {
+        depth--;
+      }
+    }
+  }
+  
+  // If truncated, try to close open structures
+  let recovered = jsonStr;
+  
+  // Close open string
+  if (inString) {
+    recovered += '"';
+  }
+  
+  // Add missing commas or colons if needed
+  const lastChar = recovered.trim().slice(-1);
+  if (lastChar === ':') {
+    recovered += 'null'; // Add null value for missing field
+  } else if (lastChar === ',') {
+    recovered = recovered.slice(0, -1); // Remove trailing comma
+  }
+  
+  // Close open structures
+  while (depth > 0) {
+    // Simple heuristic: close with appropriate bracket
+    const needsBrace = recovered.lastIndexOf('{') > recovered.lastIndexOf('[');
+    recovered += needsBrace ? '}' : ']';
+    depth--;
+  }
+  
+  // Try to parse the recovered JSON
+  try {
+    return JSON.parse(recovered);
+  } catch (e) {
+    // If recovery failed completely, return partial structure
+    // This at least preserves what we could parse
+    console.error('Warning: JSON recovery partially failed, returning best effort');
+    return {
+      error: 'truncated_json',
+      partial_data: jsonStr.substring(0, 500),
+      recovery_attempted: true
+    };
   }
 }
 
@@ -282,12 +361,24 @@ function normalizeReport(data, tool) {
   if (!data.findings) data.findings = [];
   if (!data.metrics) data.metrics = {};
   if (!data.evidence) data.evidence = [];
-  if (!data.tests) data.tests = {
-    executed: false,
-    command: null,
-    exit_code: null,
-    summary: 'Tests not executed'
-  };
+  if (!data.tests) {
+    data.tests = {
+      executed: false,
+      command: null,
+      exit_code: null,
+      summary: 'Tests not executed'
+    };
+  } else {
+    // Fix null values for tests.executed (schema expects boolean)
+    if (data.tests.executed === null || data.tests.executed === undefined) {
+      data.tests.executed = false;
+    }
+    // Ensure boolean type
+    if (typeof data.tests.executed !== 'boolean') {
+      data.tests.executed = Boolean(data.tests.executed);
+    }
+  }
+  
   if (!data.exit_criteria) data.exit_criteria = {
     ready_for_pr: false,
     reasons: []

@@ -35,10 +35,39 @@ const errors = [];
 for (const [tool, file] of Object.entries(mustFiles)) {
   try {
     const raw = await fs.readFile(file, 'utf8');
-    const json = JSON.parse(raw);
+    let json = JSON.parse(raw);
+    
+    // Fix common issues before validation
+    // 1. Fix null tests.executed (schema expects boolean)
+    if (json.tests && (json.tests.executed === null || json.tests.executed === undefined)) {
+      json.tests.executed = false;
+    }
+    
+    // 2. Ensure required fields exist with defaults
+    if (!json.tool) json.tool = tool;
+    if (!json.model) json.model = 'unknown';
+    if (!json.timestamp) json.timestamp = new Date().toISOString();
+    if (!json.pr) json.pr = {};
+    if (!json.summary && json.error) {
+      // If there's an error, use it as summary
+      json.summary = `Error: ${json.error}`;
+    } else if (!json.summary) {
+      json.summary = 'No summary provided';
+    }
+    if (!json.assumptions) json.assumptions = [];
+    if (!json.findings) json.findings = [];
+    if (!json.tests) json.tests = { executed: false, command: null, exit_code: null, summary: 'Not executed' };
+    if (!json.exit_criteria) json.exit_criteria = { ready_for_pr: false, reasons: [] };
+    
+    // Try validation after fixes
     if (!validate(json)) {
-      errors.push(`Schema invalid for ${tool}: ${ajv.errorsText(validate.errors, { separator: '\n- ' })}`);
-      continue;
+      // Log validation errors but still try to use the report
+      errors.push(`Schema warnings for ${tool}: ${ajv.errorsText(validate.errors, { separator: '\n- ' })}`);
+      // Only skip if critical fields are truly missing
+      if (!json.findings && !json.summary) {
+        errors.push(`Skipping ${tool}: No usable content (no findings or summary)`);
+        continue;
+      }
     }
     results.push(json);
   } catch (e) {

@@ -71,11 +71,12 @@ export default class ProviderExecutor {
         arg === 'STDIN_CONTENT' ? '-' : arg
       ).filter(arg => arg !== 'STDIN_CONTENT');
 
-      // Spawn the process
+      // Spawn the process with large buffer for output (10MB)
       const proc = spawn(cmd.command, args, {
         cwd: cmd.workingDirectory,
         env: cmd.env,
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 10 * 1024 * 1024 // 10MB to handle large review outputs
       });
 
       let stdout = '';
@@ -168,7 +169,8 @@ export default class ProviderExecutor {
       const proc = spawn(cmd.command, cmd.args, {
         cwd: cmd.workingDirectory,
         env: cmd.env,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        maxBuffer: 10 * 1024 * 1024 // 10MB to handle large review outputs
       });
 
       let stdout = '';
