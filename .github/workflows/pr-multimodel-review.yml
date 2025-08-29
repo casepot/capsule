@@ -98,7 +98,7 @@ jobs:
           mkdir -p .review-pipeline/workspace/context .review-pipeline/workspace/reports
           # PR metadata
           if [ -n "${PR_NUMBER:-}" ]; then
-            gh pr view "$PR_NUMBER" --json number,state,headRefName,baseRefName,headRefOid,permalink,author --repo "${{ github.repository }}" > .review-pipeline/workspace/context/pr.json
+            gh pr view "$PR_NUMBER" --json number,state,headRefName,baseRefName,headRefOid,url,author --repo "${{ github.repository }}" > .review-pipeline/workspace/context/pr.json
           else
             # Manual workflow_dispatch fallback (use jq to construct valid JSON)
             jq -n \
