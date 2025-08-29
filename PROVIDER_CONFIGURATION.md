@@ -18,7 +18,7 @@ export PATH="$HOME/.claude/local:$PATH"
 
 ### Authentication
 - **Method**: Subscription-based (Claude Pro/Max)
-- **NO API KEY**: Must unset `ANTHROPIC_API_KEY` environment variable
+- **NO API KEY**: Keep `ANTHROPIC_API_KEY` unset. This pipeline uses Claude.ai OAuth stored in macOS Keychain.
 - **Login**: Via OAuth in browser or CLI authentication
 
 ### Available Models
@@ -73,7 +73,7 @@ claude -p "PROMPT" \
 ```
 
 ### Common Issues & Solutions
-1. **"Credit balance is too low"**: Caused by API key environment variable conflicting with subscription auth. Unset `ANTHROPIC_API_KEY`.
+1. **"Credit balance is too low"**: Caused by an API key env var conflicting with subscription auth. Unset `ANTHROPIC_API_KEY`.
 2. **"Path /private/tmp/... was not found"**: Cached session state issue. Clear problematic cache files in `~/.claude/projects/`.
 3. **Installation path**: Check `~/.claude/local/claude` if `claude` command not found.
 
@@ -271,7 +271,8 @@ echo "$(cat prompt.md)" | \
 #### Required Environment Variables
 ```bash
 # MUST be unset or empty for subscription auth to work
-unset ANTHROPIC_API_KEY
+# Locally: keep ANTHROPIC_API_KEY unset
+# In CI: set ANTHROPIC_API_KEY via GitHub Secret
 unset OPENAI_API_KEY  
 unset GEMINI_API_KEY  # or GEMINI_API_KEY=""
 ```

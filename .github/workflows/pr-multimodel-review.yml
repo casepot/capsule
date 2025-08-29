@@ -21,29 +21,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Claude Authentication
+      - name: Setup Claude Authentication (OAuth only)
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
-          # Extract Claude OAuth credentials from macOS Keychain
-          # The credentials are stored as JSON by Claude.ai/Max login
-          CLAUDE_CREDS="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null || echo '{}')"
-          
-          # Parse the OAuth access token from the JSON
-          export ANTHROPIC_AUTH_TOKEN="$(echo "$CLAUDE_CREDS" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || echo '')"
-          
-          # Ensure we're NOT using API key (we want Max/Pro subscription)
+          set -euo pipefail
+          # Never use API keys for Claude in this pipeline
           unset ANTHROPIC_API_KEY
-          
-          # Export for subsequent steps
-          echo "ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN" >> "$GITHUB_ENV"
-          echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
-          
-          # Verify token was extracted
-          if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
-            echo "::warning::Could not extract Claude token from Keychain. Claude review may fail."
-            echo "::warning::The keychain may be locked or credentials not found."
+          # Optional: unlock the login keychain if password provided (service runners only)
+          if [ -n "${KEYCHAIN_PASSWORD:-}" ]; then
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db || true
+            security set-keychain-settings -lut 3600 ~/Library/Keychains/login.keychain-db || true
+          fi
+          # Ensure Claude in PATH for non-standard install
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          # Quick auth probe (uses OAuth from Keychain)
+          if claude -p "echo test" --output-format text >/dev/null 2>&1; then
+            echo "✓ Claude OAuth ready via Keychain"
           else
-            echo "✓ Claude OAuth token extracted from Keychain (Max/Pro subscription)"
-            echo "  Token format: ${ANTHROPIC_AUTH_TOKEN:0:15}..."
+            echo "::warning::Claude not authenticated. Ensure you are logged in locally with 'claude' (/login), and runner has access to your login keychain."
           fi
 
       - name: Ensure Node.js
@@ -101,7 +99,7 @@ jobs:
           if [ -x "$HOME/.claude/local/claude" ]; then
             export PATH="$HOME/.claude/local:$PATH"
           fi
-          # Unset any API key envs to prevent metered billing
+          # Forbid API keys in this pipeline
           unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY
           
           # Claude Code - use Sonnet 4 for speed

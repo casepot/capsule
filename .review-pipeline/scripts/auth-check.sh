@@ -12,9 +12,9 @@ if [ -x "$HOME/.claude/local/claude" ] && ! type claude >/dev/null 2>&1; then
   chk "Added Claude Code to PATH from ~/.claude/local"
 fi
 
-# 1) Absolutely forbid API key usage (metered billing)
+# 1) API key usage policy: forbid all
 if [ -n "${ANTHROPIC_API_KEY-}" ] || [ -n "${OPENAI_API_KEY-}" ] || [ -n "${GEMINI_API_KEY-}" ]; then
-  red "API key envs must NOT be set (ANTHROPIC_API_KEY/OPENAI_API_KEY/GEMINI_API_KEY). Unset them and use subscription/OAuth logins."
+  red "API key envs must NOT be set (ANTHROPIC_API_KEY/OPENAI_API_KEY/GEMINI_API_KEY). Use OAuth/subscription logins."
   exit 1
 fi
 chk "No API key envs detected."
