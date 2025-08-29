@@ -151,16 +151,16 @@ export default class CommandBuilder {
       args.push(...config.additional_flags);
     }
 
-    // Prompt flag with placeholder (stdin will provide actual content)
-    args.push('-p', 'STDIN_CONTENT');
-
-    // Build the complete prompt with context
-    const prompt = await this.buildPromptWithContext('claude', config, options);
+    // Build the prompt (without injecting full context)
+    const prompt = await this.buildPrompt('claude', config, options);
+    
+    // Prompt flag with actual prompt content
+    args.push('-p', prompt);
 
     return {
       command: commandPath,
       args,
-      stdin: prompt,
+      stdin: null, // Claude takes prompt as argument, not stdin
       env: {
         ...process.env,
         TOOL: 'claude-code',
@@ -213,7 +213,7 @@ export default class CommandBuilder {
     }
 
     // The prompt comes last (will be provided via argument, not stdin for Codex)
-    const prompt = await this.buildPromptWithContext('codex', config, options);
+    const prompt = await this.buildPrompt('codex', config, options);
     args.push(prompt);
 
     return {
@@ -273,13 +273,13 @@ export default class CommandBuilder {
       args.push(...config.additional_flags);
     }
 
-    // Build the complete prompt with context
-    const prompt = await this.buildPromptWithContext('gemini', config, options);
+    // Build the prompt (without full context injection)
+    const prompt = await this.buildPrompt('gemini', config, options);
 
     return {
       command: commandPath,
       args,
-      stdin: prompt,
+      stdin: prompt, // Gemini still takes prompt via stdin
       env: {
         ...process.env,
         TOOL: 'gemini-cli',
@@ -293,7 +293,40 @@ export default class CommandBuilder {
   }
 
   /**
-   * Build complete prompt with injected context
+   * Build prompt WITHOUT injecting full context (for use with tools)
+   */
+  async buildPrompt(provider, config, options = {}) {
+    const sections = [];
+
+    // FIRST: Provider-specific prompt overlay
+    const overlayPath = path.join(this.packageDir, 'prompts', `review.${provider}.md`);
+    try {
+      const overlay = await fs.readFile(overlayPath, 'utf8');
+      sections.push(overlay);
+    } catch (error) {
+      if (this.verbose) {
+        console.warn(`No provider overlay found at ${overlayPath}`);
+      }
+    }
+
+    // SECOND: Core review prompt
+    const corePath = path.join(this.packageDir, 'prompts', 'review.core.md');
+    const corePrompt = await fs.readFile(corePath, 'utf8');
+    sections.push(corePrompt);
+
+    // THIRD: Model instruction if needed
+    if (provider === 'claude' && config.model) {
+      sections.push(`\nSet the model field to "${config.model}" in your JSON output.`);
+    }
+    if (provider === 'gemini') {
+      sections.push('\nCRITICAL: Output ONLY the JSON object, no markdown code fences or other text.');
+    }
+
+    return sections.join('\n');
+  }
+
+  /**
+   * Build complete prompt with injected context (DEPRECATED - too large)
    */
   async buildPromptWithContext(provider, config, options) {
     const sections = [];
