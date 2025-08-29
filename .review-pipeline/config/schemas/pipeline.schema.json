@@ -299,7 +299,7 @@
         "reasoning_effort": {
           "type": "string",
           "description": "Reasoning effort level",
-          "enum": ["none", "low", "medium", "high"],
+          "enum": ["minimal", "low", "medium", "high"],
           "default": "low"
         },
         "sandbox_mode": {
