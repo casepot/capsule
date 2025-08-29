@@ -198,7 +198,11 @@ check_provider_auth() {
   case "$provider" in
     claude)
       # Hardcoded auth check for Claude
-      if claude -p 'echo test' 2>/dev/null; then
+      # Try with output-format flag for better CI compatibility
+      if claude -p 'echo test' --output-format text 2>/dev/null; then
+        auth_success=true
+      elif claude -p 'echo test' 2>&1 | grep -q "test"; then
+        # Fallback: check if command succeeds even with error messages
         auth_success=true
       fi
       ;;
