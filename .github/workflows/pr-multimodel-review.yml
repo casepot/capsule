@@ -26,29 +26,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Claude Authentication
+      - name: Setup Claude Authentication (OAuth)
         run: |
-          # Extract Claude OAuth credentials from macOS Keychain
-          # The credentials are stored as JSON by Claude.ai/Max login
-          CLAUDE_CREDS="$(security find-generic-password -s 'Claude Code-credentials' -w 2>/dev/null || echo '{}')"
-          
-          # Parse the OAuth access token from the JSON
-          export ANTHROPIC_AUTH_TOKEN="$(echo "$CLAUDE_CREDS" | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null || echo '')"
-          
-          # Ensure we're NOT using API key (we want Max/Pro subscription)
+          # Never use API keys in this pipeline
           unset ANTHROPIC_API_KEY
-          
-          # Export for subsequent steps
-          echo "ANTHROPIC_AUTH_TOKEN=$ANTHROPIC_AUTH_TOKEN" >> "$GITHUB_ENV"
-          echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
-          
-          # Verify token was extracted
-          if [ -z "$ANTHROPIC_AUTH_TOKEN" ]; then
-            echo "::warning::Could not extract Claude token from Keychain. Claude review may fail."
-            echo "::warning::The keychain may be locked or credentials not found."
+          # Ensure Claude Code is in PATH if installed in non-standard location
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          # Quick probe: rely on local OAuth (Keychain)
+          if claude -p "echo test" --output-format text >/dev/null 2>&1; then
+            echo "✓ Claude OAuth available via Keychain"
           else
-            echo "✓ Claude OAuth token extracted from Keychain (Max/Pro subscription)"
-            echo "  Token format: ${ANTHROPIC_AUTH_TOKEN:0:15}..."
+            echo "::warning::Claude not authenticated. Ensure local '/login' has been completed in the runner user session."
           fi
 
       - name: Ensure Node.js
@@ -62,15 +52,8 @@ jobs:
           if [ -x "$HOME/.claude/local/claude" ]; then
             export PATH="$HOME/.claude/local:$PATH"
           fi
-          
-          # Skip Claude auth check if we're using ANTHROPIC_AUTH_TOKEN
-          if [ -n "$ANTHROPIC_AUTH_TOKEN" ]; then
-            echo "✓ Using Claude OAuth token from Keychain (Max/Pro subscription)"
-            # Run auth check but allow Claude to fail since we handle it via token
-            bash .review-pipeline/scripts/auth-check.sh || true
-          else
-            bash .review-pipeline/scripts/auth-check.sh
-          fi
+          # Enforce OAuth-only checks for all providers
+          bash .review-pipeline/scripts/auth-check.sh
 
       - name: Validate configuration
         run: |
