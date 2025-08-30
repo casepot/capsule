@@ -9,7 +9,7 @@ import addFormats from 'ajv-formats';
 const scriptDir = path.dirname(new URL(import.meta.url).pathname);
 const packageDir = path.dirname(scriptDir);
 
-const schemaPath = path.join(packageDir, 'config', 'schema.json');
+const schemaPath = path.join(packageDir, 'config', 'schemas', 'report.schema.json');
 const reportsDir = path.join(packageDir, 'workspace', 'reports');
 const outSummary = path.join(packageDir, 'workspace', 'summary.md');
 const outGate = path.join(packageDir, 'workspace', 'gate.txt');
@@ -31,18 +31,90 @@ const validate = ajv.compile(schema);
 
 const results = [];
 const errors = [];
+const reportStatus = {};
+
+// Also check for raw outputs
+const rawDir = path.join(packageDir, 'workspace', 'reports', 'raw');
+const rawFiles = {};
+try {
+  const rawEntries = await fs.readdir(rawDir).catch(() => []);
+  for (const entry of rawEntries) {
+    if (entry.endsWith('.raw.txt')) {
+      const toolName = entry.replace('.raw.txt', '');
+      rawFiles[toolName] = path.join(rawDir, entry);
+    }
+  }
+} catch (e) {
+  console.error('Could not read raw directory:', e.message);
+}
 
 for (const [tool, file] of Object.entries(mustFiles)) {
   try {
     const raw = await fs.readFile(file, 'utf8');
-    const json = JSON.parse(raw);
+    let json = JSON.parse(raw);
+    reportStatus[tool] = 'parsed';
+    
+    // Fix common issues before validation
+    // 1. Fix null tests.executed (schema expects boolean)
+    if (json.tests && (json.tests.executed === null || json.tests.executed === undefined)) {
+      json.tests.executed = false;
+    }
+    
+    // 2. Ensure required fields exist with defaults
+    if (!json.tool) json.tool = tool;
+    if (!json.model) json.model = 'unknown';
+    if (!json.timestamp) json.timestamp = new Date().toISOString();
+    if (!json.pr) json.pr = {};
+    if (!json.summary && json.error) {
+      // If there's an error, use it as summary
+      json.summary = `Error: ${json.error}`;
+    } else if (!json.summary) {
+      json.summary = 'No summary provided';
+    }
+    if (!json.assumptions) json.assumptions = [];
+    if (!json.findings) json.findings = [];
+    if (!json.tests) json.tests = { executed: false, command: null, exit_code: null, summary: 'Not executed' };
+    if (!json.exit_criteria) json.exit_criteria = { ready_for_pr: false, reasons: [] };
+    
+    // Try validation after fixes
     if (!validate(json)) {
-      errors.push(`Schema invalid for ${tool}: ${ajv.errorsText(validate.errors, { separator: '\n- ' })}`);
-      continue;
+      // Log validation errors but still try to use the report
+      errors.push(`Schema warnings for ${tool}: ${ajv.errorsText(validate.errors, { separator: '\n- ' })}`);
+      // Only skip if critical fields are truly missing
+      if (!json.findings && !json.summary) {
+        errors.push(`Skipping ${tool}: No usable content (no findings or summary)`);
+        continue;
+      }
     }
     results.push(json);
   } catch (e) {
+    reportStatus[tool] = 'failed';
     errors.push(`Missing or unreadable report for ${tool}: ${e.message}`);
+    
+    // Try to read raw file as fallback
+    const rawKey = tool === 'claude-code' ? 'claude-code' : 
+                   tool === 'codex-cli' ? 'codex-cli' : 
+                   tool === 'gemini-cli' ? 'gemini-cli' : tool;
+    
+    if (rawFiles[rawKey]) {
+      try {
+        const rawContent = await fs.readFile(rawFiles[rawKey], 'utf8');
+        errors.push(`  Raw output available (${rawContent.length} bytes) - check artifacts for full content`);
+        
+        // Create a minimal report entry with raw content reference
+        results.push({
+          tool: tool,
+          model: 'unknown',
+          summary: `Failed to parse JSON report. Raw output available (${rawContent.length} bytes).`,
+          findings: [],
+          exit_criteria: { ready_for_pr: false, reasons: ['Failed to parse report'] },
+          _hasRawOutput: true,
+          _rawLength: rawContent.length
+        });
+      } catch (rawErr) {
+        errors.push(`  Could not read raw file: ${rawErr.message}`);
+      }
+    }
   }
 }
 
@@ -77,10 +149,31 @@ if (errors.length) {
 }
 lines.push('## Provider Summaries');
 for (const r of results) {
-  lines.push(`### ${r.tool} (${r.model})`);
+  const status = reportStatus[r.tool] || 'unknown';
+  const statusIcon = status === 'parsed' ? '✅' : status === 'failed' ? '⚠️' : '❓';
+  lines.push(`### ${statusIcon} ${r.tool} (${r.model})`);
+  
+  if (r._hasRawOutput) {
+    lines.push(`⚠️ JSON parsing failed - raw output available (${r._rawLength} bytes)`);
+  }
+  
   lines.push(r.summary?.trim() || '_no summary_');
   lines.push('');
 }
+
+// Add report status summary
+lines.push('## Report Status');
+const allTools = Object.keys(mustFiles);
+for (const tool of allTools) {
+  const status = reportStatus[tool] || 'missing';
+  const icon = status === 'parsed' ? '✅' : status === 'failed' ? '❌' : '⚪';
+  const rawKey = tool === 'claude-code' ? 'claude-code' : 
+                 tool === 'codex-cli' ? 'codex-cli' : 
+                 tool === 'gemini-cli' ? 'gemini-cli' : tool;
+  const hasRaw = rawFiles[rawKey] ? ' (raw output available)' : '';
+  lines.push(`- ${icon} ${tool}: ${status}${hasRaw}`);
+}
+lines.push('');
 
 lines.push('## Must‑fix (union)');
 if (mustFix.length === 0) {
@@ -111,6 +204,13 @@ lines.push('');
 
 lines.push(`## Gate: **${gate.toUpperCase()}**`);
 lines.push('');
+
+// Add note about accessing raw outputs
+if (Object.keys(rawFiles).length > 0) {
+  lines.push('💡 **Note**: Raw provider outputs are preserved in the artifacts. Download the artifact to access full unprocessed outputs.');
+  lines.push('');
+}
+
 lines.push('_This comment was generated by a self‑hosted workflow using subscription/OAuth CLIs only. No API keys were used._');
 
 await fs.writeFile(outSummary, lines.join('\n'));

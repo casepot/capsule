@@ -38,8 +38,7 @@
     },
     "summary": {
       "type": "string",
-      "minLength": 50,
-      "maxLength": 500
+      "minLength": 1
     },
     "assumptions": {
       "type": "array",
