@@ -262,6 +262,20 @@ jobs:
           cd .review-pipeline && npm install --no-audit --no-fund
           node scripts/aggregate-reviews.mjs || echo "Warning: Aggregation had issues, check reports"
 
+      - name: Upload review reports as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        id: upload-reports
+        with:
+          name: review-reports-${{ github.sha }}
+          path: |
+            .review-pipeline/workspace/reports/
+            .review-pipeline/workspace/context/
+            .review-pipeline/workspace/summary.md
+            .review-pipeline/workspace/gate.txt
+          retention-days: 30
+          if-no-files-found: warn
+
       - name: Attach summary as PR comment
         if: always() && (github.event.pull_request.number != '' || env.PR_NUMBER != '')
         shell: bash
@@ -272,8 +286,34 @@ jobs:
             HEAD_SHA="${{ github.event.pull_request.head.sha }}"; if [ -z "$HEAD_SHA" ]; then HEAD_SHA="${{ github.sha }}"; fi
             existing_comments=$(gh pr view "$PR_NUM" --json comments --repo "${{ github.repository }}" | jq -r '.comments[].body' | grep -c "SHA: $HEAD_SHA" || true)
             if [ "$existing_comments" -eq 0 ]; then
-              echo "<!-- Multi-Model Review SHA: $HEAD_SHA -->" >> .review-pipeline/workspace/summary.md
-              gh pr comment "$PR_NUM" --body-file .review-pipeline/workspace/summary.md --repo "${{ github.repository }}"
+              # Create enhanced summary with artifact link
+              cp .review-pipeline/workspace/summary.md .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "---" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "📎 **Full Reports**: [Download artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-reports.outputs.artifact-id }})" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              
+              # Add raw report snippets if they exist
+              if [ -d .review-pipeline/workspace/reports/raw ]; then
+                for raw_file in .review-pipeline/workspace/reports/raw/*.raw.txt; do
+                  if [ -f "$raw_file" ]; then
+                    provider=$(basename "$raw_file" .raw.txt)
+                    echo "<details>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "<summary>📄 ${provider} Raw Output (first 3000 chars)</summary>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo '```json' >> .review-pipeline/workspace/summary-enhanced.md
+                    head -c 3000 "$raw_file" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo '```' >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "</details>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                  fi
+                done
+              fi
+              
+              echo "<!-- Multi-Model Review SHA: $HEAD_SHA -->" >> .review-pipeline/workspace/summary-enhanced.md
+              gh pr comment "$PR_NUM" --body-file .review-pipeline/workspace/summary-enhanced.md --repo "${{ github.repository }}"
             else
               echo "Already commented on this SHA, skipping duplicate."
             fi

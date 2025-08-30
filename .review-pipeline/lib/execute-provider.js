@@ -259,17 +259,24 @@ export default class ProviderExecutor {
       // Read the raw output file
       const rawOutput = await fs.readFile(cmd.rawOutputFile, 'utf8');
       
+      // Copy raw file to the raw directory for consistency
+      const rawDir = path.join(this.packageDir, 'workspace', 'reports', 'raw');
+      const rawPath = path.join(rawDir, 'codex-cli.raw.txt');
+      await fs.mkdir(rawDir, { recursive: true });
+      await fs.copyFile(cmd.rawOutputFile, rawPath);
+      
       // Normalize it
       const normalized = await this.normalizeJson(rawOutput);
       
       // Write to final location
       await fs.writeFile(cmd.outputFile, normalized);
       
-      // Clean up raw file
-      await fs.unlink(cmd.rawOutputFile).catch(() => {});
+      // Keep original raw file - don't delete it anymore
+      // await fs.unlink(cmd.rawOutputFile).catch(() => {});
       
       if (this.verbose) {
         console.error(`Codex output processed and written to ${cmd.outputFile}`);
+        console.error(`Raw output preserved at ${rawPath}`);
       }
     } catch (error) {
       await this.writeErrorOutput(cmd, error.message);
