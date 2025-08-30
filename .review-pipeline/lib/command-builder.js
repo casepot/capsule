@@ -320,18 +320,52 @@ export default class CommandBuilder {
     const prPath = path.join(this.packageDir, 'workspace', 'context', 'pr.json');
     try {
       const prData = JSON.parse(await fs.readFile(prPath, 'utf8'));
-      sections.push('\n=== PULL REQUEST CONTEXT ===');
-      sections.push(`Repository: ${prData.url?.split('/')[4] || 'unknown'}`);
-      sections.push(`PR Number: ${prData.number}`);
-      sections.push(`Branch: ${prData.headRefName} -> ${prData.baseRefName}`);
-      sections.push(`Head SHA: ${prData.headRefOid}`);
-      sections.push(`URL: ${prData.url}`);
-      sections.push('Use these values for the "pr" field in your JSON output.');
-      sections.push('=== END PR CONTEXT ===\n');
+      
+      // Check if this is a manual run with no PR detected
+      if (prData.number === 0) {
+        sections.push('\n=== MANUAL RUN CONTEXT ===');
+        sections.push('NOTE: This is a manual workflow run without a detected pull request.');
+        sections.push(`Repository: ${prData.repo || 'unknown'}`);
+        sections.push(`Branch: ${prData.branch || 'unknown'}`);
+        sections.push(`Head SHA: ${prData.head_sha || prData.sha || 'unknown'}`);
+        sections.push(`Run URL: ${prData.link || prData.url || 'https://github.com/'}`);
+        sections.push('');
+        sections.push('IMPORTANT: Since no PR was detected, you are reviewing the latest commit on this branch.');
+        sections.push('The diff provided (if any) shows changes from HEAD~1.');
+        sections.push('If no diff is available, provide a general assessment that no changes were found to review.');
+        sections.push('=== END MANUAL RUN CONTEXT ===\n');
+        
+        // For manual runs, try to include the diff directly if available
+        try {
+          const diffPath = path.join(this.packageDir, 'workspace', 'context', 'diff.patch');
+          const diffContent = await fs.readFile(diffPath, 'utf8');
+          if (diffContent && diffContent.trim() && diffContent !== 'No diff available') {
+            sections.push('\n=== DIFF TO REVIEW ===');
+            sections.push(diffContent.substring(0, 10000)); // Limit diff size to prevent token overflow
+            sections.push('=== END DIFF ===\n');
+          }
+        } catch {
+          // No diff available
+        }
+      } else {
+        // Normal PR context
+        sections.push('\n=== PULL REQUEST CONTEXT ===');
+        sections.push(`Repository: ${prData.url?.split('/')[4] || 'unknown'}`);
+        sections.push(`PR Number: ${prData.number}`);
+        sections.push(`Branch: ${prData.headRefName} -> ${prData.baseRefName}`);
+        sections.push(`Head SHA: ${prData.headRefOid}`);
+        sections.push(`URL: ${prData.url}`);
+        sections.push('Use these values for the "pr" field in your JSON output.');
+        sections.push('=== END PR CONTEXT ===\n');
+      }
     } catch (error) {
       if (this.verbose) {
         console.warn(`Could not load PR context: ${error.message}`);
       }
+      sections.push('\n=== NO CONTEXT AVAILABLE ===');
+      sections.push('Warning: Could not load review context. This may be a configuration issue.');
+      sections.push('Please provide a minimal review indicating the context is missing.');
+      sections.push('=== END ===\n');
     }
 
     // FOURTH: Provider-specific output instructions if needed

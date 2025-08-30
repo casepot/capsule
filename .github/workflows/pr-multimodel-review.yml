@@ -67,12 +67,15 @@ jobs:
             echo "Using PR #${{ github.event.pull_request.number }} from event context."
           else
             # Try to find an open PR for this branch
-            PR=$(gh pr list --head "${{ github.ref_name }}" --json number -q '.[0].number' || true)
+            PR=$(gh pr list --head "${{ github.ref_name }}" --repo "${{ github.repository }}" --json number -q '.[0].number' || true)
             if [ -n "$PR" ] && [ "$PR" != "null" ]; then
               echo "PR_NUMBER=$PR" >> "$GITHUB_ENV"
               echo "Detected PR #$PR for branch ${{ github.ref_name }}."
             else
               echo "No PR detected for branch ${{ github.ref_name }} (manual run)."
+              echo "Debug: github.ref_name=${{ github.ref_name }}, github.repository=${{ github.repository }}"
+              echo "Debug: Checking what PRs exist..."
+              gh pr list --repo "${{ github.repository }}" --limit 5
             fi
           fi
 
