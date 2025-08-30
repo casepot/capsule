@@ -1,6 +1,5 @@
 # Dependencies
 node_modules/
-package-lock.json
 
 # Runtime workspace (generated files)
 workspace/
@@ -27,4 +26,3 @@ Thumbs.db
 # Review pipeline workspace
 .review-pipeline/workspace/
 .review-pipeline/node_modules/
-.review-pipeline/package-lock.json
