@@ -247,13 +247,14 @@ export default class CommandBuilder {
     // Model
     args.push('-m', model);
     
-    // Non-interactive prompt mode
+    // Non-interactive prompt mode (prompt via stdin)
     args.push('-p');
     
+    // Enable sandbox mode by default for Gemini to allow tool use
+    // This is needed for code review operations
+    args.push('-s');
+    
     // Optional flags
-    if (flags.sandbox) {
-      args.push('-s');
-    }
     if (flags.yolo) {
       args.push('-y');
     }
