@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const packageDir = path.dirname(path.dirname(__dirname));
 
 // Hoisted mocks
 const { mockSpawn, getLastProcess, clearLastProcess } = vi.hoisted(() => {
@@ -123,7 +129,7 @@ describe('ProviderExecutor', () => {
         args: ['--model', 'sonnet', '-p', 'Review this'],
         workingDirectory: '/tmp',
         env: { TEST: 'value', TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         timeout: 120
       };
       
@@ -168,7 +174,7 @@ describe('ProviderExecutor', () => {
         command: 'claude',
         args: ['-p', 'test; rm -rf /'], // Malicious input
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -194,7 +200,7 @@ describe('ProviderExecutor', () => {
         command: 'claude',
         args: [],
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -216,7 +222,7 @@ describe('ProviderExecutor', () => {
         command: 'claude',
         args: [],
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -243,7 +249,7 @@ describe('ProviderExecutor', () => {
         args: [],
         stdin: 'Input data',
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -266,7 +272,7 @@ describe('ProviderExecutor', () => {
       const mockCommand = {
         command: 'claude',
         args: [],
-        outputFile: '/tmp/output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         env: { TOOL: 'claude' },
         workingDirectory: '/tmp'
       };
@@ -286,9 +292,8 @@ describe('ProviderExecutor', () => {
       // Check that the normalized output was written to the output file
       // (raw output goes to raw file, normalized to output file)
       expect(fs.writeFile).toHaveBeenCalledWith(
-        '/tmp/output.json',
-        '{"normalized": true}',
-        undefined  // fs.writeFile may not pass encoding
+        path.join(packageDir, 'workspace/reports/claude-code.json'),
+        '{"normalized": true}'
       );
     });
 
@@ -298,7 +303,7 @@ describe('ProviderExecutor', () => {
         args: [],
         timeout: 0.01, // 10ms = 0.01 seconds - very short for testing
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -329,7 +334,7 @@ describe('ProviderExecutor', () => {
         command: 'claude',
         args: ['--model', 'sonnet'],
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -366,7 +371,7 @@ describe('ProviderExecutor', () => {
           WORKSPACE_DIR: '/tmp/workspace',
           TOOL: 'claude'
         },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       
@@ -404,16 +409,8 @@ describe('ProviderExecutor', () => {
       mockProcess.stdout.emit('data', Buffer.from('malicious content'));
       mockProcess.emit('exit', 0);
       
-      // Implementation should sanitize the path or throw error
-      const result = await executePromise;
-      
-      // Check that the file wasn't written to a dangerous location
-      const writeCalls = fs.writeFile.mock.calls;
-      for (const call of writeCalls) {
-        const filePath = call[0];
-        expect(filePath).not.toMatch(/^\/etc/);
-        expect(filePath).not.toContain('../');
-      }
+      // Implementation should reject paths with directory traversal
+      await expect(executePromise).rejects.toThrow('Invalid output path contains directory traversal');
     });
 
     it('should filter sensitive environment variables', async () => {
@@ -427,7 +424,7 @@ describe('ProviderExecutor', () => {
           ANTHROPIC_API_KEY: 'secret',
           TOOL: 'claude'
         },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       };
       

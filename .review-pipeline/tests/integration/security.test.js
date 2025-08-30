@@ -302,7 +302,7 @@ describe('Security Integration Tests', () => {
         command: 'claude',
         args: ['--prompt', 'test; echo injected'],
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       });
       
@@ -562,7 +562,7 @@ describe('Security Integration Tests', () => {
         command: 'claude',
         args: ['--help'],
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       });
       
@@ -590,7 +590,7 @@ describe('Security Integration Tests', () => {
         args: [],
         timeout: 0.1, // 100ms = 0.1 seconds
         env: { TOOL: 'claude' },
-        outputFile: '/tmp/claude-output.json',
+        outputFile: path.join(packageDir, 'workspace/reports/claude-code.json'),
         workingDirectory: '/tmp'
       });
       

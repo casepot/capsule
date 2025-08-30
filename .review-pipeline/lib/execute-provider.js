@@ -74,7 +74,7 @@ export default class ProviderExecutor {
       // Spawn the process with large buffer for output (10MB)
       // Sanitize environment variables (defense-in-depth)
       // Shell scripts also do this, but we add an extra layer here
-      const sanitizedEnv = { ...cmd.env };
+      const sanitizedEnv = { ...(cmd.env || {}) };
       const sensitiveKeys = [
         'GH_TOKEN', 
         'GITHUB_TOKEN', 
@@ -272,11 +272,31 @@ export default class ProviderExecutor {
   }
 
   /**
+   * Validate output path to prevent directory traversal
+   */
+  validateOutputPath(outputPath) {
+    // Reject paths containing directory traversal
+    if (outputPath.includes('..')) {
+      throw new Error(`Invalid output path contains directory traversal: ${outputPath}`);
+    }
+    
+    // Ensure path is within workspace/reports directory
+    const resolvedPath = path.resolve(outputPath);
+    const expectedDir = path.resolve(this.packageDir, 'workspace/reports');
+    
+    if (!resolvedPath.startsWith(expectedDir)) {
+      throw new Error(`Output path outside allowed directory: ${outputPath}`);
+    }
+    
+    return resolvedPath;
+  }
+
+  /**
    * Save raw output to file for debugging/audit
    */
   async saveRawOutput(cmd, output) {
     // Determine raw output filename based on the tool
-    const toolName = cmd.env.TOOL || 'unknown';
+    const toolName = cmd.env?.TOOL || 'unknown';
     let rawFileName;
     
     switch (toolName) {
@@ -319,8 +339,9 @@ export default class ProviderExecutor {
     const normalized = await this.normalizeJson(output);
     
     // Write to output file
-    await fs.mkdir(path.dirname(cmd.outputFile), { recursive: true });
-    await fs.writeFile(cmd.outputFile, normalized);
+    const validatedPath = this.validateOutputPath(cmd.outputFile);
+    await fs.mkdir(path.dirname(validatedPath), { recursive: true });
+    await fs.writeFile(validatedPath, normalized);
     
     if (this.verbose) {
       console.error(`Output written to ${cmd.outputFile}`);
@@ -345,7 +366,8 @@ export default class ProviderExecutor {
       const normalized = await this.normalizeJson(rawOutput);
       
       // Write to final location
-      await fs.writeFile(cmd.outputFile, normalized);
+      const validatedPath = this.validateOutputPath(cmd.outputFile);
+      await fs.writeFile(validatedPath, normalized);
       
       // Keep original raw file - don't delete it anymore
       // await fs.unlink(cmd.rawOutputFile).catch(() => {});
@@ -457,8 +479,8 @@ export default class ProviderExecutor {
    */
   async writeErrorOutput(cmd, errorMessage) {
     const errorJson = {
-      tool: cmd.env.TOOL || 'unknown',
-      model: cmd.env.MODEL || 'unknown',
+      tool: cmd.env?.TOOL || 'unknown',
+      model: cmd.env?.MODEL || 'unknown',
       timestamp: new Date().toISOString(),
       error: errorMessage,
       findings: [],
@@ -468,8 +490,9 @@ export default class ProviderExecutor {
       }
     };
 
-    await fs.mkdir(path.dirname(cmd.outputFile), { recursive: true });
-    await fs.writeFile(cmd.outputFile, JSON.stringify(errorJson, null, 2));
+    const validatedPath = this.validateOutputPath(cmd.outputFile);
+    await fs.mkdir(path.dirname(validatedPath), { recursive: true });
+    await fs.writeFile(validatedPath, JSON.stringify(errorJson, null, 2));
   }
 }
 

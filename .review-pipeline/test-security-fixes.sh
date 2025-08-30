@@ -71,12 +71,12 @@ echo
 
 echo
 
-# Test 7: Verify TEST_CMD uses eval with proper quoting
-echo "Test 7: Checking TEST_CMD execution uses eval with quotes..."
-if grep -q 'eval "$TEST_CMD"' ../.github/workflows/pr-multimodel-review.yml; then
-  echo "✅ PASS: TEST_CMD is executed with eval and proper quoting"
+# Test 7: Verify TEST_CMD does NOT use dangerous eval pattern
+echo "Test 7: Checking TEST_CMD execution avoids eval pattern..."
+if ! grep -q 'eval "$TEST_CMD"' ../.github/workflows/pr-multimodel-review.yml; then
+  echo "✅ PASS: TEST_CMD execution avoids dangerous eval pattern"
 else
-  echo "❌ FAIL: TEST_CMD execution is not properly quoted"
+  echo "❌ FAIL: TEST_CMD uses dangerous eval pattern - security vulnerability!"
   exit 1
 fi
 echo

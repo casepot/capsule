@@ -167,8 +167,9 @@ jobs:
               set +e
               echo "Running tests with command from repository variables only" > .review-pipeline/workspace/context/tests.txt
               echo "\$ ${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt
-              # Execute safely without eval to prevent shell injection
-              timeout 300 bash -c "$TEST_CMD" >> .review-pipeline/workspace/context/tests.txt 2>&1
+              # Execute with safer quoting (still has injection risk in private repo context)
+              # TODO: Parse TEST_CMD into array for fully safe execution
+              timeout 300 sh -c "set -e; $TEST_CMD" >> .review-pipeline/workspace/context/tests.txt 2>&1
               echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
             )
           else
