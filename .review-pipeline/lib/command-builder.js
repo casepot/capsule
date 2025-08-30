@@ -254,8 +254,13 @@ export default class CommandBuilder {
     // This is needed for code review operations
     args.push('-s');
     
+    // Use YOLO approval mode to auto-approve all tool actions
+    // This allows Gemini to execute files and run commands without interaction
+    args.push('--approval-mode=yolo');
+    
     // Optional flags
-    if (flags.yolo) {
+    if (flags.yolo !== false) {
+      // yolo flag is redundant with approval-mode=yolo but keep for compatibility
       args.push('-y');
     }
     if (flags.all_files) {
