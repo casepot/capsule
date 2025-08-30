@@ -24,6 +24,13 @@ jobs:
       REVIEW_PARALLEL: ${{ vars.REVIEW_PARALLEL }}        # Parallel execution
       GH_TOKEN: ${{ github.token }}                       # GitHub CLI token
     steps:
+      - name: Clean environment (self-hosted runner persistence)
+        run: |
+          # Self-hosted runners persist GITHUB_ENV between runs
+          # Clear any leftover ANTHROPIC tokens from previous workflow runs
+          echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
+          echo "ANTHROPIC_AUTH_TOKEN=" >> "$GITHUB_ENV"
+          
       - name: Checkout
         uses: actions/checkout@v4
         with:
