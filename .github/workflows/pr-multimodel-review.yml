@@ -250,7 +250,14 @@ jobs:
           
           # Verify reports were created for enabled providers
           for provider in $ENABLED_PROVIDERS; do
-            report_file="workspace/reports/${provider}-$([ "$provider" = "claude" ] && echo "code" || echo "cli").json"
+            # Map provider to report file suffix
+            case "$provider" in
+              claude) suffix="code" ;;
+              codex)  suffix="cli" ;;
+              gemini) suffix="cli" ;;
+              *)      suffix="cli" ;;
+            esac
+            report_file="workspace/reports/${provider}-${suffix}.json"
             if [ ! -f "$report_file" ]; then
               echo "::warning::Missing report: $report_file"
             fi

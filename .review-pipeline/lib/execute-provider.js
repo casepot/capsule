@@ -131,8 +131,13 @@ export default class ProviderExecutor {
         }
 
         try {
+          // Always save raw output (stdout and stderr) for debugging
+          const combinedOutput = stdout || stderr || 'No output received';
+          await this.saveRawOutput(cmd, combinedOutput);
+          
           // Process the output
           if (code === 0 || stdout.trim()) {
+            // Process and normalize the output
             await this.processOutput(cmd, stdout);
           } else {
             // Write error fallback
@@ -233,6 +238,46 @@ export default class ProviderExecutor {
         reject(error);
       });
     });
+  }
+
+  /**
+   * Save raw output to file for debugging/audit
+   */
+  async saveRawOutput(cmd, output) {
+    // Determine raw output filename based on the tool
+    const toolName = cmd.env.TOOL || 'unknown';
+    let rawFileName;
+    
+    switch (toolName) {
+      case 'claude-code':
+        rawFileName = 'claude-code.raw.txt';
+        break;
+      case 'codex-cli':
+        // Codex already has its own raw file handling
+        return;
+      case 'gemini-cli':
+        rawFileName = 'gemini-cli.raw.txt';
+        break;
+      default:
+        rawFileName = `${toolName}.raw.txt`;
+    }
+    
+    const rawDir = path.join(this.packageDir, 'workspace', 'reports', 'raw');
+    const rawPath = path.join(rawDir, rawFileName);
+    
+    try {
+      // Create raw directory if it doesn't exist
+      await fs.mkdir(rawDir, { recursive: true });
+      
+      // Save the raw output
+      await fs.writeFile(rawPath, output);
+      
+      if (this.verbose) {
+        console.error(`Raw output saved to ${rawPath} (${output.length} bytes)`);
+      }
+    } catch (error) {
+      console.error(`Failed to save raw output: ${error.message}`);
+    }
   }
 
   /**
