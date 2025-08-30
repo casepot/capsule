@@ -109,7 +109,8 @@ echo "Running tests..."
 if [ -n "$TEST_CMD" ]; then
   set +e
   echo "\$ $TEST_CMD" > "$PACKAGE_DIR/workspace/context/tests.txt"
-  timeout 300 bash -c "$TEST_CMD" >> "$PACKAGE_DIR/workspace/context/tests.txt" 2>&1
+  # Use sh -c to match workflow implementation (TODO: parse into array for safety)
+  timeout 300 sh -c "set -e; $TEST_CMD" >> "$PACKAGE_DIR/workspace/context/tests.txt" 2>&1
   TEST_EXIT_CODE=$?
   echo "== exit:$TEST_EXIT_CODE ==" >> "$PACKAGE_DIR/workspace/context/tests.txt"
   set -e

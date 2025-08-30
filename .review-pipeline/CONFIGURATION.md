@@ -417,6 +417,35 @@ Validation runs automatically during:
 - Local review (`review-local.sh`)
 - GitHub Actions workflow
 
+## Security Configuration
+
+### Important Security Note
+
+**IMPORTANT SECURITY NOTE**: For security reasons, `TEST_CMD` can ONLY be configured via repository variables (GitHub Actions secrets/variables), never from `.reviewrc.json` or other project configuration files. This prevents arbitrary code execution from untrusted PR code.
+
+### Security Context
+
+This pipeline is designed for use in a **private repository** with a **self-hosted runner on a trusted machine**. The security measures implemented are appropriate for this context:
+
+- **Authentication**: Uses OAuth/Keychain authentication (no API keys in environment)
+- **Test Execution**: Uses `sh -c` with repository variables only (not fully safe, but acceptable for private repos)
+- **Environment Sanitization**: Removes sensitive environment variables before provider execution
+- **Provider Isolation**: Uses spawn() instead of shell execution for provider commands
+
+### Public Repository Requirements
+
+If this pipeline is ever made public, additional security hardening is **required**:
+
+1. **Array-based execution**: Replace `sh -c "$TEST_CMD"` with parsed argv array
+2. **Provider whitelist**: Implement strict provider validation in command-builder.js
+3. **Path validation**: Use `path.relative` instead of `startsWith` for output paths
+4. **Sandbox Gemini**: Remove or isolate `--approval-mode=yolo` flag
+5. **Prompt injection**: Implement proper handling of `options.prompt`
+6. **Resource limits**: Add CPU, memory, and timeout constraints
+7. **Audit logging**: Track all provider executions for security review
+
+See `SECURITY_NOTES.md` for detailed security documentation.
+
 ## Best Practices
 
 ### 1. Use Project Configuration for Customization

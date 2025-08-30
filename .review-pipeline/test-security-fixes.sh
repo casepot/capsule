@@ -40,7 +40,8 @@ fi
 echo
 
 # Test 4: Verify workflow doesn't use bash -c for TEST_CMD
-echo "Test 4: Checking workflow for bash -c usage with TEST_CMD..."
+# Note: We check for absence of bash -c because we use sh -c instead (slightly safer)
+echo "Test 4: Checking workflow doesn't use bash -c with TEST_CMD..."
 if grep -q 'bash -c.*TEST_CMD' ../.github/workflows/pr-multimodel-review.yml; then
   echo "❌ FAIL: Workflow still uses bash -c with TEST_CMD"
   exit 1
@@ -113,6 +114,16 @@ if ([ -f "vitest.config.js" ] || [ -f "jest.config.js" ]) && [ -d "tests/unit" ]
   fi
 else
   echo "❌ FAIL: Testing infrastructure not found"
+  exit 1
+fi
+echo
+
+# Test 11: Verify workflow uses sh -c for TEST_CMD execution
+echo "Test 11: Checking workflow uses sh -c for TEST_CMD..."
+if grep -q 'sh -c.*TEST_CMD' ../.github/workflows/pr-multimodel-review.yml; then
+  echo "✅ PASS: Workflow uses sh -c for TEST_CMD execution"
+else
+  echo "❌ FAIL: Workflow doesn't use expected sh -c pattern"
   exit 1
 fi
 echo

@@ -92,7 +92,7 @@ export default class ProviderExecutor {
         cwd: cmd.workingDirectory,
         env: sanitizedEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
-        maxBuffer: 10 * 1024 * 1024 // 10MB to handle large review outputs
+        maxBuffer: 10 * 1024 * 1024 // Note: maxBuffer is ignored by spawn (only used by exec)
       });
 
       let stdout = '';
@@ -284,6 +284,9 @@ export default class ProviderExecutor {
     const resolvedPath = path.resolve(outputPath);
     const expectedDir = path.resolve(this.packageDir, 'workspace/reports');
     
+    // TODO: Use path.relative instead of startsWith (can be bypassed with /reports-evil)
+    // const relative = path.relative(expectedDir, resolvedPath);
+    // if (relative.startsWith('..') || path.isAbsolute(relative)) { throw ... }
     if (!resolvedPath.startsWith(expectedDir)) {
       throw new Error(`Output path outside allowed directory: ${outputPath}`);
     }

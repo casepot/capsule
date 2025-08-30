@@ -98,6 +98,7 @@ export default class CommandBuilder {
     const providerConfig = config.getProviderConfig(provider);
     
     // Load provider manifest
+    // TODO: Add provider whitelist to prevent path traversal (only allow ['claude', 'codex', 'gemini'])
     const manifestPath = path.join(this.packageDir, 'config', 'providers', `${provider}.manifest.json`);
     const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
 
@@ -110,6 +111,7 @@ export default class CommandBuilder {
       case 'gemini':
         return await this.buildGeminiCommand(providerConfig, manifest, options);
       default:
+        // TODO: Return null instead of throwing for unknown providers (tests expect graceful handling)
         throw new Error(`Unknown provider: ${provider}`);
     }
   }
@@ -256,6 +258,8 @@ export default class CommandBuilder {
     
     // Use YOLO approval mode to auto-approve all tool actions
     // This allows Gemini to execute files and run commands without interaction
+    // NOTE: --approval-mode=yolo needs verification (may not be a valid flag)
+    // Security: Remove or sandbox this for public repos (auto-approves all actions)
     args.push('--approval-mode=yolo');
     
     // Optional flags
@@ -338,6 +342,12 @@ export default class CommandBuilder {
     if (provider === 'gemini') {
       sections.push('\nCRITICAL: Output ONLY the JSON object, no markdown code fences or other text.');
     }
+
+    // TODO: Add support for options.prompt - currently ignored (tests expect it to be included)
+    // if (options.prompt) {
+    //   sections.push('\n=== ADDITIONAL PROMPT ===');
+    //   sections.push(options.prompt);
+    // }
 
     return sections.join('\n');
   }

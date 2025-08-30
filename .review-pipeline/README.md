@@ -15,10 +15,10 @@ For user documentation and setup instructions, see [REVIEW_PIPELINE.md](../REVIE
    - Schema validation using AJV
    - Environment variable mapping via `config/env.mapping.json`
 
-2. **Provider Orchestration** (`lib/generate-provider-command.js`)
+2. **Provider Orchestration** (`lib/command-builder.js` & `lib/execute-provider.js`)
    - Dynamic command generation from provider manifests
-   - Project criteria injection via `lib/criteria-builder.js`
-   - Automatic flag composition based on configuration
+   - Structured command building with security-focused design
+   - Spawn-based execution avoiding shell injection risks
 
 3. **Execution Pipeline** (`scripts/`)
    - Parallel provider execution with timeout management
@@ -42,8 +42,8 @@ node .review-pipeline/lib/config-loader.js validate
 # Show resolved configuration (merges all layers)
 node .review-pipeline/lib/config-loader.js show
 
-# Generate provider command (useful for debugging)
-node .review-pipeline/lib/generate-provider-command.js claude
+# Build provider command (useful for debugging)
+node -e "import('./lib/command-builder.js').then(m => new m.default().buildCommand('claude').then(console.log))"
 
 # Run single provider with custom timeout
 bash .review-pipeline/scripts/run-provider-review.sh claude 120

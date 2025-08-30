@@ -7,7 +7,7 @@ This document outlines security considerations and improvements made to the revi
 
 ### 1. Removed eval Command Execution (CRITICAL - FIXED)
 **Issue**: The workflow previously used `eval "$TEST_CMD"` which could allow shell injection even with repository-controlled variables.
-**Fix**: Changed to `bash -c "$TEST_CMD"` for safer execution (.github/workflows/pr-multimodel-review.yml:161)
+**Fix**: Changed to `sh -c "set -e; $TEST_CMD"` for safer execution (.github/workflows/pr-multimodel-review.yml:172)
 
 ### 2. Environment Variable Sanitization (FIXED)
 **Issue**: Sensitive environment variables could potentially leak to provider processes.
@@ -72,8 +72,28 @@ If a security issue is discovered:
 3. Rotate all potentially affected credentials
 4. Apply fixes and test thoroughly before re-enabling
 
+## Security Context
+
+This pipeline runs in a controlled environment:
+- Private repository with restricted access
+- Self-hosted runner on trusted machine  
+- Repository variables controlled by owner
+- OAuth authentication (no API keys in environment)
+
+### Future Public Repository Requirements
+
+If this pipeline is ever made public, the following MUST be addressed:
+1. Replace `sh -c "$TEST_CMD"` with array-based execution (parse command into argv array)
+2. Implement strict provider whitelist in command-builder.js (only allow known providers)
+3. Use path.relative for output path validation (current startsWith can be bypassed)
+4. Remove or sandbox Gemini's --approval-mode=yolo (auto-approves all actions)
+5. Implement proper prompt injection prevention (options.prompt currently ignored)
+6. Add resource limits and process isolation
+7. Implement audit logging for all provider executions
+
 ## Review History
 
 - 2025-08-30: Initial security review and fixes applied based on multi-model review feedback
 - Fixed critical eval vulnerability, added env sanitization, clarified TEST_CMD security
 - Removed deprecated shell command building in favor of structured execution
+- Added security context documentation for private repo assumptions
