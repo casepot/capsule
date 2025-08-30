@@ -202,6 +202,27 @@ describe('Security Integration Tests', () => {
     fs.setFile(codexPromptPath, 'Codex specific prompt');
     fs.setFile(geminiPromptPath, 'Gemini specific prompt');
     
+    // Add provider manifest files to the mock fileStore
+    const claudeManifestPath = path.join(packageDir, 'config', 'providers', 'claude.manifest.json');
+    const codexManifestPath = path.join(packageDir, 'config', 'providers', 'codex.manifest.json');
+    const geminiManifestPath = path.join(packageDir, 'config', 'providers', 'gemini.manifest.json');
+    
+    fs.setFile(claudeManifestPath, JSON.stringify({
+      id: 'claude',
+      name: 'Claude Code',
+      cli: { command: 'claude' }
+    }));
+    fs.setFile(codexManifestPath, JSON.stringify({
+      id: 'codex',
+      name: 'Codex',
+      cli: { command: 'codex' }
+    }));
+    fs.setFile(geminiManifestPath, JSON.stringify({
+      id: 'gemini',
+      name: 'Gemini',
+      cli: { command: 'gemini' }
+    }));
+    
     // Import after mocks are set up
     CommandBuilder = (await import('../../lib/command-builder.js')).default;
     ProviderExecutor = (await import('../../lib/execute-provider.js')).default;
@@ -287,14 +308,13 @@ describe('Security Integration Tests', () => {
           expect(command.stdin).toContain(maliciousPrompt);
         } else if (command.args) {
           // Should be in args array as a single element
-          // TODO: buildPrompt currently ignores options.prompt, so this test fails
-          // The malicious content never makes it into the command
-          // Once buildPrompt is fixed to include options.prompt, this test should pass
+          // options.prompt is now included in the prompt, so malicious content
+          // would be passed as data (not executed as commands)
           const promptInArgs = command.args.some(arg => 
             typeof arg === 'string' && arg.includes('rm -rf')
           );
-          // Currently expecting false since buildPrompt ignores options.prompt
-          expect(promptInArgs).toBe(false);
+          // Expecting true since buildPrompt now includes options.prompt
+          expect(promptInArgs).toBe(true);
         }
       }
     });

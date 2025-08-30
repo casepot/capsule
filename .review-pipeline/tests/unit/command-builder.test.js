@@ -175,12 +175,12 @@ describe('CommandBuilder', () => {
       expect(command).toBeNull();
     });
 
-    it('should throw error for unknown provider', async () => {
+    it('should return null for unknown provider', async () => {
       commandBuilder.configLoader.isProviderEnabled.mockReturnValueOnce(true);
       
-      // Implementation throws ENOENT when manifest file doesn't exist
-      await expect(commandBuilder.buildCommand('unknown', {}))
-        .rejects.toThrow('ENOENT');
+      // Implementation now returns null for unknown providers (graceful handling)
+      const command = await commandBuilder.buildCommand('unknown', {});
+      expect(command).toBeNull();
     });
   });
 
@@ -227,7 +227,8 @@ describe('CommandBuilder', () => {
       expect(command.command).toBe('gemini');
       expect(command.args).toContain('-p');
       expect(command.args).toContain('-s');
-      expect(command.args).toContain('--approval-mode=yolo');
+      // No longer forcing --approval-mode=yolo (respects configuration)
+      expect(command.args).not.toContain('--approval-mode=yolo');
       expect(command.stdin).toBeDefined();
       expect(command.env.TOOL).toBe('gemini-cli');
     });

@@ -284,10 +284,9 @@ export default class ProviderExecutor {
     const resolvedPath = path.resolve(outputPath);
     const expectedDir = path.resolve(this.packageDir, 'workspace/reports');
     
-    // TODO: Use path.relative instead of startsWith (can be bypassed with /reports-evil)
-    // const relative = path.relative(expectedDir, resolvedPath);
-    // if (relative.startsWith('..') || path.isAbsolute(relative)) { throw ... }
-    if (!resolvedPath.startsWith(expectedDir)) {
+    // Use path.relative for secure validation
+    const relative = path.relative(expectedDir, resolvedPath);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
       throw new Error(`Output path outside allowed directory: ${outputPath}`);
     }
     

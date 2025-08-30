@@ -97,8 +97,16 @@ export default class CommandBuilder {
     // Get provider configuration with all overrides applied
     const providerConfig = config.getProviderConfig(provider);
     
+    // Validate provider against whitelist to prevent path traversal
+    const ALLOWED_PROVIDERS = ['claude', 'codex', 'gemini'];
+    if (!ALLOWED_PROVIDERS.includes(provider)) {
+      if (this.verbose) {
+        console.error(`Unknown provider: ${provider}`);
+      }
+      return null;
+    }
+    
     // Load provider manifest
-    // TODO: Add provider whitelist to prevent path traversal (only allow ['claude', 'codex', 'gemini'])
     const manifestPath = path.join(this.packageDir, 'config', 'providers', `${provider}.manifest.json`);
     const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
 
@@ -111,8 +119,11 @@ export default class CommandBuilder {
       case 'gemini':
         return await this.buildGeminiCommand(providerConfig, manifest, options);
       default:
-        // TODO: Return null instead of throwing for unknown providers (tests expect graceful handling)
-        throw new Error(`Unknown provider: ${provider}`);
+        // Return null for unknown providers (graceful handling)
+        if (this.verbose) {
+          console.error(`Unknown provider: ${provider}`);
+        }
+        return null;
     }
   }
 
@@ -252,19 +263,13 @@ export default class CommandBuilder {
     // Non-interactive prompt mode (prompt via stdin)
     args.push('-p');
     
-    // Enable sandbox mode by default for Gemini to allow tool use
-    // This is needed for code review operations
-    args.push('-s');
+    // Enable sandbox mode if not explicitly disabled
+    if (flags.sandbox !== false) {
+      args.push('-s');
+    }
     
-    // Use YOLO approval mode to auto-approve all tool actions
-    // This allows Gemini to execute files and run commands without interaction
-    // NOTE: --approval-mode=yolo needs verification (may not be a valid flag)
-    // Security: Remove or sandbox this for public repos (auto-approves all actions)
-    args.push('--approval-mode=yolo');
-    
-    // Optional flags
-    if (flags.yolo !== false) {
-      // yolo flag is redundant with approval-mode=yolo but keep for compatibility
+    // Only enable YOLO mode if explicitly configured
+    if (flags.yolo === true) {
       args.push('-y');
     }
     if (flags.all_files) {
@@ -343,11 +348,12 @@ export default class CommandBuilder {
       sections.push('\nCRITICAL: Output ONLY the JSON object, no markdown code fences or other text.');
     }
 
-    // TODO: Add support for options.prompt - currently ignored (tests expect it to be included)
-    // if (options.prompt) {
-    //   sections.push('\n=== ADDITIONAL PROMPT ===');
-    //   sections.push(options.prompt);
-    // }
+    // Add support for additional prompt from options
+    if (options.prompt) {
+      sections.push('\n=== ADDITIONAL PROMPT ===');
+      sections.push(options.prompt);
+      sections.push('=== END ADDITIONAL PROMPT ===\n');
+    }
 
     return sections.join('\n');
   }

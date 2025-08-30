@@ -112,7 +112,7 @@ jobs:
       - name: Run review pipeline tests
         run: |
           cd .review-pipeline
-          npm test || echo "::warning::Review pipeline tests failed but continuing"
+          npm test
 
       - name: Build review context
         shell: bash
