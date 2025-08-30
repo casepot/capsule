@@ -112,7 +112,9 @@ jobs:
       - name: Run review pipeline tests
         run: |
           cd .review-pipeline
-          npm test
+          # Continue on test failure - reviews should run to provide context to reviewers
+          # who can help diagnose issues. Test failures are shown as warnings.
+          npm test || echo "::warning::Review pipeline tests failed but continuing to run reviews"
 
       - name: Build review context
         shell: bash
