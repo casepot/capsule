@@ -102,17 +102,17 @@ else
 fi
 echo
 
-# Test 10: Verify Jest tests exist
+# Test 10: Verify test infrastructure exists
 echo "Test 10: Checking for JavaScript test infrastructure..."
-if [ -f "jest.config.js" ] && [ -d "tests/unit" ] && [ -f "package.json" ]; then
+if ([ -f "vitest.config.js" ] || [ -f "jest.config.js" ]) && [ -d "tests/unit" ] && [ -f "package.json" ]; then
   if grep -q '"test":' package.json; then
-    echo "✅ PASS: Jest testing infrastructure is set up"
+    echo "✅ PASS: Testing infrastructure is set up"
   else
-    echo "❌ FAIL: Jest test script not found in package.json"
+    echo "❌ FAIL: Test script not found in package.json"
     exit 1
   fi
 else
-  echo "❌ FAIL: Jest testing infrastructure not found"
+  echo "❌ FAIL: Testing infrastructure not found"
   exit 1
 fi
 echo
