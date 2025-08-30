@@ -198,11 +198,8 @@ check_provider_auth() {
   case "$provider" in
     claude)
       # Hardcoded auth check for Claude
-      # Try with output-format flag for better CI compatibility
-      if claude -p 'echo test' --output-format text 2>/dev/null; then
-        auth_success=true
-      elif claude -p 'echo test' 2>&1 | grep -q "test"; then
-        # Fallback: check if command succeeds even with error messages
+      # Temporarily unset GitHub tokens that might trigger OAuth mode
+      if (unset GH_TOKEN GITHUB_TOKEN GITHUB_ACTIONS; claude -p 'echo test' 2>/dev/null); then
         auth_success=true
       fi
       ;;
