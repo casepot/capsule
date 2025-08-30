@@ -200,14 +200,23 @@ describe('ConfigLoader', () => {
 
   describe('getTestCommand', () => {
     it('should get test command from environment only', () => {
+      // Save original value
+      const originalTestCmd = process.env.TEST_CMD;
+      
       // Without environment variable
+      delete process.env.TEST_CMD;
       expect(configLoader.getTestCommand()).toBe('');
       
       // With environment variable
       process.env.TEST_CMD = 'npm test';
       expect(configLoader.getTestCommand()).toBe('npm test');
       
-      delete process.env.TEST_CMD;
+      // Restore original value
+      if (originalTestCmd !== undefined) {
+        process.env.TEST_CMD = originalTestCmd;
+      } else {
+        delete process.env.TEST_CMD;
+      }
     });
   });
 });

@@ -319,7 +319,7 @@ describe('ProviderExecutor', () => {
       mockProcess.emit('exit', null, 'SIGTERM');
       
       // Should have timed out
-      await expect(executePromise).rejects.toThrow('timeout');
+      await expect(executePromise).rejects.toThrow('Command timed out');
     });
 
     it('should handle dry-run mode', async () => {

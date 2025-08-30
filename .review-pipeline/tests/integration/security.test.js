@@ -191,6 +191,17 @@ describe('Security Integration Tests', () => {
       }
     }));
     
+    // Add prompt files to the mock fileStore
+    const corePromptPath = path.join(packageDir, 'prompts', 'review.core.md');
+    const claudePromptPath = path.join(packageDir, 'prompts', 'review.claude.md');
+    const codexPromptPath = path.join(packageDir, 'prompts', 'review.codex.md');
+    const geminiPromptPath = path.join(packageDir, 'prompts', 'review.gemini.md');
+    
+    fs.setFile(corePromptPath, 'Core review prompt for testing');
+    fs.setFile(claudePromptPath, 'Claude specific prompt');
+    fs.setFile(codexPromptPath, 'Codex specific prompt');
+    fs.setFile(geminiPromptPath, 'Gemini specific prompt');
+    
     // Import after mocks are set up
     CommandBuilder = (await import('../../lib/command-builder.js')).default;
     ProviderExecutor = (await import('../../lib/execute-provider.js')).default;
