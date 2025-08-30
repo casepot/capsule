@@ -213,7 +213,6 @@ test_results/
 # Review Pipeline
 .review-pipeline/node_modules/
 .review-pipeline/workspace/
-.review-pipeline/package-lock.json
 
 # Python virtual environment
 .venv/

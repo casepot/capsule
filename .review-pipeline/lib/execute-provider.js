@@ -72,9 +72,25 @@ export default class ProviderExecutor {
       ).filter(arg => arg !== 'STDIN_CONTENT');
 
       // Spawn the process with large buffer for output (10MB)
+      // Sanitize environment variables (defense-in-depth)
+      // Shell scripts also do this, but we add an extra layer here
+      const sanitizedEnv = { ...cmd.env };
+      const sensitiveKeys = [
+        'GH_TOKEN', 
+        'GITHUB_TOKEN', 
+        'ANTHROPIC_API_KEY', 
+        'OPENAI_API_KEY', 
+        'GEMINI_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN'
+      ];
+      
+      for (const key of sensitiveKeys) {
+        delete sanitizedEnv[key];
+      }
+      
       const proc = spawn(cmd.command, args, {
         cwd: cmd.workingDirectory,
-        env: cmd.env,
+        env: sanitizedEnv,
         stdio: ['pipe', 'pipe', 'pipe'],
         maxBuffer: 10 * 1024 * 1024 // 10MB to handle large review outputs
       });
@@ -171,9 +187,24 @@ export default class ProviderExecutor {
   async executeCodex(cmd) {
     // Codex needs the prompt as an argument, not stdin
     return new Promise((resolve, reject) => {
+      // Apply same environment sanitization
+      const sanitizedEnv = { ...cmd.env };
+      const sensitiveKeys = [
+        'GH_TOKEN', 
+        'GITHUB_TOKEN', 
+        'ANTHROPIC_API_KEY', 
+        'OPENAI_API_KEY', 
+        'GEMINI_API_KEY',
+        'ANTHROPIC_AUTH_TOKEN'
+      ];
+      
+      for (const key of sensitiveKeys) {
+        delete sanitizedEnv[key];
+      }
+      
       const proc = spawn(cmd.command, cmd.args, {
         cwd: cmd.workingDirectory,
-        env: cmd.env,
+        env: sanitizedEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         maxBuffer: 10 * 1024 * 1024 // 10MB to handle large review outputs
       });

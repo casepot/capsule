@@ -1,0 +1,155 @@
+{
+  "timestamp": "2025-08-30T00:00:00Z",
+  "pr": {
+    "repo": "capsule",
+    "number": 5,
+    "head_sha": "6417b0b4eee6c1ce5078e5c72785961f4253c1d9",
+    "branch": "review-pipeline-config-refinement",
+    "link": "https://github.com/casepot/capsule/pull/5"
+  },
+  "summary": "Major configuration refactoring that improves security by preventing code injection via TEST_CMD. However, introduces a critical vulnerability through eval command execution. Raw output preservation and artifact enhancements are beneficial, but security fix incomplete.",
+  "assumptions": [
+    {
+      "text": "TEST_CMD is only sourced from repository variables, never from .reviewrc.json",
+      "status": "validated",
+      "evidence": [
+        "file:.review-pipeline/lib/config-loader.js lines:268-270",
+        "file:.github/workflows/pr-multimodel-review.yml lines:174-176"
+      ],
+      "falsification_step": "N/A - Confirmed by code inspection"
+    },
+    {
+      "text": "The eval command in workflow line 186 is safe because TEST_CMD is controlled",
+      "status": "falsified",
+      "evidence": [
+        "file:.github/workflows/pr-multimodel-review.yml lines:176"
+      ],
+      "falsification_step": "TEST_CMD can contain semicolons and command chains that eval will execute"
+    },
+    {
+      "text": "Raw output files are properly cleaned up after processing",
+      "status": "uncertain",
+      "evidence": [
+        "file:.review-pipeline/lib/execute-provider.js lines:309-311"
+      ],
+      "falsification_step": "Check if raw files accumulate in workspace/reports/raw/ directory over multiple runs"
+    }
+  ],
+  "findings": [
+    {
+      "category": "security",
+      "severity": "critical",
+      "file": ".github/workflows/pr-multimodel-review.yml",
+      "lines": "186",
+      "message": "Using eval to execute TEST_CMD allows command injection. Even though TEST_CMD comes from repository variables, it can contain shell metacharacters that eval will interpret, allowing arbitrary command execution.",
+      "suggestion": "Replace 'eval \"$TEST_CMD\"' with direct execution: '$TEST_CMD' or use an array to safely execute: bash -c \"$TEST_CMD\" with proper escaping",
+      "evidence": [
+        "file:.github/workflows/pr-multimodel-review.yml lines:186",
+        "file:.review-pipeline/test-security-fixes.sh lines:74-81"
+      ],
+      "must_fix": true
+    },
+    {
+      "category": "correctness",
+      "severity": "high",
+      "file": ".review-pipeline/lib/execute-provider.js",
+      "lines": "75-77",
+      "message": "spawn() is called with potentially unbounded stdout/stderr buffer sizes. If a provider produces excessive output (>10MB), this could cause memory issues or crashes.",
+      "suggestion": "Implement streaming output handling or use the 'maxBuffer' option with reasonable limits and handle ENOBUFS errors gracefully",
+      "evidence": [
+        "file:.review-pipeline/lib/execute-provider.js lines:75-79"
+      ],
+      "must_fix": false
+    },
+    {
+      "category": "security",
+      "severity": "medium",
+      "file": ".github/workflows/pr-multimodel-review.yml",
+      "lines": "29-32",
+      "message": "Environment cleanup for ANTHROPIC tokens happens too late. These should be cleared immediately at job start before any other steps.",
+      "suggestion": "Move the environment cleanup to the very first step of the job, before checkout",
+      "evidence": [
+        "file:.github/workflows/pr-multimodel-review.yml lines:27-32"
+      ],
+      "must_fix": false
+    },
+    {
+      "category": "maintainability",
+      "severity": "medium",
+      "file": ".review-pipeline/config/pipeline.config.json",
+      "lines": "7",
+      "message": "Default timeout of 1500 seconds (25 minutes) is excessive for most PR reviews and will slow down CI/CD pipelines unnecessarily.",
+      "suggestion": "Reduce default timeout to 300-600 seconds and allow per-provider overrides for slower models",
+      "evidence": [
+        "file:.review-pipeline/config/pipeline.config.json lines:7"
+      ],
+      "must_fix": false
+    },
+    {
+      "category": "correctness",
+      "severity": "low",
+      "file": ".review-pipeline/lib/config-loader.js",
+      "lines": "401",
+      "message": "getMinimalDefaults() includes a hardcoded 'pytest tests/' command which won't work for non-Python projects.",
+      "suggestion": "Remove the default test command or make it empty string to avoid confusion",
+      "evidence": [
+        "file:.review-pipeline/lib/config-loader.js lines:400"
+      ],
+      "must_fix": false
+    },
+    {
+      "category": "performance",
+      "severity": "low",
+      "file": ".github/workflows/pr-multimodel-review.yml",
+      "lines": "331-345",
+      "message": "Adding raw outputs to PR comments can make comments very large (3000 chars per provider). This impacts readability and GitHub API limits.",
+      "suggestion": "Consider linking to artifacts instead of embedding raw output, or reduce to 500-1000 chars",
+      "evidence": [
+        "file:.github/workflows/pr-multimodel-review.yml lines:336"
+      ],
+      "must_fix": false
+    },
+    {
+      "category": "docs",
+      "severity": "low",
+      "file": ".review-pipeline/CONFIGURATION.md",
+      "lines": "268-270",
+      "message": "Documentation states TEST_CMD can be loaded from project config but code explicitly prevents this for security. Documentation is misleading.",
+      "suggestion": "Update documentation to clearly state TEST_CMD must only come from repository variables for security reasons",
+      "evidence": [
+        "file:.review-pipeline/CONFIGURATION.md lines:341-344",
+        "file:.review-pipeline/lib/config-loader.js lines:268-270"
+      ],
+      "must_fix": false
+    }
+  ],
+  "tests": {
+    "executed": false,
+    "command": null,
+    "exit_code": null,
+    "summary": "No tests were executed (TEST_CMD not configured in repository variables)",
+    "coverage": null
+  },
+  "metrics": {
+    "files_modified": 59,
+    "lines_added": 7000,
+    "lines_removed": 500,
+    "complexity_increase": "high"
+  },
+  "evidence": [
+    "Major configuration system overhaul replacing hardcoded values with layered config",
+    "New secure command execution via Node.js spawn() instead of shell evaluation",
+    "Added provider manifests for self-documenting capabilities",
+    "Implemented project-specific review criteria support",
+    "Raw output preservation for debugging and PR comments"
+  ],
+  "exit_criteria": {
+    "ready_for_pr": false,
+    "reasons": [
+      "Critical security vulnerability: eval command execution allows shell injection despite TEST_CMD restrictions",
+      "Security test in test-security-fixes.sh validates eval usage but this is actually unsafe"
+    ]
+  },
+  "tool": "claude-code",
+  "model": "opus"
+}

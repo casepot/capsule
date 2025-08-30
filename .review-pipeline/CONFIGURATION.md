@@ -69,9 +69,9 @@ Optional project-specific configuration that overrides pipeline defaults:
   },
   
   "testing": {
-    "command": "npm test",        // Override test command
-    "timeout_seconds": 600,
-    "coverage_threshold": 0.80
+    // SECURITY: "command" field is IGNORED - TEST_CMD must come from repository variables only
+    "timeout_seconds": 600,        // Timeout for test execution
+    "coverage_threshold": 0.80    // Coverage threshold for gating
   },
   
   "review_overrides": {
@@ -335,19 +335,23 @@ export REVIEW_TIMEOUT=300
 
 ### 4. Custom Test Command
 
+**IMPORTANT SECURITY NOTE**: For security reasons, `TEST_CMD` can ONLY be configured via repository variables (GitHub Actions secrets/variables), never from `.reviewrc.json` or other project configuration files. This prevents arbitrary code execution from untrusted PR code.
+
+To configure tests, set repository variables in GitHub:
+```yaml
+# In GitHub repository settings → Secrets and variables → Actions → Variables
+TEST_CMD="make test"         # Required: The test command to run
+TEST_TIMEOUT=600             # Optional: Timeout in seconds (default: 300)
+```
+
+In `.reviewrc.json`, you can only configure timeout (command will be ignored):
 ```json
 {
   "testing": {
-    "command": "make test",
-    "timeout_seconds": 600
+    // "command" field is IGNORED for security - use repository variables instead
+    "timeout_seconds": 600   // Only timeout can be configured in project files
   }
 }
-```
-
-Or via environment:
-```bash
-export TEST_CMD="make test"
-export TEST_TIMEOUT=600
 ```
 
 ### 5. Strict Gating Rules
@@ -424,7 +428,8 @@ Instead of modifying pipeline.config.json directly, create a `.reviewrc.json` in
 cat > .reviewrc.json << EOF
 {
   "testing": {
-    "command": "npm test"
+    // Note: "command" is ignored - TEST_CMD must be set via repository variables
+    "timeout_seconds": 300
   },
   "review_overrides": {
     "providers": {

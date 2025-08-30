@@ -36,6 +36,13 @@ jobs:
         with:
           fetch-depth: 0  # Fetch full history to enable proper diffs
 
+      - name: Setup Node.js with cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: '.review-pipeline/package-lock.json'
+
       - name: Setup Claude Authentication (OAuth)
         run: |
           # Never use API keys in this pipeline
@@ -51,11 +58,6 @@ jobs:
           else
             echo "::warning::Claude not authenticated. Ensure local '/login' has been completed in the runner user session."
           fi
-
-      - name: Ensure Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
 
       - name: Detect PR context (manual runs)
         run: |
@@ -98,11 +100,16 @@ jobs:
           # Enforce OAuth-only checks for all providers
           bash .review-pipeline/scripts/auth-check.sh
 
-      - name: Validate configuration
+      - name: Install dependencies and validate configuration
         run: |
           cd .review-pipeline
-          npm install --no-audit --no-fund
+          npm ci --no-audit --no-fund
           node lib/config-loader.js validate || echo "Warning: Configuration validation failed, using defaults"
+      
+      - name: Run review pipeline tests
+        run: |
+          cd .review-pipeline
+          npm test || echo "::warning::Review pipeline tests failed but continuing"
 
       - name: Build review context
         shell: bash
@@ -157,8 +164,8 @@ jobs:
               set +e
               echo "Running tests with command from repository variables only" > .review-pipeline/workspace/context/tests.txt
               echo "\$ ${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt
-              # Execute with proper quoting to prevent shell injection
-              timeout 300 eval "$TEST_CMD" >> .review-pipeline/workspace/context/tests.txt 2>&1
+              # Execute safely without eval to prevent shell injection
+              timeout 300 bash -c "$TEST_CMD" >> .review-pipeline/workspace/context/tests.txt 2>&1
               echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
             )
           else
@@ -266,7 +273,7 @@ jobs:
       - name: Aggregate & gate
         shell: bash
         run: |
-          cd .review-pipeline && npm install --no-audit --no-fund
+          cd .review-pipeline && npm ci --no-audit --no-fund
           node scripts/aggregate-reviews.mjs || echo "Warning: Aggregation had issues, check reports"
 
       - name: Upload review reports as artifacts

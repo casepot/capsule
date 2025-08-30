@@ -78,13 +78,20 @@ for (const [tool, file] of Object.entries(mustFiles)) {
     
     // Try validation after fixes
     if (!validate(json)) {
-      // Log validation errors but still try to use the report
-      errors.push(`Schema warnings for ${tool}: ${ajv.errorsText(validate.errors, { separator: '\n- ' })}`);
-      // Only skip if critical fields are truly missing
+      // Log validation errors as warnings
+      const validationErrors = ajv.errorsText(validate.errors, { separator: '\n- ' });
+      errors.push(`Schema validation failed for ${tool}:\n- ${validationErrors}`);
+      
+      // Check if we have minimum required fields to proceed
       if (!json.findings && !json.summary) {
-        errors.push(`Skipping ${tool}: No usable content (no findings or summary)`);
+        errors.push(`CRITICAL: Skipping ${tool} - No usable content (missing both findings and summary)`);
+        reportStatus[tool] = 'skipped-invalid';
         continue;
       }
+      
+      // Mark as having validation issues but still usable
+      reportStatus[tool] = 'parsed-with-warnings';
+      json._validation_warnings = validationErrors;
     }
     results.push(json);
   } catch (e) {

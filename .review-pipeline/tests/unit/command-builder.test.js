@@ -191,35 +191,57 @@ describe('CommandBuilder', () => {
     });
   });
 
-  describe('loadProviderManifest', () => {
-    it('should load and parse provider manifest', async () => {
+  describe('buildCommand', () => {
+    it('should build a structured command for a provider', async () => {
       const mockManifest = {
         id: 'claude',
         name: 'Claude Code',
         cli: {
-          command: 'claude'
+          command: 'claude',
+          arguments: ['code']
         }
       };
       
-      fs.readFile.mockResolvedValueOnce(JSON.stringify(mockManifest));
+      // Mock the manifest file read
+      fs.readFile.mockImplementation((path) => {
+        if (path.includes('claude.manifest.json')) {
+          return Promise.resolve(JSON.stringify(mockManifest));
+        }
+        if (path.includes('pipeline.config.json')) {
+          return Promise.resolve(JSON.stringify({
+            providers: { enabled: ['claude'] }
+          }));
+        }
+        return Promise.reject(new Error('File not found'));
+      });
       
-      const manifest = await commandBuilder.loadProviderManifest('claude');
+      const command = await commandBuilder.buildCommand('claude');
       
-      expect(manifest).toEqual(mockManifest);
+      expect(command).toBeDefined();
+      expect(command.command).toBeDefined();
+      expect(command.arguments).toBeInstanceOf(Array);
+      expect(command.env).toBeDefined();
     });
 
-    it('should handle invalid JSON in manifest', async () => {
-      fs.readFile.mockResolvedValueOnce('invalid json');
+    it('should return null for disabled providers', async () => {
+      fs.readFile.mockImplementation((path) => {
+        if (path.includes('pipeline.config.json')) {
+          return Promise.resolve(JSON.stringify({
+            providers: { enabled: [] }
+          }));
+        }
+        return Promise.reject(new Error('File not found'));
+      });
       
-      await expect(commandBuilder.loadProviderManifest('claude'))
-        .rejects.toThrow();
+      const command = await commandBuilder.buildCommand('disabled-provider');
+      expect(command).toBeNull();
     });
 
-    it('should handle missing manifest file', async () => {
-      fs.readFile.mockRejectedValueOnce(new Error('ENOENT'));
+    it('should handle missing provider manifest gracefully', async () => {
+      fs.readFile.mockRejectedValue(new Error('ENOENT'));
       
-      await expect(commandBuilder.loadProviderManifest('nonexistent'))
-        .rejects.toThrow();
+      const command = await commandBuilder.buildCommand('nonexistent');
+      expect(command).toBeNull();
     });
   });
 

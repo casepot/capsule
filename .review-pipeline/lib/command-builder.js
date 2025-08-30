@@ -354,55 +354,6 @@ export default class CommandBuilder {
     }
   }
 
-  /**
-   * Build a shell command string (for backward compatibility)
-   * WARNING: This is less secure than structured commands
-   */
-  async buildShellCommand(provider, options = {}) {
-    const cmd = await this.buildCommand(provider, options);
-    if (!cmd) return null;
-
-    // This is for backward compatibility only
-    // New code should use structured commands
-    const parts = [];
-    
-    // Environment variables
-    for (const [key, value] of Object.entries(cmd.env)) {
-      if (key !== 'PATH' && !key.startsWith('npm_')) {
-        parts.push(`${key}="${value}"`);
-      }
-    }
-
-    // Handle stdin if present
-    if (cmd.stdin) {
-      parts.push(`echo '${cmd.stdin.replace(/'/g, "'\\''")}'`);
-      parts.push('|');
-    }
-
-    // Command and arguments
-    parts.push(cmd.command);
-    
-    // Special handling for arguments
-    for (const arg of cmd.args) {
-      if (arg === 'STDIN_CONTENT' && cmd.stdin) {
-        // Skip placeholder
-        continue;
-      }
-      // Quote arguments that contain spaces
-      if (arg.includes(' ')) {
-        parts.push(`"${arg}"`);
-      } else {
-        parts.push(arg);
-      }
-    }
-
-    // Output redirection
-    if (cmd.outputFile) {
-      parts.push('>', cmd.outputFile);
-    }
-
-    return parts.join(' ');
-  }
 }
 
 // Allow direct execution for testing/compatibility
@@ -415,13 +366,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 
   const builder = new CommandBuilder({ verbose: process.argv.includes('--verbose') });
   
-  if (process.argv.includes('--structured')) {
-    // Output structured command (JSON)
-    const cmd = await builder.buildCommand(provider);
-    console.log(JSON.stringify(cmd, null, 2));
-  } else {
-    // Output shell command (backward compatibility)
-    const cmd = await builder.buildShellCommand(provider);
-    console.log(cmd);
-  }
+  // Always output structured command (JSON)
+  const cmd = await builder.buildCommand(provider);
+  console.log(JSON.stringify(cmd, null, 2));
 }
