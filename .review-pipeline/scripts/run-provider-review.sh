@@ -21,8 +21,11 @@ if [[ "$PROVIDER" == "claude" ]] && [ -x "$HOME/.claude/local/claude" ]; then
 fi
 
 # Unset sensitive environment variables before running providers
+# Claude must use local Keychain auth, not API tokens
 unset GH_TOKEN
 unset GITHUB_TOKEN
+unset ANTHROPIC_API_KEY
+unset ANTHROPIC_AUTH_TOKEN
 
 # Hint tool name to normalizer via env
 case "$PROVIDER" in

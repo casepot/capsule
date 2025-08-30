@@ -33,6 +33,7 @@ jobs:
         run: |
           # Never use API keys in this pipeline
           unset ANTHROPIC_API_KEY
+          unset ANTHROPIC_AUTH_TOKEN
           # Ensure Claude Code is in PATH if installed in non-standard location
           if [ -x "$HOME/.claude/local/claude" ]; then
             export PATH="$HOME/.claude/local:$PATH"
@@ -80,6 +81,9 @@ jobs:
 
       - name: Guardrails (auth + no API keys + CLIs present)
         run: |
+          # Never use API keys - must use local Keychain auth
+          unset ANTHROPIC_API_KEY
+          unset ANTHROPIC_AUTH_TOKEN
           # Ensure Claude Code is in PATH if installed in non-standard location
           if [ -x "$HOME/.claude/local/claude" ]; then
             export PATH="$HOME/.claude/local:$PATH"

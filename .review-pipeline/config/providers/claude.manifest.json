@@ -26,7 +26,7 @@
     "no_api_key": true,
     "login_command": "claude",
     "auth_check_command": "claude -p 'echo test' 2>/dev/null",
-    "env_vars_to_unset": ["ANTHROPIC_API_KEY"]
+    "env_vars_to_unset": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]
   },
   "models": [
     {

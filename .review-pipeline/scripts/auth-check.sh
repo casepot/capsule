@@ -198,8 +198,8 @@ check_provider_auth() {
   case "$provider" in
     claude)
       # Hardcoded auth check for Claude
-      # Temporarily unset GitHub tokens that might trigger OAuth mode
-      if (unset GH_TOKEN GITHUB_TOKEN GITHUB_ACTIONS; claude -p 'echo test' 2>/dev/null); then
+      # Must unset all tokens to force local Keychain auth
+      if (unset GH_TOKEN GITHUB_TOKEN GITHUB_ACTIONS ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; claude -p 'echo test' 2>/dev/null); then
         auth_success=true
       fi
       ;;
