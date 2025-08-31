@@ -61,12 +61,11 @@ jobs:
             echo "No PR found for branch ${{ github.ref_name }}"
           fi
 
-      - name: Setup Node.js with cache
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: '**/package-lock.json'
+          # No cache needed - only installing global npm package
 
       - name: Install review pipeline
         run: |
