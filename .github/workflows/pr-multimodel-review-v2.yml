@@ -1,0 +1,150 @@
+name: PR Multi-Model Review v2
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: self-hosted
+    timeout-minutes: 45
+    if: github.event.pull_request.draft == false
+    env:
+      # Environment variable overrides (mapped via env.mapping.json)
+      TEST_CMD: ${{ vars.TEST_CMD }}                      # Testing command
+      REVIEW_TIMEOUT: ${{ vars.REVIEW_TIMEOUT }}          # Global timeout
+      CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}              # Claude model override
+      CODEX_REASONING: ${{ vars.CODEX_REASONING }}        # Codex reasoning level
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}              # Gemini model override
+      REVIEW_PARALLEL: ${{ vars.REVIEW_PARALLEL }}        # Parallel execution
+      GH_TOKEN: ${{ github.token }}                       # GitHub CLI token
+    steps:
+      - name: Clean environment (self-hosted runner persistence)
+        run: |
+          # Self-hosted runners persist GITHUB_ENV between runs
+          # Clear any leftover ANTHROPIC tokens from previous workflow runs
+          echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
+          echo "ANTHROPIC_AUTH_TOKEN=" >> "$GITHUB_ENV"
+          
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history to enable proper diffs
+
+      - name: Setup Node.js with cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: '**/package-lock.json'
+
+      - name: Install review pipeline
+        run: |
+          # Install the review pipeline package globally
+          npm install -g @multi-model/review-pipeline@latest || \
+          npm install -g https://github.com/casepot/multi-model-review-pipeline.git
+
+      - name: Setup Claude Authentication (OAuth)
+        run: |
+          # Never use API keys in this pipeline
+          unset ANTHROPIC_API_KEY
+          unset ANTHROPIC_AUTH_TOKEN
+          # Ensure Claude Code wrapper is in PATH for CI
+          if [ -x "$HOME/github-runner-capsule/claude" ]; then
+            export PATH="$HOME/github-runner-capsule:$PATH"
+          elif [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          # Quick probe: rely on local OAuth (Keychain)
+          if claude -p "echo test" --output-format text >/dev/null 2>&1; then
+            echo "✓ Claude OAuth available via Keychain"
+          else
+            echo "::warning::Claude not authenticated. Ensure local '/login' has been completed in the runner user session."
+          fi
+
+      - name: Check provider authentication
+        run: |
+          # Ensure wrapper is in PATH
+          export PATH="$HOME/github-runner-capsule:$PATH"
+          # Run auth check
+          review-pipeline auth-check || echo "::warning::Some providers may not be authenticated"
+
+      - name: Run multi-model review
+        id: review
+        run: |
+          # Ensure wrapper is in PATH
+          export PATH="$HOME/github-runner-capsule:$PATH"
+          
+          # Run the review pipeline
+          review-pipeline run \
+            --config .reviewrc.json \
+            --providers "${{ vars.ENABLED_PROVIDERS || 'claude,codex,gemini' }}" \
+            || echo "::warning::Review pipeline encountered issues"
+
+      - name: Post review comment
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Find the review pipeline workspace (could be in node_modules or local)
+            let workspacePath;
+            const possiblePaths = [
+              'node_modules/@multi-model/review-pipeline/workspace',
+              '.review-pipeline/workspace',
+              'workspace'
+            ];
+            
+            for (const p of possiblePaths) {
+              if (fs.existsSync(p)) {
+                workspacePath = p;
+                break;
+              }
+            }
+            
+            if (!workspacePath) {
+              console.log('No review workspace found');
+              return;
+            }
+            
+            // Read the summary
+            const summaryPath = path.join(workspacePath, 'summary.md');
+            if (!fs.existsSync(summaryPath)) {
+              console.log('No review summary found');
+              return;
+            }
+            
+            const summary = fs.readFileSync(summaryPath, 'utf8');
+            
+            // Post as PR comment
+            const issue_number = context.payload.pull_request?.number || process.env.PR_NUMBER;
+            if (!issue_number) {
+              console.log('No PR number found');
+              return;
+            }
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(issue_number),
+              body: `## 🔍 Multi-Model AI Review\n\n${summary}`
+            });
+
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-reports
+          path: |
+            node_modules/@multi-model/review-pipeline/workspace/
+            .review-pipeline/workspace/
+            workspace/
+          if-no-files-found: ignore
+          retention-days: 30
