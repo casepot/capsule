@@ -94,11 +94,11 @@ jobs:
             const fs = require('fs');
             const path = require('path');
             
-            // Find the review pipeline workspace (could be in node_modules or local)
+            // Find the review pipeline workspace (now in project directory)
             let workspacePath;
             const possiblePaths = [
-              'node_modules/@multi-model/review-pipeline/workspace',
               '.review-pipeline/workspace',
+              'node_modules/@multi-model/review-pipeline/workspace',  // fallback for old versions
               'workspace'
             ];
             
@@ -143,8 +143,8 @@ jobs:
         with:
           name: review-reports
           path: |
-            node_modules/@multi-model/review-pipeline/workspace/
             .review-pipeline/workspace/
+            node_modules/@multi-model/review-pipeline/workspace/
             workspace/
           if-no-files-found: ignore
           retention-days: 30
