@@ -1,4 +1,4 @@
-name: PR Multi-Model Review v2
+name: PR Multi-Model Review
 
 on:
   pull_request:
