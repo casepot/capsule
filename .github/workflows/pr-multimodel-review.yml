@@ -61,9 +61,10 @@ jobs:
 
       - name: Install review pipeline
         run: |
-          # Install the review pipeline package globally
-          npm install -g @multi-model/review-pipeline@latest || \
-          npm install -g https://github.com/casepot/multi-model-review-pipeline.git
+          # Install the review pipeline package globally from GitHub
+          # First uninstall any existing version to ensure clean install
+          npm uninstall -g @multi-model/review-pipeline 2>/dev/null || true
+          npm install -g github:casepot/multi-model-review-pipeline
 
       - name: Setup Claude Authentication (OAuth)
         run: |
