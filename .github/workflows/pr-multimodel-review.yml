@@ -13,7 +13,7 @@ jobs:
   review:
     runs-on: self-hosted
     timeout-minutes: 45
-    if: github.event.pull_request.draft == false
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     env:
       # Environment variable overrides (mapped via env.mapping.json)
       TEST_CMD: ${{ vars.TEST_CMD }}                      # Testing command
@@ -35,6 +35,22 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Fetch full history to enable proper diffs
+
+      - name: Detect PR for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          # For manual workflow runs, detect if current branch has an associated PR
+          PR_DATA=$(gh pr list --head "${{ github.ref_name }}" --json number,url,headRefName,baseRefName,headRefOid --jq '.[0]' || echo "")
+          if [ -n "$PR_DATA" ] && [ "$PR_DATA" != "null" ]; then
+            echo "PR_NUMBER=$(echo "$PR_DATA" | jq -r .number)" >> "$GITHUB_ENV"
+            echo "PR_URL=$(echo "$PR_DATA" | jq -r .url)" >> "$GITHUB_ENV"
+            echo "PR_HEAD_REF=$(echo "$PR_DATA" | jq -r .headRefName)" >> "$GITHUB_ENV"
+            echo "PR_BASE_REF=$(echo "$PR_DATA" | jq -r .baseRefName)" >> "$GITHUB_ENV"
+            echo "PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r .headRefOid)" >> "$GITHUB_ENV"
+            echo "✓ Found PR #$(echo "$PR_DATA" | jq -r .number) for branch ${{ github.ref_name }}"
+          else
+            echo "No PR found for branch ${{ github.ref_name }}"
+          fi
 
       - name: Setup Node.js with cache
         uses: actions/setup-node@v4
