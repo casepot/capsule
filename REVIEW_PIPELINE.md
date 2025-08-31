@@ -39,14 +39,10 @@ codex login   # Login with ChatGPT Plus account
 gemini        # OAuth with Google account
 
 # Verify authentication
-./auth-check                                      # Convenience wrapper
-# OR
-bash .review-pipeline/scripts/auth-check.sh      # Direct path
+review-pipeline auth-check
 
 # Test locally 
-./review-local                                    # Convenience wrapper  
-# OR
-bash .review-pipeline/scripts/review-local.sh     # Direct path
+review-pipeline run --providers claude,codex,gemini
 ```
 
 ## Runner Setup
@@ -174,7 +170,7 @@ gemini --version
 
 ```bash
 cd /path/to/your/repo
-bash .review-pipeline/scripts/auth-check.sh
+review-pipeline auth-check
 ```
 
 Expected output:
@@ -194,9 +190,9 @@ The review pipeline uses a layered configuration system that merges settings fro
 ### Configuration Layers (highest to lowest priority)
 
 1. **Runtime flags** - Command-line arguments
-2. **Environment variables** - See `.review-pipeline/config/env.mapping.json` for all mappings
+2. **Environment variables** - See npm package documentation for mappings
 3. **Project config** - `.reviewrc.json` in project root
-4. **Pipeline defaults** - `.review-pipeline/config/pipeline.config.json`
+4. **Pipeline defaults** - Built into the npm package
 
 ### Basic Project Configuration
 
@@ -237,7 +233,7 @@ export GEMINI_MODEL=gemini-2.5-pro  # Gemini model selection
 export GATE_MUST_FIX_THRESHOLD=1    # Number of must-fix issues to fail
 ```
 
-See `.review-pipeline/config/env.mapping.json` for complete list.
+See the @multi-model/review-pipeline npm package documentation for complete list.
 
 ### Project-Specific Review Criteria
 
@@ -283,12 +279,8 @@ Add to `.reviewrc.json`:
 
 ### Provider Configuration
 
-Provider capabilities and settings are defined in self-documenting manifest files:
-- `.review-pipeline/config/providers/claude.manifest.json`
-- `.review-pipeline/config/providers/codex.manifest.json`
-- `.review-pipeline/config/providers/gemini.manifest.json`
-
-These manifests define available models, flags, authentication methods, and common issues.
+Provider capabilities and settings are defined in the @multi-model/review-pipeline npm package.
+The package includes self-documenting manifest files for each provider that define available models, flags, authentication methods, and common issues.
 
 ### GitHub Actions Configuration
 
@@ -409,38 +401,30 @@ rm -rf .review-pipeline/workspace/.cache    # Pipeline cache
 
 ```
 # Project Root
-./auth-check                     # → .review-pipeline/scripts/auth-check.sh
-./review-local                   # → .review-pipeline/scripts/review-local.sh
 .reviewrc.json                   # Project configuration (optional)
 .review-criteria.md              # Project review criteria (optional)
 
-# Review Pipeline Package
+# Commands (from npm package)
+review-pipeline auth-check       # Check authentication
+review-pipeline run              # Run review
+
+# Runtime Directory (auto-generated, DO NOT COMMIT)
 .review-pipeline/
-├── config/                      # Configuration files
-│   ├── pipeline.config.json    # Default pipeline settings
-│   ├── env.mapping.json        # Environment variable mappings
-│   ├── schemas/                # JSON schema definitions
-│   └── providers/              # Provider manifests (self-documenting)
-├── lib/                        # Configuration libraries
-│   ├── config-loader.js       # Layered configuration system
-│   ├── criteria-builder.js    # Project criteria builder
-│   └── generate-provider-command.js
-├── scripts/                    # Operational scripts
-│   ├── auth-check.sh          # Verify authentication
-│   ├── review-local.sh        # Run local review
-│   ├── run-provider-review.sh # Execute single provider
-│   ├── aggregate-reviews.mjs  # Merge provider results
-│   └── normalize-json.js     # Extract JSON from output
-├── prompts/                   # Review prompts
-│   ├── review.core.md         # Core review instructions
-│   └── review.*.md            # Provider-specific overlays
-├── templates/                 # User templates
-│   └── .review-criteria.example.md
-└── workspace/                 # Runtime artifacts (generated)
+└── workspace/                 # Created by npm package at runtime
     ├── context/              # PR metadata
+    │   ├── pr.json          # Pull request information
+    │   ├── diff.patch       # Git diff
+    │   └── tests.txt        # Test results
     ├── reports/              # Provider outputs
+    │   ├── raw/             # Raw CLI outputs
+    │   ├── claude-code.json
+    │   ├── codex-cli.json
+    │   └── gemini-cli.json
     ├── summary.md            # Aggregated review
     └── gate.txt              # Pass/fail decision
+
+# Note: The actual pipeline code lives in the npm package:
+# @multi-model/review-pipeline (github:casepot/multi-model-review-pipeline)
 ```
 
 ## Security Best Practices
@@ -454,11 +438,9 @@ rm -rf .review-pipeline/workspace/.cache    # Pipeline cache
 
 ## Technical Reference
 
-> **Note**: This documentation provides an overview for convenience. The authoritative sources for configuration and capabilities are:
-> - Provider specifications: `.review-pipeline/config/providers/*.manifest.json`
-> - Configuration options: `.review-pipeline/config/schemas/*.json`
-> - Environment variables: `.review-pipeline/config/env.mapping.json`
-> - Default settings: `.review-pipeline/config/pipeline.config.json`
+> **Note**: This documentation provides an overview for convenience. The authoritative sources for configuration and capabilities are in the @multi-model/review-pipeline npm package:
+> - Package repository: https://github.com/casepot/multi-model-review-pipeline
+> - Installation: `npm install -g github:casepot/multi-model-review-pipeline`
 
 ### Provider Output Formats
 

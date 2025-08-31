@@ -1,1 +1,0 @@
-Provider overlay — OpenAI Codex CLI

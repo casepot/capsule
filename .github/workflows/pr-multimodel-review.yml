@@ -31,6 +31,15 @@ jobs:
           echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
           echo "ANTHROPIC_AUTH_TOKEN=" >> "$GITHUB_ENV"
           
+      - name: Clean old review pipeline (self-hosted runner cleanup)
+        run: |
+          # Remove any old .review-pipeline directory from previous runs
+          # The npm package will create a fresh workspace at runtime
+          if [ -d ".review-pipeline" ]; then
+            echo "Removing old .review-pipeline directory from previous run"
+            rm -rf .review-pipeline/
+          fi
+          
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -156,8 +165,6 @@ jobs:
           name: review-reports-${{ github.sha }}
           path: |
             .review-pipeline/workspace/
-            node_modules/@multi-model/review-pipeline/workspace/
-            workspace/
           if-no-files-found: warn
           retention-days: 30
 
