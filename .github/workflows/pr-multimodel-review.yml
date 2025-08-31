@@ -1,4 +1,4 @@
-name: PR Multi-Model Review
+name: PR Multi-Model Review (HITL, self-hosted)
 
 on:
   pull_request:
