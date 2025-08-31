@@ -103,65 +103,74 @@ jobs:
             --providers "${{ vars.ENABLED_PROVIDERS || 'claude,codex,gemini' }}" \
             || echo "::warning::Review pipeline encountered issues"
 
-      - name: Post review comment
-        if: always()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            const path = require('path');
-            
-            // Find the review pipeline workspace (now in project directory)
-            let workspacePath;
-            const possiblePaths = [
-              '.review-pipeline/workspace',
-              'node_modules/@multi-model/review-pipeline/workspace',  // fallback for old versions
-              'workspace'
-            ];
-            
-            for (const p of possiblePaths) {
-              if (fs.existsSync(p)) {
-                workspacePath = p;
-                break;
-              }
-            }
-            
-            if (!workspacePath) {
-              console.log('No review workspace found');
-              return;
-            }
-            
-            // Read the summary
-            const summaryPath = path.join(workspacePath, 'summary.md');
-            if (!fs.existsSync(summaryPath)) {
-              console.log('No review summary found');
-              return;
-            }
-            
-            const summary = fs.readFileSync(summaryPath, 'utf8');
-            
-            // Post as PR comment
-            const issue_number = context.payload.pull_request?.number || process.env.PR_NUMBER;
-            if (!issue_number) {
-              console.log('No PR number found');
-              return;
-            }
-            
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: parseInt(issue_number),
-              body: `## 🔍 Multi-Model AI Review\n\n${summary}`
-            });
+      - name: Attach summary as PR comment
+        if: always() && (github.event.pull_request.number != '' || env.PR_NUMBER != '')
+        shell: bash
+        run: |
+          if [ -f .review-pipeline/workspace/summary.md ]; then
+            # Check if we already commented on this SHA
+            PR_NUM="${{ github.event.pull_request.number }}"; if [ -z "$PR_NUM" ]; then PR_NUM="$PR_NUMBER"; fi
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"; if [ -z "$HEAD_SHA" ]; then HEAD_SHA="${{ github.sha }}"; fi
+            existing_comments=$(gh pr view "$PR_NUM" --json comments --repo "${{ github.repository }}" | jq -r '.comments[].body' | grep -c "SHA: $HEAD_SHA" || true)
+            if [ "$existing_comments" -eq 0 ]; then
+              # Create enhanced summary with artifact link
+              cp .review-pipeline/workspace/summary.md .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "---" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "📎 **Full Reports**: [Download artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-reports.outputs.artifact-id }})" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              
+              # Add raw report snippets if they exist
+              if [ -d .review-pipeline/workspace/reports/raw ]; then
+                for raw_file in .review-pipeline/workspace/reports/raw/*.raw.txt; do
+                  if [ -f "$raw_file" ]; then
+                    provider=$(basename "$raw_file" .raw.txt)
+                    echo "<details>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "<summary>📄 ${provider} Raw Output (first 3000 chars)</summary>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo '```json' >> .review-pipeline/workspace/summary-enhanced.md
+                    head -c 3000 "$raw_file" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo '```' >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "</details>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                  fi
+                done
+              fi
+              
+              echo "<!-- Multi-Model Review SHA: $HEAD_SHA -->" >> .review-pipeline/workspace/summary-enhanced.md
+              gh pr comment "$PR_NUM" --body-file .review-pipeline/workspace/summary-enhanced.md --repo "${{ github.repository }}"
+            else
+              echo "Already commented on this SHA, skipping duplicate."
+            fi
+          else
+            echo "::warning::No summary generated"
+          fi
 
       - name: Upload review artifacts
         if: always()
         uses: actions/upload-artifact@v4
+        id: upload-reports
         with:
-          name: review-reports
+          name: review-reports-${{ github.sha }}
           path: |
             .review-pipeline/workspace/
             node_modules/@multi-model/review-pipeline/workspace/
             workspace/
-          if-no-files-found: ignore
+          if-no-files-found: warn
           retention-days: 30
+
+      - name: Fail if gate failed
+        shell: bash
+        run: |
+          if [ -f .review-pipeline/workspace/gate.txt ]; then
+            gate_status="$(cat .review-pipeline/workspace/gate.txt)"
+            echo "Gate status: $gate_status"
+            if [ "$gate_status" = "fail" ]; then
+              echo "::error::Review gate failed - must-fix issues found"
+              exit 1
+            fi
+          else
+            echo "::warning::No gate status file found"
+          fi
