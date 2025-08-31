@@ -1,0 +1,356 @@
+name: PR Multi-Model Review (HITL, self-hosted)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:  # Allow manual trigger for testing
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: self-hosted
+    timeout-minutes: 45  # Overall job timeout (providers may take 25+ minutes)
+    if: github.event.pull_request.draft == false  # Skip draft PRs
+    env:
+      # Environment variable overrides (mapped via env.mapping.json)
+      TEST_CMD: ${{ vars.TEST_CMD }}                      # Testing command
+      REVIEW_TIMEOUT: ${{ vars.REVIEW_TIMEOUT }}          # Global timeout
+      CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL }}              # Claude model override
+      CODEX_REASONING: ${{ vars.CODEX_REASONING }}        # Codex reasoning level
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}              # Gemini model override
+      REVIEW_PARALLEL: ${{ vars.REVIEW_PARALLEL }}        # Parallel execution
+      GH_TOKEN: ${{ github.token }}                       # GitHub CLI token
+    steps:
+      - name: Clean environment (self-hosted runner persistence)
+        run: |
+          # Self-hosted runners persist GITHUB_ENV between runs
+          # Clear any leftover ANTHROPIC tokens from previous workflow runs
+          echo "ANTHROPIC_API_KEY=" >> "$GITHUB_ENV"
+          echo "ANTHROPIC_AUTH_TOKEN=" >> "$GITHUB_ENV"
+          
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history to enable proper diffs
+
+      - name: Setup Node.js with cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: '.review-pipeline/package-lock.json'
+
+      - name: Setup Claude Authentication (OAuth)
+        run: |
+          # Never use API keys in this pipeline
+          unset ANTHROPIC_API_KEY
+          unset ANTHROPIC_AUTH_TOKEN
+          # Ensure Claude Code is in PATH if installed in non-standard location
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          # Quick probe: rely on local OAuth (Keychain)
+          if claude -p "echo test" --output-format text >/dev/null 2>&1; then
+            echo "✓ Claude OAuth available via Keychain"
+          else
+            echo "::warning::Claude not authenticated. Ensure local '/login' has been completed in the runner user session."
+          fi
+
+      - name: Detect PR context (manual runs)
+        run: |
+          # Populate PR_NUMBER for both PR and manual runs
+          if [ -n "${{ github.event.pull_request.number }}" ]; then
+            echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> "$GITHUB_ENV"
+            echo "Using PR #${{ github.event.pull_request.number }} from event context."
+          else
+            # Try to find an open PR for this branch
+            PR=$(gh pr list --head "${{ github.ref_name }}" --repo "${{ github.repository }}" --json number -q '.[0].number' || true)
+            if [ -n "$PR" ] && [ "$PR" != "null" ]; then
+              echo "PR_NUMBER=$PR" >> "$GITHUB_ENV"
+              echo "Detected PR #$PR for branch ${{ github.ref_name }}."
+            else
+              echo "No PR detected for branch ${{ github.ref_name }} (manual run)."
+              echo "Debug: github.ref_name=${{ github.ref_name }}, github.repository=${{ github.repository }}"
+              echo "Debug: Checking what PRs exist..."
+              gh pr list --repo "${{ github.repository }}" --limit 5
+            fi
+          fi
+
+      - name: Runner Diagnostics (Claude OAuth)
+        run: |
+          set -euo pipefail
+          echo "whoami: $(whoami)"
+          echo "HOME: $HOME"
+          # Keychain info (no secrets)
+          security show-keychain-info ~/Library/Keychains/login.keychain-db || true
+          security find-generic-password -s 'Claude Code-credentials' || true
+          # Claude probe (headless)
+          if [ -x "$HOME/.claude/local/claude" ]; then export PATH="$HOME/.claude/local:$PATH"; fi
+          claude -p "echo test" --output-format text || true
+
+      - name: Guardrails (auth + no API keys + CLIs present)
+        run: |
+          # Never use API keys - must use local Keychain auth
+          unset ANTHROPIC_API_KEY
+          unset ANTHROPIC_AUTH_TOKEN
+          # Ensure Claude Code is in PATH if installed in non-standard location
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          # Enforce OAuth-only checks for all providers
+          bash .review-pipeline/scripts/auth-check.sh
+
+      - name: Install dependencies and validate configuration
+        run: |
+          cd .review-pipeline
+          npm ci --no-audit --no-fund
+          node lib/config-loader.js validate || echo "Warning: Configuration validation failed, using defaults"
+      
+      - name: Run review pipeline tests
+        run: |
+          cd .review-pipeline
+          # Continue on test failure - reviews should run to provide context to reviewers
+          # who can help diagnose issues. Test failures are shown as warnings.
+          npm test || echo "::warning::Review pipeline tests failed but continuing to run reviews"
+
+      - name: Build review context
+        shell: bash
+        id: context
+        run: |
+          set -euo pipefail
+          mkdir -p .review-pipeline/workspace/context .review-pipeline/workspace/reports
+          # PR metadata
+          if [ -n "${PR_NUMBER:-}" ]; then
+            gh pr view "$PR_NUMBER" --json number,state,headRefName,baseRefName,headRefOid,url,author --repo "${{ github.repository }}" > .review-pipeline/workspace/context/pr.json
+          else
+            # Manual workflow_dispatch fallback (use jq to construct valid JSON)
+            jq -n \
+              --arg repo "${{ github.event.repository.name }}" \
+              --arg sha "${{ github.sha }}" \
+              --arg branch "${{ github.ref_name }}" \
+              --arg url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              '{repo:$repo, number:0, head_sha:$sha, branch:$branch, link:$url}' \
+              > .review-pipeline/workspace/context/pr.json
+          fi
+          # Diff & files - show only what will be merged (not cumulative history)
+          if [ -n "${PR_NUMBER:-}" ]; then
+            # Get PR base and head for accurate diff
+            PR_BASE=$(gh pr view "$PR_NUMBER" --json baseRefName --repo "${{ github.repository }}" -q '.baseRefName')
+            # Fetch the base branch to ensure we have the merge base
+            git fetch origin "${PR_BASE}:refs/remotes/origin/${PR_BASE}"
+            # Generate diff showing only final state to be merged (three-dot diff)
+            git diff "origin/${PR_BASE}...HEAD" --patch > .review-pipeline/workspace/context/diff.patch
+            git diff "origin/${PR_BASE}...HEAD" --name-only > .review-pipeline/workspace/context/files.txt
+          else
+            # Manual trigger - use git diff
+            if git rev-parse -q --verify HEAD~1 >/dev/null 2>&1; then
+              git diff HEAD~1 > .review-pipeline/workspace/context/diff.patch || echo "No diff available" > .review-pipeline/workspace/context/diff.patch
+              git diff --name-only HEAD~1 > .review-pipeline/workspace/context/files.txt || echo "No files changed" > .review-pipeline/workspace/context/files.txt
+            else
+              echo "No diff available" > .review-pipeline/workspace/context/diff.patch
+              echo "No files changed" > .review-pipeline/workspace/context/files.txt
+            fi
+          fi
+
+          # Generate enhanced diff with line numbers for both added/removed lines
+          node .review-pipeline/scripts/generate-enhanced-diff.js || echo "::warning::Failed to generate enhanced diff"
+          
+          # SECURITY: Only use TEST_CMD from repository variables, never from project config
+          # This prevents arbitrary code execution from PR-controlled .reviewrc.json
+          # If TEST_CMD is not set in repository variables, skip tests entirely
+          if [ -n "${TEST_CMD:-}" ]; then
+            # Clear sensitive environment variables before running tests
+            (
+              unset GH_TOKEN
+              unset GITHUB_TOKEN
+              set +e
+              echo "Running tests with command from repository variables only" > .review-pipeline/workspace/context/tests.txt
+              echo "\$ ${TEST_CMD}" >> .review-pipeline/workspace/context/tests.txt
+              # Execute with safer quoting (still has injection risk in private repo context)
+              # TODO: Parse TEST_CMD into array for fully safe execution
+              timeout 300 sh -c "set -e; $TEST_CMD" >> .review-pipeline/workspace/context/tests.txt 2>&1
+              echo "== exit:$? ==" >> .review-pipeline/workspace/context/tests.txt
+            )
+          else
+            echo "No tests configured (TEST_CMD not set in repository variables)" > .review-pipeline/workspace/context/tests.txt
+          fi
+
+      - name: Provider reviews (configuration-based)
+        shell: bash
+        timeout-minutes: 30  # Allow for 25-minute provider timeout plus overhead
+        run: |
+          set -euo pipefail
+          cd .review-pipeline
+          
+          # Ensure Claude Code is in PATH if installed in non-standard location
+          if [ -x "$HOME/.claude/local/claude" ]; then
+            export PATH="$HOME/.claude/local:$PATH"
+          fi
+          
+          # Unset any API key envs to prevent metered billing
+          unset ANTHROPIC_API_KEY OPENAI_API_KEY GEMINI_API_KEY
+          
+          # Get configuration settings
+          PARALLEL_ENABLED=$(node lib/config-loader.js show 2>/dev/null | jq -r '.execution.parallel // true' || echo 'true')
+          GLOBAL_TIMEOUT=$(node lib/config-loader.js show 2>/dev/null | jq -r '.execution.timeout_seconds // 120' || echo '120')
+          
+          # Get enabled providers
+          ENABLED_PROVIDERS=$(node -e "
+            import('./lib/config-loader.js').then(async (module) => {
+              const ConfigLoader = module.default;
+              const loader = new ConfigLoader();
+              await loader.load();
+              console.log(loader.getEnabledProviders().join(' '));
+            }).catch(() => console.log('claude codex gemini'));
+          " 2>/dev/null || echo 'claude codex gemini')
+          
+          echo "Configuration:"
+          echo "  Parallel: $PARALLEL_ENABLED"
+          echo "  Timeout: $GLOBAL_TIMEOUT seconds"
+          echo "  Enabled providers: $ENABLED_PROVIDERS"
+          
+          # Run provider reviews based on configuration
+          run_provider() {
+            local provider="$1"
+            local timeout="${2:-$GLOBAL_TIMEOUT}"
+            
+            # Check if provider is enabled
+            local enabled=$(node -e "
+              import('./lib/config-loader.js').then(async (module) => {
+                const ConfigLoader = module.default;
+                const loader = new ConfigLoader();
+                await loader.load();
+                console.log(loader.isProviderEnabled('$provider'));
+              }).catch(() => console.log('true'));
+            " 2>/dev/null || echo 'true')
+            
+            if [ "$enabled" != "true" ]; then
+              echo "Skipping $provider (disabled)"
+              return 0
+            fi
+            
+            # Get provider-specific timeout if configured
+            timeout=$(node -e "
+              import('./lib/config-loader.js').then(async (module) => {
+                const ConfigLoader = module.default;
+                const loader = new ConfigLoader();
+                await loader.load();
+                const config = loader.getProviderConfig('$provider');
+                console.log(config.timeout);
+              }).catch(() => console.log('$timeout'));
+            " 2>/dev/null || echo "$timeout")
+            
+            echo "Running $provider review (timeout: ${timeout}s)..."
+            bash scripts/run-provider-review.sh "$provider" "$timeout" || true
+          }
+          
+          # Execute reviews based on parallel configuration
+          if [ "$PARALLEL_ENABLED" = "true" ]; then
+            echo "Running reviews in parallel..."
+            for provider in $ENABLED_PROVIDERS; do
+              run_provider "$provider" &
+            done
+            wait
+          else
+            echo "Running reviews sequentially..."
+            for provider in $ENABLED_PROVIDERS; do
+              run_provider "$provider"
+            done
+          fi
+          
+          # Verify reports were created for enabled providers
+          for provider in $ENABLED_PROVIDERS; do
+            # Map provider to report file suffix
+            case "$provider" in
+              claude) suffix="code" ;;
+              codex)  suffix="cli" ;;
+              gemini) suffix="cli" ;;
+              *)      suffix="cli" ;;
+            esac
+            report_file="workspace/reports/${provider}-${suffix}.json"
+            if [ ! -f "$report_file" ]; then
+              echo "::warning::Missing report: $report_file"
+            fi
+          done
+
+      - name: Aggregate & gate
+        shell: bash
+        run: |
+          cd .review-pipeline && npm ci --no-audit --no-fund
+          node scripts/aggregate-reviews.mjs || echo "Warning: Aggregation had issues, check reports"
+
+      - name: Upload review reports as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        id: upload-reports
+        with:
+          name: review-reports-${{ github.sha }}
+          path: |
+            .review-pipeline/workspace/reports/
+            .review-pipeline/workspace/context/
+            .review-pipeline/workspace/summary.md
+            .review-pipeline/workspace/gate.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Attach summary as PR comment
+        if: always() && (github.event.pull_request.number != '' || env.PR_NUMBER != '')
+        shell: bash
+        run: |
+          if [ -f .review-pipeline/workspace/summary.md ]; then
+            # Check if we already commented on this SHA
+            PR_NUM="${{ github.event.pull_request.number }}"; if [ -z "$PR_NUM" ]; then PR_NUM="$PR_NUMBER"; fi
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"; if [ -z "$HEAD_SHA" ]; then HEAD_SHA="${{ github.sha }}"; fi
+            existing_comments=$(gh pr view "$PR_NUM" --json comments --repo "${{ github.repository }}" | jq -r '.comments[].body' | grep -c "SHA: $HEAD_SHA" || true)
+            if [ "$existing_comments" -eq 0 ]; then
+              # Create enhanced summary with artifact link
+              cp .review-pipeline/workspace/summary.md .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "---" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "📎 **Full Reports**: [Download artifact](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts/${{ steps.upload-reports.outputs.artifact-id }})" >> .review-pipeline/workspace/summary-enhanced.md
+              echo "" >> .review-pipeline/workspace/summary-enhanced.md
+              
+              # Add raw report snippets if they exist
+              if [ -d .review-pipeline/workspace/reports/raw ]; then
+                for raw_file in .review-pipeline/workspace/reports/raw/*.raw.txt; do
+                  if [ -f "$raw_file" ]; then
+                    provider=$(basename "$raw_file" .raw.txt)
+                    echo "<details>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "<summary>📄 ${provider} Raw Output (first 3000 chars)</summary>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo '```json' >> .review-pipeline/workspace/summary-enhanced.md
+                    head -c 3000 "$raw_file" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo '```' >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "</details>" >> .review-pipeline/workspace/summary-enhanced.md
+                    echo "" >> .review-pipeline/workspace/summary-enhanced.md
+                  fi
+                done
+              fi
+              
+              echo "<!-- Multi-Model Review SHA: $HEAD_SHA -->" >> .review-pipeline/workspace/summary-enhanced.md
+              gh pr comment "$PR_NUM" --body-file .review-pipeline/workspace/summary-enhanced.md --repo "${{ github.repository }}"
+            else
+              echo "Already commented on this SHA, skipping duplicate."
+            fi
+          else
+            echo "::warning::No summary generated"
+          fi
+
+      - name: Fail if gate failed
+        shell: bash
+        run: |
+          if [ -f .review-pipeline/workspace/gate.txt ]; then
+            gate_status="$(cat .review-pipeline/workspace/gate.txt)"
+            echo "Gate status: $gate_status"
+            if [ "$gate_status" = "fail" ]; then
+              echo "::error::Review gate failed - must-fix issues found"
+              exit 1
+            fi
+          else
+            echo "::warning::No gate status file found"
+          fi
