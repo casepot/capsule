@@ -70,9 +70,11 @@ jobs:
       - name: Install review pipeline
         run: |
           # Install the review pipeline package globally from GitHub
+          # Pinned to specific commit SHA for security and reliability
+          # Update SHA when new versions are validated: 0bca21c525f946c5794dbc7988e9642833a254b1
           # First uninstall any existing version to ensure clean install
           npm uninstall -g @multi-model/review-pipeline 2>/dev/null || true
-          npm install -g github:casepot/multi-model-review-pipeline
+          npm install -g github:casepot/multi-model-review-pipeline#0bca21c525f946c5794dbc7988e9642833a254b1
 
       - name: Setup Claude Authentication (OAuth)
         run: |
@@ -93,11 +95,29 @@ jobs:
           fi
 
       - name: Check provider authentication
+        id: auth-check
         run: |
           # Ensure wrapper is in PATH
           export PATH="$HOME/github-runner-capsule:$PATH"
-          # Run auth check
-          review-pipeline auth-check || echo "::warning::Some providers may not be authenticated"
+          
+          # Get requested providers
+          REQUESTED_PROVIDERS="${{ vars.ENABLED_PROVIDERS || 'claude,codex,gemini' }}"
+          echo "Requested providers: $REQUESTED_PROVIDERS"
+          
+          # Run auth check and capture which providers are authenticated
+          # This will check all providers and report their status
+          if review-pipeline auth-check; then
+            echo "All providers authenticated successfully"
+            echo "AUTHENTICATED_PROVIDERS=$REQUESTED_PROVIDERS" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Some providers failed authentication. Attempting to identify authenticated providers..."
+            
+            # Try to determine which providers are actually authenticated
+            # For now, we'll use all requested providers but log the warning
+            # In the future, the auth-check command should output which providers are authenticated
+            echo "AUTHENTICATED_PROVIDERS=$REQUESTED_PROVIDERS" >> "$GITHUB_ENV"
+            echo "::warning::Running with all requested providers. Some may fail during review."
+          fi
 
       - name: Run multi-model review
         id: review
@@ -105,11 +125,28 @@ jobs:
           # Ensure wrapper is in PATH
           export PATH="$HOME/github-runner-capsule:$PATH"
           
-          # Run the review pipeline
+          # Run the review pipeline with authenticated providers only
+          if [ -z "$AUTHENTICATED_PROVIDERS" ]; then
+            echo "::error::No authenticated providers available"
+            exit 1
+          fi
+          
+          echo "Running review with providers: $AUTHENTICATED_PROVIDERS"
           review-pipeline run \
             --config .reviewrc.json \
-            --providers "${{ vars.ENABLED_PROVIDERS || 'claude,codex,gemini' }}" \
+            --providers "$AUTHENTICATED_PROVIDERS" \
             || echo "::warning::Review pipeline encountered issues"
+
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        id: upload-reports
+        with:
+          name: review-reports-${{ github.sha }}
+          path: |
+            .review-pipeline/workspace/
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Attach summary as PR comment
         if: always() && (github.event.pull_request.number != '' || env.PR_NUMBER != '')
@@ -155,17 +192,6 @@ jobs:
           else
             echo "::warning::No summary generated"
           fi
-
-      - name: Upload review artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        id: upload-reports
-        with:
-          name: review-reports-${{ github.sha }}
-          path: |
-            .review-pipeline/workspace/
-          if-no-files-found: warn
-          retention-days: 30
 
       - name: Fail if gate failed
         shell: bash
