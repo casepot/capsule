@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PyREPL3 - Advanced Python REPL with subprocess isolation."""
+"""Capsule - Advanced Python REPL with subprocess isolation."""
 
 from __future__ import annotations
 
@@ -189,7 +189,7 @@ async def demo_transactions() -> None:
 
 async def main() -> None:
     """Main entry point."""
-    print("PyREPL3 - Advanced Python REPL System")
+    print("Capsule - Advanced Python REPL System")
     print("=" * 40)
     
     try:

@@ -1,5 +1,5 @@
 [project]
-name = "pyrepl3"
+name = "capsule"
 version = "0.1.0"
 description = "Advanced Python REPL with subprocess isolation and session management"
 readme = "README.md"

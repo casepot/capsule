@@ -1,155 +1,131 @@
-# PyREPL3
+# Capsule
 
-A subprocess-isolated execution service implementing session-oriented RPC with managed process pools and persistent namespaces.
+A Python execution environment providing durable, async-first code execution with automatic recovery and distributed orchestration capabilities.
 
-PyREPL3 intends to provide production-ready Python code execution infrastructure with subprocess isolation, session management, interactive I/O support, and checkpoint/restore capabilities.
+## What is Capsule?
 
-## Features
+Capsule is a **Subprocess-Isolated Execution Service (SIES)** that combines the isolation of separate processes with the persistence of stateful sessions. Built on an async-first architecture with Resonate SDK integration, Capsule provides:
 
-- **Subprocess Isolation**: Each session runs in an isolated subprocess for safety
-- **Interactive Input**: Full input() support via thread-based execution model
-- **Session Pooling**: Pre-warmed session pool for fast acquisition (<100ms)
-- **Streaming Output**: Real-time streaming of stdout/stderr with <10ms latency
-- **Transaction Support**: Rollback capabilities with configurable policies
-- **Checkpoint/Restore**: Save and restore complete session state
-- **Source Tracking**: Preserve function and class definitions
-- **WebSocket & REST APIs**: Multiple client interfaces
-- **Health Monitoring**: Automatic crash detection and recovery
+- **Intelligent Execution Routing**: Automatically detects and routes code to the optimal executor (top-level await, async, blocking I/O, or simple sync)
+- **Durable Sessions**: Crash recovery and distributed execution via Resonate promises
+- **Capability-Based Architecture**: Secure, injectable functions for I/O, networking, and system operations
+- **Native Top-Level Await**: Direct Python interpreter support using PyCF_ALLOW_TOP_LEVEL_AWAIT flag
+- **Protocol-Based IPC**: Structured message passing with promise-based correlation
+- **Language-Agnostic Core**: 70% of infrastructure is language-independent
 
-## Technical Architecture
+## Key Features
 
-PyREPL3 implements a **Subprocess-Isolated Execution Service (SIES)** pattern - a managed stateful process pool with protocol-based IPC. This architecture pattern provides:
+### Execution Modes
+- **Top-Level Await**: Native support via `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000`
+- **Async Functions**: Full async/await with proper coroutine lifecycle
+- **Blocking I/O**: Thread-based execution for requests, file operations
+- **Simple Sync**: Direct execution for basic Python code
 
-- **Session-Oriented RPC**: Maintains persistent state across multiple executions within a session
-- **Process Isolation**: Each session runs in a separate subprocess with resource constraints
-- **Managed Lifecycle**: Automatic health monitoring, restart on failure, and resource limit enforcement
-- **Protocol-Based Communication**: Structured message passing over binary transport
+### Durability & Recovery
+- **Automatic Crash Recovery**: Execution resumes from last checkpoint
+- **Distributed Promises**: Cross-process correlation via Resonate
+- **Transaction Support**: Rollback with configurable policies
+- **Namespace Persistence**: State preserved across executions
 
-The system consists of several key components:
+### Performance
+- Simple expression: <5ms latency
+- Session acquisition: <100ms from warm pool
+- Output streaming: <10ms latency
+- Local mode overhead: <5% with Resonate
+- Concurrent sessions: 100+ per manager
 
-- **Subprocess Worker**: Executes Python code in isolation
-- **ThreadedExecutor**: Runs user code in dedicated threads, enabling blocking I/O
-- **Protocol Layer**: Binary framed messages with JSON/MessagePack
-- **Session Manager**: Lifecycle management of subprocess workers
-- **Session Pool**: Pre-warming and efficient session reuse
-- **Input Protocol**: INPUT/INPUT_RESPONSE messages for interactive code
-- **Checkpoint System**: State serialization and restoration
-- **API Layer**: WebSocket and REST interfaces
+## Architecture
+
+Capsule implements a three-layer architecture:
+
+```
+Application Layer (Resonate)
+├── Durable Functions
+├── Promise Management
+└── Dependency Injection
+
+Execution Layer (AsyncExecutor)
+├── Execution Mode Analysis
+├── Code Routing
+└── Namespace Management
+
+Protocol Layer (Transport)
+├── Message Framing
+├── Serialization
+└── Correlation
+```
 
 ## Installation
 
 ```bash
-pip install -e .
+pip install capsule-exec
 ```
 
-## Usage
+## Quick Start
 
-### Basic Example
+### Basic Execution
 
 ```python
 import asyncio
-from src.session.manager import Session
-from src.protocol.messages import ExecuteMessage
+from capsule import Session
 
 async def main():
-    # Create and start a session
-    session = Session()
-    await session.start()
-    
-    # Execute code
-    message = ExecuteMessage(
-        id="exec-1",
-        timestamp=0,
-        code="print('Hello from subprocess!')"
-    )
-    
-    async for msg in session.execute(message):
-        if msg.type == "output":
-            print(msg.data)
-    
-    await session.shutdown()
+    async with Session() as session:
+        result = await session.execute("""
+            x = 2 + 2
+            print(f"The answer is {x}")
+            x
+        """)
+        print(result.value)  # 4
 
 asyncio.run(main())
 ```
 
-### Interactive Input Example
+### Top-Level Await
 
 ```python
-import asyncio
-import time
-from src.session.manager import Session
-from src.protocol.messages import ExecuteMessage, MessageType
+async with Session() as session:
+    await session.execute("""
+        import asyncio
+        await asyncio.sleep(1)
+        result = await fetch_data()
+        print(f"Got {len(result)} items")
+    """)
+```
 
-async def main():
-    session = Session()
-    await session.start()
-    
-    # Code that uses input()
-    code = """
-name = input("What's your name? ")
-age = input("How old are you? ")
-print(f"Hello {name}, {age} years old!")
-"""
-    
-    message = ExecuteMessage(
-        id="interactive-1",
-        timestamp=time.time(),
-        code=code
-    )
-    
-    # Execute and handle input requests
-    async for msg in session.execute(message):
-        if msg.type == MessageType.INPUT:
-            # Respond to input request
-            user_input = "Alice" if "name" in msg.prompt else "30"
-            await session.input_response(msg.id, user_input)
-        elif msg.type == MessageType.OUTPUT:
+### Interactive Input
+
+```python
+async with Session() as session:
+    async for msg in session.stream_execute("""
+        name = input("Your name: ")
+        age = input("Your age: ")
+        print(f"Hello {name}, age {age}")
+    """):
+        if msg.type == "input":
+            response = "Alice" if "name" in msg.prompt else "25"
+            await session.respond_input(msg.id, response)
+        elif msg.type == "output":
             print(msg.data, end="")
-    
-    await session.shutdown()
-
-asyncio.run(main())
 ```
 
-### Session Pool Example
+### Durable Execution (Resonate Mode)
 
 ```python
-from src.session.pool import SessionPool, PoolConfig
+from capsule import DurableSession
 
-# Configure pool
-config = PoolConfig(
-    min_idle=2,
-    max_sessions=10,
-    warmup_code="import numpy as np"
-)
-
-# Create and use pool
-pool = SessionPool(config)
-await pool.start()
-
-session = await pool.acquire()
-# Use session...
-await pool.release(session)
-
-await pool.stop()
+async with DurableSession(resonate_host="localhost:8001") as session:
+    # Execution survives crashes and can resume
+    result = await session.execute_durable(
+        execution_id="data-processing-123",
+        code="""
+            df = load_large_dataset()
+            processed = expensive_computation(df)
+            save_results(processed)
+        """,
+        checkpoint_interval=10  # Checkpoint every 10 seconds
+    )
 ```
-
-## Language-Agnostic Design
-
-While currently implementing Python execution, PyREPL3's architecture separates language-agnostic components from language-specific implementation:
-
-- **Language-Agnostic (70%)**: Protocol layer, transport, session management, pooling, API layer
-- **Language-Specific (30%)**: Worker subprocess, execution engine, serialization
-
-This separation intends to enable future support for multiple languages (JavaScript, Haskell, etc.) by implementing language-specific workers that communicate via the same protocol.
-
-## Performance
-
-- Simple expression execution: <5ms
-- Session acquisition (warm pool): <100ms
-- Streaming output latency: <10ms
-- Checkpoint size: <10MB for typical workloads
-- Concurrent sessions: 100+ per manager
 
 ## Development
 
@@ -157,18 +133,27 @@ This separation intends to enable future support for multiple languages (JavaScr
 # Install dev dependencies
 pip install -e .[dev]
 
-# Run type checking
-mypy src/
-basedpyright src/
-
 # Run tests
 pytest
 
-# Format code
+# Type checking
+mypy src/
+basedpyright src/
+
+# Format
 black src/
+ruff format src/
 ```
+
+## Language Support
+
+Capsule's architecture separates language-agnostic infrastructure from language-specific execution:
+
+- **Language-Agnostic (70%)**: Protocol, transport, session management, promises
+- **Language-Specific (30%)**: Executor, AST analysis, serialization
+
+This enables future support for JavaScript, Go, Rust, and other languages.
 
 ## License
 
-MIT# Trigger workflow test Sat Aug 30 23:21:54 EDT 2025
-# Test new workflow Sat Aug 30 23:42:17 EDT 2025
+MIT

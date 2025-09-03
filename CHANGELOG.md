@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to PyREPL3 will be documented in this file.
+All notable changes to Capsule will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial release of PyREPL3
+- Initial release of Capsule
 - Subprocess-isolated execution service with managed process pools
 - Session-oriented RPC with persistent namespaces
 - Interactive input() support via thread-based execution model
@@ -45,5 +45,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protocol layer with MessagePack/JSON support
 - ThreadedExecutor for blocking I/O support
 
-[Unreleased]: https://github.com/your-username/pyrepl3/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/your-username/pyrepl3/releases/tag/v0.1.0
+[Unreleased]: https://github.com/your-username/capsule/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/your-username/capsule/releases/tag/v0.1.0
