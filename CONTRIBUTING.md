@@ -1,13 +1,13 @@
-# Contributing to PyREPL3
+# Contributing to Capsule
 
-Thank you for your interest in contributing to PyREPL3! This document provides guidelines and instructions for contributing to the project.
+Thank you for your interest in contributing to Capsule! This document provides guidelines and instructions for contributing to the project.
 
 ## Development Setup
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-username/pyrepl3.git
-   cd pyrepl3
+   git clone https://github.com/your-username/capsule.git
+   cd capsule
    ```
 
 2. Create a virtual environment:
@@ -127,4 +127,4 @@ ruff check src/ tests/
 
 ## License
 
-By contributing to PyREPL3, you agree that your contributions will be licensed under the MIT License.
+By contributing to Capsule, you agree that your contributions will be licensed under the MIT License.

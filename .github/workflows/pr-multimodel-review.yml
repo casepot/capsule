@@ -61,6 +61,24 @@ jobs:
             echo "No PR found for branch ${{ github.ref_name }}"
           fi
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          # Use uv for faster dependency management
+          
+      - name: Install uv
+        run: |
+          # Install uv for fast Python dependency management
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          
+      - name: Install Python dependencies
+        run: |
+          # Sync project dependencies using uv.lock
+          # This ensures all dependencies are available for pytest
+          uv sync
+          
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -94,6 +112,22 @@ jobs:
             echo "::warning::Claude not authenticated. Ensure local '/login' has been completed in the runner user session."
           fi
 
+      - name: Verify test environment
+        run: |
+          # Verify that the test command from .reviewrc.json works
+          echo "Testing pytest availability..."
+          if uv run python -m pytest --version; then
+            echo "✓ pytest is available and executable"
+          else
+            echo "::error::pytest is not available. Check uv sync completed successfully."
+            exit 1
+          fi
+          
+          # Quick test collection to ensure tests are discoverable
+          echo "Checking test discovery..."
+          TEST_COUNT=$(uv run python -m pytest tests/ --co -q 2>/dev/null | grep -c "test" || echo "0")
+          echo "✓ Found $TEST_COUNT tests"
+          
       - name: Check provider authentication
         id: auth-check
         run: |
