@@ -61,17 +61,35 @@ jobs:
             echo "No PR found for branch ${{ github.ref_name }}"
           fi
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          # Use uv for faster dependency management
-          
-      - name: Install uv
+      - name: Verify Python installation
         run: |
-          # Install uv for fast Python dependency management
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # Self-hosted runners should have Python pre-installed
+          if ! command -v python3 &> /dev/null; then
+            echo "::error::Python 3 is not installed on this runner"
+            exit 1
+          fi
+          
+          PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          echo "Found Python version: $PYTHON_VERSION"
+          
+          # Check minimum version requirement (3.11)
+          if ! python3 -c "import sys; exit(0 if sys.version_info >= (3, 11) else 1)"; then
+            echo "::error::Python 3.11+ is required, found $PYTHON_VERSION"
+            exit 1
+          fi
+          
+          echo "✓ Python $PYTHON_VERSION meets requirements"
+          
+      - name: Setup uv
+        run: |
+          # Check if uv is already available
+          if command -v uv &> /dev/null; then
+            echo "✓ uv is already installed: $(which uv)"
+          else
+            echo "Installing uv..."
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
           
       - name: Install Python dependencies
         run: |
