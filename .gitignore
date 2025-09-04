@@ -195,8 +195,7 @@ scratch/
 notes/
 TODO.txt
 .todo
-*.todo
-resonate-sdk-docs.md
+*.tod
 
 # Test outputs
 test_output/
