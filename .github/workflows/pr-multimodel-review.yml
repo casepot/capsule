@@ -61,41 +61,37 @@ jobs:
             echo "No PR found for branch ${{ github.ref_name }}"
           fi
 
-      - name: Verify Python installation
-        run: |
-          # Self-hosted runners should have Python pre-installed
-          if ! command -v python3 &> /dev/null; then
-            echo "::error::Python 3 is not installed on this runner"
-            exit 1
-          fi
-          
-          PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          echo "Found Python version: $PYTHON_VERSION"
-          
-          # Check minimum version requirement (3.11)
-          if ! python3 -c "import sys; exit(0 if sys.version_info >= (3, 11) else 1)"; then
-            echo "::error::Python 3.11+ is required, found $PYTHON_VERSION"
-            exit 1
-          fi
-          
-          echo "✓ Python $PYTHON_VERSION meets requirements"
-          
       - name: Setup uv
         run: |
+          # uv manages its own Python versions, so we don't need to check system Python
           # Check if uv is already available
           if command -v uv &> /dev/null; then
             echo "✓ uv is already installed: $(which uv)"
+            UV_PATH=$(which uv)
           else
             echo "Installing uv..."
             curl -LsSf https://astral.sh/uv/install.sh | sh
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            UV_PATH="$HOME/.local/bin/uv"
           fi
+          
+          # Verify uv is working
+          echo "uv version: $($UV_PATH --version)"
+          
+          # uv will automatically manage Python based on pyproject.toml requirements
           
       - name: Install Python dependencies
         run: |
-          # Sync project dependencies using uv.lock
-          # This ensures all dependencies are available for pytest
+          # uv sync will automatically:
+          # 1. Download/use Python 3.11+ as specified in pyproject.toml
+          # 2. Create a virtual environment
+          # 3. Install all dependencies from uv.lock
+          echo "Installing Python and dependencies with uv..."
           uv sync
+          
+          # Show which Python version uv is using
+          echo "Python version managed by uv:"
+          uv run python --version
           
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -134,7 +130,7 @@ jobs:
         run: |
           # Verify that the test command from .reviewrc.json works
           echo "Testing pytest availability..."
-          if uv run python -m pytest --version; then
+          if uv run pytest --version; then
             echo "✓ pytest is available and executable"
           else
             echo "::error::pytest is not available. Check uv sync completed successfully."
@@ -143,7 +139,7 @@ jobs:
           
           # Quick test collection to ensure tests are discoverable
           echo "Checking test discovery..."
-          TEST_COUNT=$(uv run python -m pytest tests/ --co -q 2>/dev/null | grep -c "test" || echo "0")
+          TEST_COUNT=$(uv run pytest tests/ --co -q 2>/dev/null | grep -c "test" || echo "0")
           echo "✓ Found $TEST_COUNT tests"
           
       - name: Check provider authentication
