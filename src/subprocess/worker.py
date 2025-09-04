@@ -39,6 +39,7 @@ from ..protocol.messages import (
 )
 from ..protocol.transport import MessageTransport
 from .executor import ThreadedExecutor, OutputDrainTimeout
+from .constants import ENGINE_INTERNALS
 
 logger = structlog.get_logger()
 
@@ -99,21 +100,8 @@ class InputHandler:
 class SubprocessWorker:
     """Main subprocess worker that executes Python code."""
     
-    # Engine internals that must be preserved (same as NamespaceManager)
-    ENGINE_INTERNALS = {
-        '_',          # Last result
-        '__',         # Second to last result
-        '___',        # Third to last result
-        '_i',         # Last input
-        '_ii',        # Second to last input
-        '_iii',       # Third to last input
-        'Out',        # Output history
-        'In',         # Input history
-        '_oh',        # Output history dict (IPython)
-        '_ih',        # Input history list (IPython)
-        '_exit_code', # Last exit code
-        '_exception', # Last exception
-    }
+    # Engine internals imported from constants module
+    # See constants.py for the complete list and documentation
     
     def __init__(
         self,
@@ -155,7 +143,7 @@ class SubprocessWorker:
         })
         
         # Initialize engine internals with proper defaults
-        for key in self.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             if key not in self._namespace:
                 if key in ['Out', '_oh']:
                     self._namespace[key] = {}

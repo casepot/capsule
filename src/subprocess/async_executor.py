@@ -11,9 +11,9 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import sys
+from collections import OrderedDict
 from enum import Enum
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 import weakref
 
 import structlog
@@ -88,24 +88,22 @@ class AsyncExecutor:
         self.transport = transport
         self.execution_id = execution_id
         
-        # Event loop management - critical for avoiding binding issues
+        # Event loop management - never modify global loop
+        # Always use existing loop or None if not in async context
         try:
-            # Try to get existing loop
             self.loop = asyncio.get_running_loop()
-            self.owns_loop = False
             logger.debug("Using existing event loop")
         except RuntimeError:
-            # No running loop, create new one
-            self.loop = asyncio.new_event_loop()
-            self.owns_loop = True
-            asyncio.set_event_loop(self.loop)
-            logger.debug("Created new event loop")
+            # No running loop - that's ok, we'll get it when needed
+            self.loop = None
+            logger.debug("No event loop available yet")
         
         # Future: Coroutine tracking for cleanup
         self._pending_coroutines: Set[weakref.ref] = set()
         
-        # AST cache for repeated executions (future optimization)
-        self._ast_cache: Dict[int, ast.AST] = {}
+        # AST cache with LRU limit to prevent unbounded growth
+        self._ast_cache: OrderedDict[int, ast.AST] = OrderedDict()
+        self._ast_cache_max_size = 100  # Limit cache size
         
         # Execution statistics
         self.stats = {
@@ -118,7 +116,7 @@ class AsyncExecutor:
         logger.info(
             "AsyncExecutor initialized",
             execution_id=execution_id,
-            owns_loop=self.owns_loop
+            has_loop=self.loop is not None
         )
     
     def analyze_execution_mode(self, code: str) -> ExecutionMode:
@@ -142,9 +140,16 @@ class AsyncExecutor:
             # Try to parse code normally
             tree = ast.parse(code)
             
-            # Store in cache for potential reuse
+            # Store in cache with LRU eviction
             code_hash = hash(code)
-            self._ast_cache[code_hash] = tree
+            if code_hash in self._ast_cache:
+                # Move to end (most recently used)
+                self._ast_cache.move_to_end(code_hash)
+            else:
+                self._ast_cache[code_hash] = tree
+                # Evict oldest if cache is too large
+                if len(self._ast_cache) > self._ast_cache_max_size:
+                    self._ast_cache.popitem(last=False)
             
             # Check for top-level await (not inside function)
             # Need to check all nodes, not just Expr nodes
@@ -294,8 +299,8 @@ class AsyncExecutor:
         
         try:
             if mode == ExecutionMode.TOP_LEVEL_AWAIT:
-                # Future implementation in Phase 1
-                raise NotImplementedError("Async execution coming soon")
+                # TODO(Phase 1): Implement using compile() with PyCF_ALLOW_TOP_LEVEL_AWAIT flag
+                raise NotImplementedError("Async execution coming soon - Phase 1")
             
             else:
                 # All other modes delegate to ThreadedExecutor for now
@@ -326,11 +331,13 @@ class AsyncExecutor:
         """
         # Create ThreadedExecutor instance
         # Note: We pass namespace.namespace to get the dict
+        # Get current running loop for the executor
+        current_loop = self.loop or asyncio.get_running_loop()
         executor = ThreadedExecutor(
             transport=self.transport,
             execution_id=self.execution_id,
             namespace=self.namespace.namespace,  # Pass the dict
-            loop=self.loop  # Use our managed loop
+            loop=current_loop  # Use current running loop
         )
         
         # Start output pump for the executor
@@ -380,14 +387,21 @@ class AsyncExecutor:
         
         return cleaned
     
-    def __del__(self):
-        """Cleanup on deletion."""
-        # Clean up any pending coroutines
-        self.cleanup_coroutines()
+    async def close(self):
+        """Explicitly close the executor and clean up resources.
         
-        # If we own the loop, close it
-        if self.owns_loop and self.loop:
-            try:
-                self.loop.close()
-            except:
-                pass  # Best effort
+        This should be called when the executor is no longer needed.
+        Alternatively, use AsyncExecutor as a context manager.
+        """
+        cleaned = self.cleanup_coroutines()
+        if cleaned > 0:
+            logger.debug(f"Cleaned up {cleaned} pending coroutines")
+    
+    async def __aenter__(self):
+        """Enter context manager."""
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager and clean up."""
+        await self.close()
+        return False

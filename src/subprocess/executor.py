@@ -13,12 +13,16 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Union, Literal
 
+import structlog
+
 from ..protocol.messages import (
     InputMessage,
     OutputMessage,
     StreamType,
 )
 from ..protocol.transport import MessageTransport
+
+logger = structlog.get_logger()
 
 
 class CancelToken:
@@ -182,7 +186,17 @@ class ThreadSafeOutput:
 
 
 class ThreadedExecutor:
-    """Executes user code in thread with protocol-based I/O."""
+    """Executes user code in thread with protocol-based I/O.
+    
+    This executor provides both synchronous and asynchronous execution interfaces:
+    - execute_code(): Synchronous execution (original API)
+    - execute_code_async(): Async wrapper for compatibility with async tests
+    
+    The async wrapper (execute_code_async) is a transitional compatibility layer
+    that will be removed once AsyncExecutor fully implements async execution.
+    It runs the synchronous execute_code method in a thread pool and manages
+    output draining with timeout protection for test environments.
+    """
     
     def __init__(
         self, 
@@ -644,7 +658,7 @@ class ThreadedExecutor:
         
         try:
             # Create a future for thread completion
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
             # Reset state before execution
             self._result = None
@@ -658,9 +672,14 @@ class ThreadedExecutor:
             # The mock transport in tests may not handle this properly
             try:
                 await self.drain_outputs(timeout=0.5)
-            except (OutputDrainTimeout, asyncio.TimeoutError):
-                # It's okay if drain times out in tests with mock transport
-                pass
+            except (OutputDrainTimeout, asyncio.TimeoutError) as e:
+                # Log timeout but don't fail - OK in tests with mock transport
+                logger.debug(
+                    "Output drain timeout in async wrapper",
+                    error=str(e),
+                    timeout=0.5,
+                    execution_id=self.execution_id
+                )
             
             # Check for errors first
             if self._error:

@@ -11,6 +11,7 @@ from typing import Dict, Any
 
 from src.subprocess.namespace import NamespaceManager
 from src.subprocess.worker import SubprocessWorker
+from src.subprocess.constants import ENGINE_INTERNALS
 from src.protocol.transport import MessageTransport
 from unittest.mock import Mock
 
@@ -49,7 +50,7 @@ class TestNamespaceMergePolicy:
         manager = NamespaceManager()
         
         # Check all engine internals exist
-        for key in NamespaceManager.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             assert key in manager._namespace, f"Engine internal '{key}' not initialized"
         
         # Check proper types
@@ -78,7 +79,7 @@ class TestNamespaceMergePolicy:
         assert manager._namespace['_'] == 'engine_value', "Engine context should be able to update internals"
         
         # Test all internals are protected
-        for key in NamespaceManager.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             manager.update_namespace({key: 'user_attempt'}, source_context='user')
             assert manager._namespace[key] != 'user_attempt', f"Protected key {key} was modified by user"
     
@@ -241,7 +242,7 @@ class TestNamespaceMergePolicy:
         
         # Setup should have been called in __init__
         # Check internals are initialized
-        for key in SubprocessWorker.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             assert key in worker._namespace, f"Worker missing engine internal '{key}'"
         
         # Call setup again - should not replace namespace
@@ -298,7 +299,7 @@ class TestNamespaceIntegration:
         assert "y" not in manager._namespace
         
         # Engine internals should still be present
-        for key in NamespaceManager.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             assert key in manager._namespace, f"Lost engine internal {key} after restore"
     
     def test_execute_preserves_namespace(self):

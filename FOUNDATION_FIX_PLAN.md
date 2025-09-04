@@ -1,13 +1,13 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-**STATUS**: Day 3 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 98.7% (77/78 unit tests)  
-**BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-3 work)
+**STATUS**: Day 4 Complete (Phase 0 Emergency Fixes + PR Review ✅) | Test Pass Rate: 98.7% (78/79 unit tests)  
+**BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-4 work, PR #10 ready to merge)
 
 ## Executive Summary
 
 After reviewing the current implementation, test failures, and future specs, I've identified that we're in an **architectural transition phase**. The tests are written for the future AsyncExecutor + Resonate architecture, while the implementation is still using ThreadedExecutor without proper async coordination. We need to fix foundational issues before implementing the full specs.
 
-**Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with ExecutionMode detection, ThreadedExecutor delegation working, 98.7% test pass rate achieved. Ready for Phase 1 async implementation.
+**Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with proper lifecycle management, ThreadedExecutor delegation working with async wrapper, namespace merge-only policy enforced, ENGINE_INTERNALS centralized, all PR review feedback addressed. 98.7% test pass rate achieved (78/79 tests). Ready to merge to master.
 
 ## Development Workflow & Branching Strategy
 
@@ -456,18 +456,23 @@ def async_executor(namespace_manager, transport):
    - Commit: `90c2937`
    
 4. **Day 3**: Create AsyncExecutor skeleton ✅ COMPLETE
-   - New File: `src/subprocess/async_executor.py` (395 lines)
-   - Test File: `tests/unit/test_async_executor.py` (499 lines, 22 tests)
+   - New File: `src/subprocess/async_executor.py` (398 lines)
+   - Test File: `tests/unit/test_async_executor.py` (536 lines, 23 tests)
    - ExecutionMode detection working for all 5 modes
    - ThreadedExecutor delegation maintains functionality
-   - Event loop management with ownership tracking
-   - Result: 22 new tests passing, 91% AsyncExecutor coverage
+   - Event loop management without ownership (no __del__ closing)
+   - Result: 23 new tests passing, 90% AsyncExecutor coverage
    
-5. **Day 3-4**: Fix event loop management (Next task)
-   - File: `src/session/manager.py:81-83`
-   - Fix asyncio objects created before loop set
+5. **Day 4**: PR Review Feedback Fixes ✅ COMPLETE
+   - **Critical**: Removed dangerous __del__ loop closing from AsyncExecutor
+   - **Critical**: Added explicit lifecycle management (close() and context manager)
+   - **Critical**: Fixed deprecated get_event_loop() → get_running_loop()
+   - **Medium**: Created `src/subprocess/constants.py` for single ENGINE_INTERNALS source
+   - **Medium**: Fixed brittle/flaky tests with proper synchronization
+   - **Low**: Added LRU cache limit, removed unused imports, improved documentation
+   - Result: All reviewer concerns addressed
 
-**Goal**: 80% of tests passing ✅ EXCEEDED (98.7% - 77/78 unit tests)
+**Goal**: 80% of tests passing ✅ EXCEEDED (98.7% - 78/79 unit tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
 **Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  

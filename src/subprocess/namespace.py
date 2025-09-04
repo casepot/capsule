@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterator, Optional
 import structlog
 
 from ..protocol.messages import TransactionPolicy
+from .constants import ENGINE_INTERNALS
 
 logger = structlog.get_logger()
 
@@ -15,21 +16,8 @@ logger = structlog.get_logger()
 class NamespaceManager:
     """Manages Python namespace with transaction support."""
     
-    # Engine internals that must be preserved (from spec line 89-102)
-    ENGINE_INTERNALS = {
-        '_',          # Last result
-        '__',         # Second to last result
-        '___',        # Third to last result
-        '_i',         # Last input
-        '_ii',        # Second to last input
-        '_iii',       # Third to last input
-        'Out',        # Output history
-        'In',         # Input history
-        '_oh',        # Output history dict (IPython)
-        '_ih',        # Input history list (IPython)
-        '_exit_code', # Last exit code
-        '_exception', # Last exception
-    }
+    # Engine internals imported from constants module
+    # See constants.py for the complete list and documentation
     
     def __init__(self) -> None:
         self._namespace: Dict[str, Any] = {}
@@ -62,7 +50,7 @@ class NamespaceManager:
         })
         
         # Initialize engine internals with proper defaults
-        for key in self.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             if key not in self._namespace:
                 if key in ['Out', '_oh']:
                     self._namespace[key] = {}
@@ -101,7 +89,7 @@ class NamespaceManager:
         
         for key, value in updates.items():
             # Skip protected keys unless from engine context
-            if key in self.ENGINE_INTERNALS and source_context != "engine":
+            if key in ENGINE_INTERNALS and source_context != "engine":
                 logger.debug(f"Skipping protected key {key} from {source_context}")
                 continue
             
@@ -114,14 +102,7 @@ class NamespaceManager:
             elif merge_strategy == "preserve":
                 should_update = key not in self._namespace
             elif merge_strategy == "smart":
-                # Don't update with None unless explicitly setting
-                if value is None and old_value is not None:
-                    should_update = False
-                # Don't update with empty containers
-                elif isinstance(value, (list, dict, set)) and not value and old_value:
-                    should_update = False
-                else:
-                    should_update = old_value != value
+                should_update = self._should_update_smart(key, value, old_value)
             else:
                 should_update = True
             
@@ -433,7 +414,7 @@ class NamespaceManager:
         """
         # Save engine internals before clearing
         saved_internals = {}
-        for key in self.ENGINE_INTERNALS:
+        for key in ENGINE_INTERNALS:
             if key in self._namespace:
                 saved_internals[key] = self._namespace[key]
         
@@ -450,6 +431,33 @@ class NamespaceManager:
         # Restore any saved engine internals
         for key, value in saved_internals.items():
             self._namespace[key] = value
+    
+    def _should_update_smart(self, key: str, new_value: Any, old_value: Any) -> bool:
+        """Determine if a value should be updated using smart merge strategy.
+        
+        Smart merge rules:
+        - Don't update with None unless explicitly setting (preserves existing)
+        - Don't update with empty containers if old value exists
+        - Otherwise update if values differ
+        
+        Args:
+            key: The namespace key being updated
+            new_value: The new value being set
+            old_value: The existing value in namespace
+            
+        Returns:
+            True if the value should be updated, False otherwise
+        """
+        # Don't update with None unless explicitly setting
+        if new_value is None and old_value is not None:
+            return False
+        
+        # Don't update with empty containers if old value exists
+        if isinstance(new_value, (list, dict, set)) and not new_value and old_value:
+            return False
+        
+        # Update if values differ
+        return old_value != new_value
     
     def get_serializable_namespace(self) -> Dict[str, Any]:
         """Get a serializable version of the namespace.

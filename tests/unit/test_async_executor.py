@@ -65,7 +65,7 @@ class TestAsyncExecutorInitialization:
         assert executor.transport is mock_transport
         assert executor.execution_id == "test-exec-1"
         assert executor.loop is asyncio.get_running_loop()
-        assert not executor.owns_loop  # Should not own the loop
+        # Executor no longer tracks loop ownership
         assert len(executor._pending_coroutines) == 0
         assert executor.stats["executions"] == 0
     
@@ -93,10 +93,9 @@ class TestAsyncExecutorInitialization:
                 execution_id="test-exec-2"
             )
             
-            # Verify it created and owns a loop
-            assert executor.owns_loop
-            assert executor.loop is not None
-            assert asyncio.get_event_loop() is executor.loop
+            # Verify executor has no loop when none is running
+            assert executor.loop is None
+            # Executor no longer creates or sets loops
             
         finally:
             # Restore original loop
@@ -495,24 +494,42 @@ class TestAsyncExecutorIntegration:
         # Verify namespace manager is properly referenced
         assert executor.namespace is namespace_manager
     
-    def test_executor_deletion_cleanup(self):
-        """Test that executor cleans up on deletion."""
+    @pytest.mark.asyncio
+    async def test_executor_explicit_cleanup(self):
+        """Test that executor can be explicitly closed."""
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         
-        # Create executor that owns its loop
-        asyncio.set_event_loop(None)  # Clear any existing
+        # Create executor in an async context
         executor = AsyncExecutor(
             namespace_manager=namespace_manager,
             transport=mock_transport,
             execution_id="test-exec"
         )
         
-        assert executor.owns_loop
-        loop = executor.loop
+        # Executor should have access to current loop
+        assert executor.loop is not None
         
-        # Delete executor
-        del executor
+        # Test explicit close
+        await executor.close()
         
-        # Loop should be closed
-        assert loop.is_closed()
+        # Verify cleanup happened (no exceptions)
+        # The executor no longer manages loop lifecycle
+    
+    @pytest.mark.asyncio
+    async def test_executor_context_manager(self):
+        """Test that executor works as an async context manager."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        
+        # Use executor as context manager
+        async with AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-exec"
+        ) as executor:
+            # Executor should be usable
+            assert executor is not None
+            assert executor.loop is not None
+        
+        # Context manager should have called close (no exceptions)
