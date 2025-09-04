@@ -172,10 +172,10 @@ class TestNamespaceMergePolicy:
         """Test that _ is only updated for expression results, not assignments."""
         manager = NamespaceManager()
         
-        # Variable assignment should NOT update _ anymore
-        # This is currently failing but will pass after fix
+        # Variable assignment should NOT update _ 
         manager.update_namespace({'x': 5}, source_context='engine')
-        # For now, we know this incorrectly sets _ to 5, but after fix it should be None
+        # _ should not be set by a variable assignment
+        assert manager._namespace.get('_') is None
         
         # Direct _ update should work (representing an expression result)
         manager.update_namespace({'_': 42}, source_context='engine')
@@ -183,7 +183,8 @@ class TestNamespaceMergePolicy:
         
         # Another variable assignment should NOT change _
         manager.update_namespace({'y': 10}, source_context='engine')
-        # After fix, _ should still be 42
+        # _ should still be 42, unchanged by the assignment
+        assert manager._namespace.get('_') == 42
         
         # Expression result should update _ and shift history
         manager.update_namespace({'_': 100}, source_context='engine')

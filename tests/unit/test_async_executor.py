@@ -117,7 +117,6 @@ class TestAsyncExecutorInitialization:
         # Check stats structure
         assert "executions" in executor.stats
         assert "errors" in executor.stats
-        assert "ast_transforms" in executor.stats
         assert hasattr(executor, 'mode_counts')
         
         # Check mode counts initialized for all modes

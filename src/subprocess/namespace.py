@@ -90,6 +90,8 @@ class NamespaceManager:
         for key, value in updates.items():
             # Skip protected keys unless from engine context
             if key in ENGINE_INTERNALS and source_context != "engine":
+                # TODO: Use structured logging fields instead of f-strings for machine-parseable logs
+                # e.g., logger.debug("Skipping protected key", key=key, source=source_context)
                 logger.debug(f"Skipping protected key {key} from {source_context}")
                 continue
             

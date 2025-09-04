@@ -34,8 +34,8 @@ class TestEventLoopHandling:
         async def test_coro():
             return await executor._execute_with_threaded_executor("x = 1")
         
-        # Try to run outside async context - should fail
-        with pytest.raises(RuntimeError, match="no running event loop"):
+        # Try to run outside async context - should fail with our improved error message
+        with pytest.raises(RuntimeError, match="AsyncExecutor.execute\\(\\) must be called from within an async context"):
             # Create new event loop and immediately close it to ensure no loop
             loop = asyncio.new_event_loop()
             loop.close()

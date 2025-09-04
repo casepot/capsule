@@ -101,13 +101,13 @@ class AsyncExecutor:
         
         # AST cache with LRU limit to prevent unbounded growth
         self._ast_cache: OrderedDict[str, ast.AST] = OrderedDict()
+        # TODO: Make cache size configurable via constructor parameter
         self._ast_cache_max_size = 100  # Limit cache size
         
         # Execution statistics
         self.stats = {
             "executions": 0,
-            "errors": 0,
-            "ast_transforms": 0
+            "errors": 0
         }
         self.mode_counts = {mode: 0 for mode in ExecutionMode}
         
@@ -337,9 +337,17 @@ class AsyncExecutor:
         """
         # Create ThreadedExecutor instance
         # Note: We pass namespace.namespace to get the dict
+        # TODO: Consider pooling ThreadedExecutor instances to reduce allocation overhead
+        # This would be beneficial for high-concurrency scenarios during the transition phase
+        
         # Get current running loop - we're in async method so this should work
-        # Let it raise naturally if not in async context
-        current_loop = asyncio.get_running_loop()
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            raise RuntimeError(
+                "AsyncExecutor.execute() must be called from within an async context. "
+                "Use 'await executor.execute(code)' inside an async function."
+            )
         executor = ThreadedExecutor(
             transport=self.transport,
             execution_id=self.execution_id,

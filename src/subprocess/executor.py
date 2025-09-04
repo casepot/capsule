@@ -516,7 +516,22 @@ class ThreadedExecutor:
         self.shutdown_input_waiters()
     
     def execute_code(self, code: str) -> None:
-        """Execute user code in thread context (called by thread)."""
+        """Execute user code in thread context (called by thread).
+        
+        SECURITY MODEL:
+        ===============
+        This method uses eval() and exec() to execute arbitrary Python code. 
+        Security is provided through:
+        
+        1. PRIMARY: Subprocess isolation - each Session runs in its own subprocess
+           with resource limits (memory, CPU, file descriptors)
+        2. SECONDARY: Namespace isolation - code runs in a controlled namespace
+        3. FUTURE: Capability-based security for fine-grained resource control
+        
+        The use of eval/exec is intentional - this is an execution environment
+        similar to IPython/Jupyter. Sandboxing happens at the process level,
+        not within the Python interpreter.
+        """
         import builtins
         import structlog
         logger = structlog.get_logger()
@@ -570,13 +585,18 @@ class ThreadedExecutor:
             if is_expr:
                 # Single expression: evaluate and capture result
                 logger.info(f"Executing expression for {self._execution_id}")
-                # IMPORTANT: Use dont_inherit=False to inherit the trace function
+                # CRITICAL: dont_inherit=False is REQUIRED for cooperative cancellation
+                # This allows sys.settrace() to be inherited into the executed code's scope,
+                # enabling interruption via KeyboardInterrupt. This is standard practice for
+                # interactive Python environments (IPython, Jupyter) and NOT a security issue.
+                # The subprocess isolation provides the primary security boundary.
                 compiled = compile(code, "<session>", "eval", dont_inherit=False, optimize=0)
                 self._result = eval(compiled, self._namespace, self._namespace)
             else:
                 # Statements: execute without result capture
                 logger.info(f"Executing statements for {self._execution_id}")
-                # IMPORTANT: Use dont_inherit=False to inherit the trace function
+                # CRITICAL: dont_inherit=False is REQUIRED for cooperative cancellation
+                # See comment above for eval() - same rationale applies for exec()
                 compiled = compile(code, "<session>", "exec", dont_inherit=False, optimize=0)
                 exec(compiled, self._namespace, self._namespace)
                 logger.info(f"Execution completed for {self._execution_id}")
