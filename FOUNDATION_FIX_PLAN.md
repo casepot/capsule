@@ -1,6 +1,6 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-**STATUS**: Day 1 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 88.6% (39/44)  
+**STATUS**: Day 2 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 86.3% (63/73 core tests)  
 **BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-3 work)
 
 ## Executive Summary
@@ -206,31 +206,17 @@ msg = HeartbeatMessage(
 
 ### Phase 1: Core Foundation Fixes (1-2 days)
 
-#### 1.1 Implement Namespace Merge-Only Policy
-**File**: `src/subprocess/namespace.py` (modify `_setup_namespace` at lines 28-40)
+#### 1.1 Implement Namespace Merge-Only Policy ✅ COMPLETED IN DAY 2
+**Files Modified**: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
 **Spec**: `docs/async_capability_prompts/current/24_spec_namespace_management.md:87-102` (ENGINE_INTERNALS list)
 
-```python
-class NamespaceManager:
-    # Add ENGINE_INTERNALS from spec line 89-102
-    ENGINE_INTERNALS = {
-        '_', '__', '___', '_i', '_ii', '_iii',
-        'Out', 'In', '_oh', '_ih', '_exit_code', '_exception'
-    }
-    
-    def update_namespace(self, updates: Dict[str, Any], source: str = "user"):
-        """Update namespace with merge-only policy."""
-        # CRITICAL: Never replace, always merge (spec line 22)
-        if source == "user":
-            # Don't overwrite engine internals from user code
-            for key, value in updates.items():
-                if key not in self.ENGINE_INTERNALS:
-                    self._namespace[key] = value
-        else:
-            # Engine updates can modify internals
-            self._namespace.update(updates)
-```
-**Also Fix**: `src/subprocess/worker.py:126-134` to use update instead of assignment
+**Completed Implementation**:
+- Added ENGINE_INTERNALS constant with all protected keys
+- Fixed _setup_namespace() to use update() instead of replace
+- Added update_namespace() method with merge strategies (overwrite/preserve/smart)
+- Added _update_result_history() for tracking execution results (_, __, ___)
+- Updated clear() to preserve engine internals
+- Created comprehensive test suite (12 tests, all passing)
 
 #### 1.2 Create AsyncExecutor Skeleton
 **New File**: `src/subprocess/async_executor.py`
@@ -457,9 +443,14 @@ def async_executor(namespace_manager, transport):
    - Result: All 8 message tests passing
    - Commit: `016f42b`
    
-3. **Day 2**: Implement merge-only namespace policy (4 hours) - **NEXT**
-   - File: `src/subprocess/namespace.py:28-40`
+3. **Day 2**: Implement merge-only namespace policy ✅ COMPLETE  
+   - Files: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
    - Spec: `docs/async_capability_prompts/current/24_spec_namespace_management.md:15-29`
+   - Added ENGINE_INTERNALS constant with protected keys
+   - Fixed _setup_namespace() to UPDATE instead of REPLACE
+   - Added update_namespace() method with merge strategies
+   - Created test_namespace_merge.py with 12 comprehensive tests
+   - Commit: `90c2937`
    
 4. **Day 3**: Create AsyncExecutor skeleton (4 hours)
    - New File: `src/subprocess/async_executor.py`
@@ -469,7 +460,7 @@ def async_executor(namespace_manager, transport):
    - File: `src/session/manager.py:81-83`
    - Fix asyncio objects created before loop set
 
-**Goal**: 80% of tests passing ✅ ACHIEVED (88.6% - 39/44 tests)
+**Goal**: 80% of tests passing ✅ ACHIEVED (86.3% - 63/73 core tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
 **Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  
@@ -508,7 +499,7 @@ def async_executor(namespace_manager, transport):
 ### Immediate Success (Week 1)
 - [x] ThreadedExecutor tests pass with async wrapper ✅ Day 1
 - [x] No Pydantic validation errors ✅ Day 1
-- [ ] Namespace never replaced, only merged (Day 2)
+- [x] Namespace never replaced, only merged ✅ Day 2
 - [ ] Basic AsyncExecutor skeleton works (Day 3)
 - [ ] Event loop errors resolved (Day 3-4)
 
