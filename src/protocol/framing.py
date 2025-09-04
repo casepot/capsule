@@ -57,12 +57,8 @@ class FrameBuffer:
         Returns:
             Frame data or None if no frame available
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # Fallback if no running loop (shouldn't happen in async context)
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        # Get the running loop - async methods should always have one
+        loop = asyncio.get_running_loop()
         
         deadline = loop.time() + timeout if timeout else None
         

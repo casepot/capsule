@@ -568,9 +568,8 @@ async def main() -> None:
     session_id = sys.argv[1]
     
     # Create transport using stdin/stdout
-    # Create new event loop for main entry point
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Use the existing event loop from asyncio.run()
+    loop = asyncio.get_running_loop()
     
     # Create reader from stdin (use buffer for binary)
     reader = asyncio.StreamReader()

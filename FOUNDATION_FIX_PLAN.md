@@ -1,13 +1,13 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-**STATUS**: Day 4 Complete (Phase 0 Emergency Fixes + PR Review ✅) | Test Pass Rate: 98.7% (78/79 unit tests)  
+**STATUS**: Day 4 Complete (Phase 0 Emergency Fixes + PR Review ✅) | Test Pass Rate: 97.6% (83/85 unit tests)
 **BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-4 work, PR #10 ready to merge)
 
 ## Executive Summary
 
 After reviewing the current implementation, test failures, and future specs, I've identified that we're in an **architectural transition phase**. The tests are written for the future AsyncExecutor + Resonate architecture, while the implementation is still using ThreadedExecutor without proper async coordination. We need to fix foundational issues before implementing the full specs.
 
-**Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with proper lifecycle management, ThreadedExecutor delegation working with async wrapper, namespace merge-only policy enforced, ENGINE_INTERNALS centralized, all PR review feedback addressed. 98.7% test pass rate achieved (78/79 tests). Ready to merge to master.
+**Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with proper lifecycle management, ThreadedExecutor delegation working with async wrapper, namespace merge-only policy enforced, ENGINE_INTERNALS centralized, all PR review feedback addressed. 97.6% test pass rate achieved (83/85 tests). Ready to merge to master.
 
 ## Development Workflow & Branching Strategy
 
@@ -207,7 +207,7 @@ msg = HeartbeatMessage(
 **Tests Fixed**: `tests/unit/test_messages.py` - All 8 tests now pass
 
 ### Phase 1: Core Foundation Fixes (1-2 days) - **READY TO START**
-**Phase 0 Complete**: AsyncExecutor skeleton ready, 98.7% tests passing, foundation stable
+**Phase 0 Complete**: AsyncExecutor skeleton ready, 97.6% tests passing, foundation stable
 
 #### 1.1 Implement Namespace Merge-Only Policy ✅ COMPLETED IN DAY 2
 **Files Modified**: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
@@ -495,7 +495,7 @@ def async_executor(namespace_manager, transport):
    - **Documentation**: Clarified thread safety claims
      - File: `src/subprocess/async_executor.py` lines 80, 85-87
 
-**Goal**: 80% of tests passing ✅ EXCEEDED (98.8% - 82/83 unit tests)
+**Goal**: 80% of tests passing ✅ EXCEEDED (97.6% - 83/85 unit tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
 **Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  

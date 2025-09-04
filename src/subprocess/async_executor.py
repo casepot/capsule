@@ -106,7 +106,7 @@ class AsyncExecutor:
         self._pending_coroutines: Set[weakref.ref] = set()
         
         # AST cache with LRU limit to prevent unbounded growth
-        self._ast_cache: OrderedDict[int, ast.AST] = OrderedDict()
+        self._ast_cache: OrderedDict[str, ast.AST] = OrderedDict()
         self._ast_cache_max_size = 100  # Limit cache size
         
         # Execution statistics
@@ -337,7 +337,12 @@ class AsyncExecutor:
         # Create ThreadedExecutor instance
         # Note: We pass namespace.namespace to get the dict
         # Get current running loop for the executor
-        current_loop = self.loop or asyncio.get_running_loop()
+        try:
+            current_loop = self.loop or asyncio.get_running_loop()
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"AsyncExecutor.execute() must be called from async context: {e}"
+            ) from e
         executor = ThreadedExecutor(
             transport=self.transport,
             execution_id=self.execution_id,
@@ -383,7 +388,7 @@ class AsyncExecutor:
                 try:
                     coro.close()
                     cleaned += 1
-                except:
+                except Exception:
                     pass  # Already closed or running
         
         # Remove dead references
