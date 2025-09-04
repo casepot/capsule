@@ -34,6 +34,8 @@ class TestThreadedExecutor:
     async def test_simple_code_execution(self):
         """Test executing simple Python code."""
         mock_transport = Mock()
+        # Make send_message an async mock so it can be awaited
+        mock_transport.send_message = AsyncMock()
         loop = asyncio.get_event_loop()
         namespace = {}
         
@@ -48,7 +50,7 @@ class TestThreadedExecutor:
         await executor.start_output_pump()
         
         try:
-            result = await executor.execute_code("2 + 2")
+            result = await executor.execute_code_async("2 + 2")
             assert result == 4
             
             # Check namespace wasn't polluted
@@ -60,6 +62,7 @@ class TestThreadedExecutor:
     async def test_namespace_modification(self):
         """Test that executor modifies namespace."""
         mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
         loop = asyncio.get_event_loop()
         namespace = {}
         
@@ -73,10 +76,10 @@ class TestThreadedExecutor:
         await executor.start_output_pump()
         
         try:
-            await executor.execute_code("x = 42")
+            await executor.execute_code_async("x = 42")
             assert namespace["x"] == 42
             
-            result = await executor.execute_code("x * 2")
+            result = await executor.execute_code_async("x * 2")
             assert result == 84
         finally:
             await executor.stop_output_pump()
@@ -85,6 +88,7 @@ class TestThreadedExecutor:
     async def test_exception_handling(self):
         """Test exception handling during execution."""
         mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
         loop = asyncio.get_event_loop()
         
         executor = ThreadedExecutor(
@@ -98,7 +102,7 @@ class TestThreadedExecutor:
         
         try:
             with pytest.raises(ZeroDivisionError):
-                await executor.execute_code("1/0")
+                await executor.execute_code_async("1/0")
         finally:
             await executor.stop_output_pump()
     
@@ -106,6 +110,7 @@ class TestThreadedExecutor:
     async def test_output_capture(self):
         """Test stdout/stderr capture during execution."""
         mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
         loop = asyncio.get_event_loop()
         
         executor = ThreadedExecutor(
@@ -120,15 +125,14 @@ class TestThreadedExecutor:
         
         try:
             # Execute code with print
-            await executor.execute_code("print('hello world')")
+            await executor.execute_code_async("print('hello world')")
             
             # Allow pump to process
             await asyncio.sleep(0.1)
             
             # Check transport received output message
-            # Note: We can't easily check async calls from sync Mock
-            # In a real test we'd use a proper async testing approach
-            assert executor._output_queue.qsize() >= 0  # Queue was used
+            # With AsyncMock, we can verify send_message was called
+            assert mock_transport.send_message.called  # Output was sent
         finally:
             await executor.stop_output_pump()
     
@@ -136,6 +140,7 @@ class TestThreadedExecutor:
     async def test_cancellation(self):
         """Test code execution cancellation."""
         mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
         loop = asyncio.get_event_loop()
         
         executor = ThreadedExecutor(
@@ -152,7 +157,7 @@ class TestThreadedExecutor:
         try:
             # Start long-running execution
             exec_task = asyncio.create_task(
-                executor.execute_code("""
+                executor.execute_code_async("""
 count = 0
 while count < 1000000:
     count += 1
