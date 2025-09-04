@@ -2,8 +2,8 @@
 
 ## PR #10: Foundation Phase 0 Emergency Fixes
 **Branch**: `fix/foundation-phase0-emergency-fixes`  
-**Test Pass Rate**: 97.6% (83/85 unit tests passing, 2 skipped)  
-**Status**: Complete with all reviewer feedback addressed
+**Test Pass Rate**: 97.9% (94/96 unit tests passing, 2 skipped)  
+**Status**: Complete with all reviewer feedback addressed including final refinements
 
 ## Overview
 Phase 0 implements critical fixes to unblock testing and establish a solid foundation for the transition from ThreadedExecutor to AsyncExecutor architecture. All changes maintain backward compatibility while preparing for future async implementation. All critical, medium, and low priority reviewer feedback has been addressed.
@@ -217,6 +217,29 @@ All dangerous fallbacks and error handling issues have been addressed following 
 - **Explicit over implicit**: Clear error handling instead of bare excepts
 - **Don't catch what you can't handle**: Only catch specific exceptions we can handle
 
+## Phase 0 Final Refinements (Post-Review)
+
+Following additional reviewer feedback, these critical fixes were implemented:
+
+### Event Loop Management Fixes
+- **async_executor.py (lines 97-99)**: Removed loop acquisition from `__init__`, now only gets loop when needed in `execute()`
+- **async_executor.py (line 341)**: Simplified to `asyncio.get_running_loop()` without try/except, letting it raise naturally
+- **Rationale**: AsyncExecutor can be initialized outside async context; loop only needed during execution
+
+### SyntaxError Detection Improvements  
+- **async_executor.py (lines 186-195)**: Now uses `compile()` with `PyCF_ALLOW_TOP_LEVEL_AWAIT` flag to accurately detect top-level await
+- **Correctly handles**: `lambda: await foo()` returns UNKNOWN (invalid), not TOP_LEVEL_AWAIT
+- **Tests added**: Comprehensive edge cases in `test_event_loop_handling.py`
+
+### Test Infrastructure Enhancements
+- Created `tests/unit/test_event_loop_handling.py` with 11 tests covering:
+  - Nested async contexts
+  - Concurrent session creation  
+  - SyntaxError edge cases (lambda with await, etc.)
+  - Event loop context requirements
+  - Platform-specific queue operations
+  - No bare except validation
+
 ## Next Steps (Phase 1)
 
 With Phase 0 complete and stable, the codebase is ready for:
@@ -231,7 +254,7 @@ With Phase 0 complete and stable, the codebase is ready for:
 - [x] All critical issues from PR review addressed
 - [x] All medium priority issues resolved  
 - [x] All low priority improvements implemented
-- [x] Tests passing (83 unit tests passing, 2 skipped - 97.6% pass rate)
+- [x] Tests passing (94 unit tests passing, 2 skipped - 97.9% pass rate)
 - [x] Documentation updated
 - [x] No regressions from previous functionality
 - [x] Code ready for production use

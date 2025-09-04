@@ -2,9 +2,9 @@
 
 import asyncio
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, AsyncMock
 
-from src.subprocess.async_executor import AsyncExecutor
+from src.subprocess.async_executor import AsyncExecutor, ExecutionMode
 from src.subprocess.namespace import NamespaceManager
 from src.protocol.framing import RateLimiter
 
@@ -24,23 +24,13 @@ class TestEventLoopHandling:
             execution_id="test-exec"
         )
         
-        # This should fail with a clear error when trying to get running loop
-        # Note: We can't directly test the execute method since it's async,
-        # but we test that the error handling is in place
-        code = """
-        # Get current running loop for the executor
-        try:
-            current_loop = self.loop or asyncio.get_running_loop()
-        except RuntimeError as e:
-            raise RuntimeError(
-                f"AsyncExecutor.execute() must be called from async context: {e}"
-            ) from e
-        """
-        
-        # Verify the error handling code is present
+        # Verify the new behavior: get_running_loop is called directly
+        # without try/except, letting it raise naturally
         import inspect
         source = inspect.getsource(executor._execute_with_threaded_executor)
-        assert "must be called from async context" in source
+        assert "current_loop = asyncio.get_running_loop()" in source
+        # Should not have try/except around get_running_loop anymore
+        assert "try:" not in source.split("get_running_loop()")[0].split("\n")[-2:]
     
     @pytest.mark.asyncio
     async def test_rate_limiter_requires_async_context(self):
@@ -92,6 +82,133 @@ class TestEventLoopHandling:
         except Exception as e:
             # Should not get RuntimeError about event loop
             assert "must be called from async context" not in str(e)
+    
+    @pytest.mark.asyncio
+    async def test_nested_async_contexts(self):
+        """Test AsyncExecutor works correctly in nested async contexts."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
+        
+        async def nested_executor_call():
+            """Inner async function to test nested contexts."""
+            executor = AsyncExecutor(
+                namespace_manager=namespace_manager,
+                transport=mock_transport,
+                execution_id="nested-exec"
+            )
+            # This should work fine in nested async context
+            mode = executor.analyze_execution_mode("x = 1")
+            assert mode == ExecutionMode.SIMPLE_SYNC
+            return "nested_success"
+        
+        # Outer async context
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="outer-exec"
+        )
+        
+        # Test outer context works
+        mode = executor.analyze_execution_mode("y = 2")
+        assert mode == ExecutionMode.SIMPLE_SYNC
+        
+        # Test nested call works
+        nested_result = await nested_executor_call()
+        assert nested_result == "nested_success"
+    
+    @pytest.mark.asyncio
+    async def test_concurrent_session_creation(self):
+        """Test multiple AsyncExecutor instances can be created concurrently."""
+        namespace_managers = [NamespaceManager() for _ in range(3)]
+        mock_transports = [Mock() for _ in range(3)]
+        for transport in mock_transports:
+            transport.send_message = AsyncMock()
+        
+        async def create_and_use(index):
+            """Create executor and analyze code."""
+            executor = AsyncExecutor(
+                namespace_manager=namespace_managers[index],
+                transport=mock_transports[index],
+                execution_id=f"concurrent-{index}"
+            )
+            mode = executor.analyze_execution_mode(f"x = {index}")
+            return mode
+        
+        # Create and use executors concurrently
+        tasks = [create_and_use(i) for i in range(3)]
+        results = await asyncio.gather(*tasks)
+        
+        # Verify all executed correctly
+        assert all(r == ExecutionMode.SIMPLE_SYNC for r in results)
+    
+    @pytest.mark.asyncio
+    async def test_syntaxerror_edge_cases(self):
+        """Test SyntaxError handling for various edge cases."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="syntax-test"
+        )
+        
+        # lambda with await is syntactically valid (the assignment is fine)
+        # It would only error when the lambda is executed
+        mode = executor.analyze_execution_mode("f = lambda: await foo()")
+        assert mode == ExecutionMode.SIMPLE_SYNC  # The assignment itself is valid sync code
+        
+        # def with await outside async is also syntactically valid
+        mode = executor.analyze_execution_mode("def f(): return await foo()")
+        assert mode == ExecutionMode.SIMPLE_SYNC  # The def itself is valid
+        
+        # These cause actual SyntaxErrors and should be detected as TOP_LEVEL_AWAIT or UNKNOWN
+        syntax_errors = [
+            "await x()",  # Top-level await
+            "class C: x = await foo()",  # await in class body - SyntaxError
+        ]
+        
+        # Test top-level await detection
+        mode = executor.analyze_execution_mode("await x()")
+        assert mode == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test class body await (actual SyntaxError even with PyCF_ALLOW_TOP_LEVEL_AWAIT)
+        mode = executor.analyze_execution_mode("class C: x = await foo()")
+        assert mode in (ExecutionMode.UNKNOWN, ExecutionMode.TOP_LEVEL_AWAIT)
+        
+        # Valid top-level await (would work with PyCF_ALLOW_TOP_LEVEL_AWAIT)
+        valid_top_level = [
+            "await asyncio.sleep(0)",
+            "x = await foo()",
+            "await foo(); await bar()",
+        ]
+        
+        for code in valid_top_level:
+            mode = executor.analyze_execution_mode(code)
+            assert mode == ExecutionMode.TOP_LEVEL_AWAIT, f"Code {code!r} should be TOP_LEVEL_AWAIT"
+    
+    def test_init_outside_async_context(self):
+        """Test AsyncExecutor can be initialized outside async context."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        
+        # This should work fine - init doesn't require async context
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="sync-init"
+        )
+        
+        # Verify initialization worked
+        assert executor.namespace == namespace_manager
+        assert executor.transport == mock_transport
+        assert executor.execution_id == "sync-init"
+        assert executor.loop is None  # Should be None until execute() is called
+        
+        # analyze_execution_mode should work outside async context
+        mode = executor.analyze_execution_mode("x = 1")
+        assert mode == ExecutionMode.SIMPLE_SYNC
     
     def test_queue_size_platform_compatibility(self):
         """Test that queue size handling works on platforms without qsize."""

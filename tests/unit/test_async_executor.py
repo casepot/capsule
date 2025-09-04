@@ -64,7 +64,8 @@ class TestAsyncExecutorInitialization:
         assert executor.namespace is namespace_manager
         assert executor.transport is mock_transport
         assert executor.execution_id == "test-exec-1"
-        assert executor.loop is asyncio.get_running_loop()
+        # Loop is not set during init anymore - it's set when needed in execute()
+        assert executor.loop is None
         # Executor no longer tracks loop ownership
         assert len(executor._pending_coroutines) == 0
         assert executor.stats["executions"] == 0
@@ -439,11 +440,12 @@ class TestAsyncExecutorExecution:
             result = await executor.execute("2 + 2")
             
             # Verify ThreadedExecutor was created with correct params
+            # Loop should be the current running loop, not executor.loop (which is None)
             MockThreadedExecutor.assert_called_once_with(
                 transport=mock_transport,
                 execution_id="test-exec",
                 namespace=namespace_manager.namespace,
-                loop=executor.loop
+                loop=asyncio.get_running_loop()
             )
             
             # Verify execution methods were called
@@ -648,8 +650,8 @@ class TestAsyncExecutorIntegration:
             execution_id="test-exec"
         )
         
-        # Executor should have access to current loop
-        assert executor.loop is not None
+        # Executor no longer stores loop during init
+        assert executor.loop is None
         
         # Test explicit close
         await executor.close()
@@ -671,6 +673,7 @@ class TestAsyncExecutorIntegration:
         ) as executor:
             # Executor should be usable
             assert executor is not None
-            assert executor.loop is not None
+            # Loop is not set during init - only when execute() is called
+            assert executor.loop is None
         
         # Context manager should have called close (no exceptions)

@@ -93,14 +93,8 @@ class AsyncExecutor:
         self.execution_id = execution_id
         
         # Event loop management - never modify global loop
-        # Always use existing loop or None if not in async context
-        try:
-            self.loop = asyncio.get_running_loop()
-            logger.debug("Using existing event loop")
-        except RuntimeError:
-            # No running loop - that's ok, we'll get it when needed
-            self.loop = None
-            logger.debug("No event loop available yet")
+        # Don't try to get loop during init; get it when needed in execute()
+        self.loop = None  # Will be set when needed in async context
         
         # Future: Coroutine tracking for cleanup
         self._pending_coroutines: Set[weakref.ref] = set()
@@ -184,13 +178,17 @@ class AsyncExecutor:
             return ExecutionMode.SIMPLE_SYNC
             
         except SyntaxError as e:
-            # Code likely contains top-level await that doesn't parse
-            if 'await' in str(e) or 'await' in code:
-                logger.debug("Detected TOP_LEVEL_AWAIT mode from SyntaxError")
+            # Try compiling with TOP_LEVEL_AWAIT flag to verify if it's actually top-level await
+            # This distinguishes true top-level await from invalid contexts like 'lambda: await foo()'
+            try:
+                compile(code, '<exec>', 'exec', flags=self.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+                # If it compiles with the flag, it's genuine top-level await
+                logger.debug("Detected TOP_LEVEL_AWAIT mode via PyCF_ALLOW_TOP_LEVEL_AWAIT compile")
                 return ExecutionMode.TOP_LEVEL_AWAIT
-            # Unknown syntax error
-            logger.debug("Detected UNKNOWN mode from SyntaxError", error=str(e))
-            return ExecutionMode.UNKNOWN
+            except SyntaxError:
+                # Not valid even with top-level await flag - it's an error
+                logger.debug("Detected UNKNOWN mode from SyntaxError", error=str(e))
+                return ExecutionMode.UNKNOWN
     
     def _contains_await_at_top_level(self, node: ast.AST) -> bool:
         """
@@ -338,13 +336,9 @@ class AsyncExecutor:
         """
         # Create ThreadedExecutor instance
         # Note: We pass namespace.namespace to get the dict
-        # Get current running loop for the executor
-        try:
-            current_loop = self.loop or asyncio.get_running_loop()
-        except RuntimeError as e:
-            raise RuntimeError(
-                f"AsyncExecutor.execute() must be called from async context: {e}"
-            ) from e
+        # Get current running loop - we're in async method so this should work
+        # Let it raise naturally if not in async context
+        current_loop = asyncio.get_running_loop()
         executor = ThreadedExecutor(
             transport=self.transport,
             execution_id=self.execution_id,
