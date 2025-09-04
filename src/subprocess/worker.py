@@ -99,6 +99,22 @@ class InputHandler:
 class SubprocessWorker:
     """Main subprocess worker that executes Python code."""
     
+    # Engine internals that must be preserved (same as NamespaceManager)
+    ENGINE_INTERNALS = {
+        '_',          # Last result
+        '__',         # Second to last result
+        '___',        # Third to last result
+        '_i',         # Last input
+        '_ii',        # Second to last input
+        '_iii',       # Third to last input
+        'Out',        # Output history
+        'In',         # Input history
+        '_oh',        # Output history dict (IPython)
+        '_ih',        # Input history list (IPython)
+        '_exit_code', # Last exit code
+        '_exception', # Last exception
+    }
+    
     def __init__(
         self,
         transport: MessageTransport,
@@ -119,11 +135,16 @@ class SubprocessWorker:
         self._setup_namespace()
     
     def _setup_namespace(self) -> None:
-        """Setup the initial namespace."""
+        """Setup the initial namespace.
+        
+        CRITICAL: Never replace namespace, always merge/update to preserve
+        engine internals and prevent KeyError failures.
+        """
         import builtins
         
-        # Start with clean namespace
-        self._namespace = {
+        # CRITICAL: Never replace, always update (spec line 22)
+        # Update with required built-ins instead of replacing
+        self._namespace.update({
             "__name__": "__main__",
             "__doc__": None,
             "__package__": None,
@@ -131,7 +152,17 @@ class SubprocessWorker:
             "__spec__": None,
             "__annotations__": {},
             "__builtins__": builtins,
-        }
+        })
+        
+        # Initialize engine internals with proper defaults
+        for key in self.ENGINE_INTERNALS:
+            if key not in self._namespace:
+                if key in ['Out', '_oh']:
+                    self._namespace[key] = {}
+                elif key in ['In', '_ih']:
+                    self._namespace[key] = []
+                else:
+                    self._namespace[key] = None
     
     async def _cancel_with_timeout(self, execution_id: str, grace_timeout_ms: int, thread: threading.Thread = None) -> bool:
         """Cancel execution with grace period before hard cancel.

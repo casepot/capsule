@@ -15,6 +15,22 @@ logger = structlog.get_logger()
 class NamespaceManager:
     """Manages Python namespace with transaction support."""
     
+    # Engine internals that must be preserved (from spec line 89-102)
+    ENGINE_INTERNALS = {
+        '_',          # Last result
+        '__',         # Second to last result
+        '___',        # Third to last result
+        '_i',         # Last input
+        '_ii',        # Second to last input
+        '_iii',       # Third to last input
+        'Out',        # Output history
+        'In',         # Input history
+        '_oh',        # Output history dict (IPython)
+        '_ih',        # Input history list (IPython)
+        '_exit_code', # Last exit code
+        '_exception', # Last exception
+    }
+    
     def __init__(self) -> None:
         self._namespace: Dict[str, Any] = {}
         self._snapshots: Dict[str, Dict[str, Any]] = {}
@@ -26,10 +42,16 @@ class NamespaceManager:
         self._setup_namespace()
     
     def _setup_namespace(self) -> None:
-        """Setup the initial namespace."""
+        """Setup the initial namespace.
+        
+        CRITICAL: Never replace namespace, always merge/update to preserve
+        engine internals and prevent KeyError failures.
+        """
         import builtins
         
-        self._namespace = {
+        # CRITICAL: Never replace, always update (spec line 22)
+        # Start with required built-ins
+        self._namespace.update({
             "__name__": "__main__",
             "__doc__": None,
             "__package__": None,
@@ -37,12 +59,105 @@ class NamespaceManager:
             "__spec__": None,
             "__annotations__": {},
             "__builtins__": builtins,
-        }
+        })
+        
+        # Initialize engine internals with proper defaults
+        for key in self.ENGINE_INTERNALS:
+            if key not in self._namespace:
+                if key in ['Out', '_oh']:
+                    self._namespace[key] = {}
+                elif key in ['In', '_ih']:
+                    self._namespace[key] = []
+                else:
+                    self._namespace[key] = None
     
     @property
     def namespace(self) -> Dict[str, Any]:
         """Get the current namespace."""
         return self._namespace
+    
+    def update_namespace(
+        self, 
+        updates: Dict[str, Any],
+        source_context: str = "user",
+        merge_strategy: str = "overwrite"
+    ) -> Dict[str, Any]:
+        """Update namespace with merge-only policy.
+        
+        CRITICAL: This method MERGES updates, never replaces the namespace.
+        
+        Args:
+            updates: Dictionary of updates to merge
+            source_context: Source of updates ("user", "engine", "thread")
+            merge_strategy: How to merge ("overwrite", "preserve", "smart")
+            
+        Returns:
+            Dict of actual changes made
+        """
+        if not updates:
+            return {}
+        
+        changes = {}
+        
+        for key, value in updates.items():
+            # Skip protected keys unless from engine context
+            if key in self.ENGINE_INTERNALS and source_context != "engine":
+                logger.debug(f"Skipping protected key {key} from {source_context}")
+                continue
+            
+            # Check if value should be updated based on strategy
+            old_value = self._namespace.get(key)
+            
+            should_update = False
+            if merge_strategy == "overwrite":
+                should_update = True
+            elif merge_strategy == "preserve":
+                should_update = key not in self._namespace
+            elif merge_strategy == "smart":
+                # Don't update with None unless explicitly setting
+                if value is None and old_value is not None:
+                    should_update = False
+                # Don't update with empty containers
+                elif isinstance(value, (list, dict, set)) and not value and old_value:
+                    should_update = False
+                else:
+                    should_update = old_value != value
+            else:
+                should_update = True
+            
+            if should_update:
+                # CRITICAL: Use item assignment, not replace
+                self._namespace[key] = value
+                changes[key] = value
+                
+                # Track result history for execution results
+                if key == '_' or (source_context in ['engine', 'thread'] and 
+                                  not key.startswith('_')):
+                    self._update_result_history(value)
+        
+        return changes
+    
+    def _update_result_history(self, result: Any) -> None:
+        """Update result history (_, __, ___).
+        
+        Maintains IPython-compatible result tracking.
+        """
+        if result is None:
+            return
+        
+        # Shift history
+        if '_' in self._namespace and self._namespace['_'] is not None:
+            if '__' in self._namespace and self._namespace['__'] is not None:
+                self._namespace['___'] = self._namespace['__']
+            self._namespace['__'] = self._namespace['_']
+        
+        # Set new result
+        self._namespace['_'] = result
+        
+        # Update Out dict if it exists
+        if 'Out' in self._namespace and isinstance(self._namespace['Out'], dict):
+            exec_num = len(self._namespace['Out'])
+            self._namespace['Out'][exec_num] = result
     
     @property
     def function_sources(self) -> Dict[str, str]:
@@ -312,7 +427,16 @@ class NamespaceManager:
                 self._imports.append(imp)
     
     def clear(self) -> None:
-        """Clear the namespace and tracked sources."""
+        """Clear the namespace and tracked sources.
+        
+        Preserves engine internals while clearing user-defined content.
+        """
+        # Save engine internals before clearing
+        saved_internals = {}
+        for key in self.ENGINE_INTERNALS:
+            if key in self._namespace:
+                saved_internals[key] = self._namespace[key]
+        
         # Clear everything
         self._namespace.clear()
         self._function_sources.clear()
@@ -320,8 +444,12 @@ class NamespaceManager:
         self._imports.clear()
         self._snapshots.clear()
         
-        # Restore initial state
+        # Restore initial state (will preserve internals via update)
         self._setup_namespace()
+        
+        # Restore any saved engine internals
+        for key, value in saved_internals.items():
+            self._namespace[key] = value
     
     def get_serializable_namespace(self) -> Dict[str, Any]:
         """Get a serializable version of the namespace.
