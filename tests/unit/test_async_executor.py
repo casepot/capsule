@@ -248,8 +248,100 @@ async def async_func():
             "this is not valid python at all"
         ) == ExecutionMode.UNKNOWN
     
+    def test_analyze_top_level_await_edge_cases(self):
+        """Test detection of top-level await in various contexts (edge cases).
+        
+        This test covers the edge cases identified by PR reviewers where
+        await expressions appear in various contexts that require proper
+        recursive AST traversal to detect.
+        """
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-exec"
+        )
+        
+        # Test await in function call
+        assert executor.analyze_execution_mode(
+            "print(await foo())"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in list comprehension
+        assert executor.analyze_execution_mode(
+            "[await x for x in items]"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in dict literal
+        assert executor.analyze_execution_mode(
+            "result = {'key': await get_value()}"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in set literal
+        assert executor.analyze_execution_mode(
+            "result = {await x, await y}"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in tuple
+        assert executor.analyze_execution_mode(
+            "result = (1, await foo(), 3)"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in conditional expression
+        assert executor.analyze_execution_mode(
+            "x = await foo() if condition else await bar()"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in binary operation
+        assert executor.analyze_execution_mode(
+            "result = await foo() + await bar()"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in comparison
+        assert executor.analyze_execution_mode(
+            "if await check() == True: pass"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in nested expression
+        assert executor.analyze_execution_mode(
+            "result = len(await get_list())"
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await in f-string
+        assert executor.analyze_execution_mode(
+            'msg = f"Value: {await get_value()}"'
+        ) == ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await NOT detected inside function definition
+        code_with_await_in_func = """
+def func():
+    return await foo()
+"""
+        # Should be UNKNOWN (syntax error) or SIMPLE_SYNC, not TOP_LEVEL_AWAIT
+        mode = executor.analyze_execution_mode(code_with_await_in_func)
+        assert mode != ExecutionMode.TOP_LEVEL_AWAIT
+        
+        # Test await NOT detected inside async function
+        code_with_await_in_async = """
+async def func():
+    return await foo()
+"""
+        # Should be ASYNC_DEF, not TOP_LEVEL_AWAIT
+        assert executor.analyze_execution_mode(
+            code_with_await_in_async
+        ) == ExecutionMode.ASYNC_DEF
+        
+        # Test await NOT detected inside lambda (though this is invalid Python)
+        # This should not be detected as TOP_LEVEL_AWAIT
+        mode = executor.analyze_execution_mode("f = lambda: await foo()")
+        assert mode != ExecutionMode.TOP_LEVEL_AWAIT
+    
     def test_ast_caching(self):
         """Test that AST parsing results are cached."""
+        import hashlib
+        
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         
@@ -260,15 +352,64 @@ async def async_func():
         )
         
         code = "x = 1 + 2"
+        code_hash = hashlib.sha256(code.encode()).hexdigest()
         
         # First analysis should cache the AST
         mode1 = executor.analyze_execution_mode(code)
-        assert hash(code) in executor._ast_cache
+        assert code_hash in executor._ast_cache
         
         # Second analysis should use cached AST
         mode2 = executor.analyze_execution_mode(code)
         assert mode1 == mode2
-        assert hash(code) in executor._ast_cache
+        assert code_hash in executor._ast_cache
+    
+    def test_ast_cache_eviction(self):
+        """Test that LRU cache evicts oldest entries when full."""
+        import hashlib
+        
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-exec"
+        )
+        
+        # Set a small cache size for testing
+        executor._ast_cache_max_size = 3
+        
+        # Add entries to fill the cache
+        codes = []
+        hashes = []
+        for i in range(4):
+            code = f"x = {i}"
+            codes.append(code)
+            code_hash = hashlib.sha256(code.encode()).hexdigest()
+            hashes.append(code_hash)
+            executor.analyze_execution_mode(code)
+        
+        # Cache should only have the last 3 entries
+        assert len(executor._ast_cache) == 3
+        assert hashes[0] not in executor._ast_cache  # First (oldest) should be evicted
+        assert hashes[1] in executor._ast_cache
+        assert hashes[2] in executor._ast_cache
+        assert hashes[3] in executor._ast_cache
+        
+        # Access an existing entry to make it most recently used
+        executor.analyze_execution_mode(codes[1])
+        
+        # Add another new entry
+        code = "y = 5"
+        new_hash = hashlib.sha256(code.encode()).hexdigest()
+        executor.analyze_execution_mode(code)
+        
+        # Now codes[2] should be evicted, not codes[1] (which we just accessed)
+        assert len(executor._ast_cache) == 3
+        assert hashes[1] in executor._ast_cache  # Recently accessed, should stay
+        assert hashes[2] not in executor._ast_cache  # Should be evicted
+        assert hashes[3] in executor._ast_cache
+        assert new_hash in executor._ast_cache
 
 
 @pytest.mark.unit

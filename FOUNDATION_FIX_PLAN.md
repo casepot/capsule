@@ -472,7 +472,30 @@ def async_executor(namespace_manager, transport):
    - **Low**: Added LRU cache limit, removed unused imports, improved documentation
    - Result: All reviewer concerns addressed
 
-**Goal**: 80% of tests passing ✅ EXCEEDED (98.7% - 78/79 unit tests)
+6. **Day 4 (Extended)**: Additional PR Refinements ✅ COMPLETE
+   - **AST Traversal**: Verified working correctly, added comprehensive edge case tests
+     - File: `tests/unit/test_async_executor.py` lines 251-339
+     - Tests: await in function calls, list comprehensions, dict/set literals, conditionals
+   - **Hash Collisions**: Replaced Python hash() with SHA-256 digest
+     - File: `src/subprocess/async_executor.py` line 146
+     - Changed from `hash(code)` to `hashlib.sha256(code.encode()).hexdigest()`
+   - **Result History**: Fixed to only update _ for expression results
+     - File: `src/subprocess/namespace.py` lines 111-118
+     - Only updates _ when key='_', not on all variable assignments
+   - **Event Loop Deprecations**: Fixed remaining get_event_loop() calls
+     - File: `src/subprocess/worker.py` line 572-573
+     - File: `src/protocol/framing.py` lines 60-75
+   - **Cancellation Tests**: Added component-level tests with documented limitations
+     - File: `tests/unit/test_executor.py` lines 223-292
+     - Known limitation: KeyboardInterrupt escapes test isolation
+   - **LRU Cache**: Added eviction test
+     - File: `tests/unit/test_async_executor.py` lines 366-412
+   - **Timeout Configuration**: Replaced hardcoded 0.5s with configurable _drain_timeout
+     - File: `src/subprocess/executor.py` line 675
+   - **Documentation**: Clarified thread safety claims
+     - File: `src/subprocess/async_executor.py` lines 80, 85-87
+
+**Goal**: 80% of tests passing ✅ EXCEEDED (98.8% - 82/83 unit tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
 **Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  

@@ -13,6 +13,7 @@ import ast
 import asyncio
 from collections import OrderedDict
 from enum import Enum
+import hashlib
 from typing import Any, Dict, Set
 import weakref
 
@@ -76,13 +77,16 @@ class AsyncExecutor:
         Initialize AsyncExecutor skeleton.
         
         Args:
-            namespace_manager: Thread-safe namespace manager
+            namespace_manager: Namespace manager (GIL-protected for basic operations)
             transport: Message transport for output
             execution_id: Unique execution identifier
             
         Note:
-            In future phases, this will accept a Resonate instance
-            instead of transport for durability support.
+            - Thread safety: The namespace manager relies on Python's GIL
+              for basic thread safety. Explicit synchronization may be needed
+              for complex operations in production use.
+            - In future phases, this will accept a Resonate instance
+              instead of transport for durability support.
         """
         self.namespace = namespace_manager
         self.transport = transport
@@ -141,7 +145,8 @@ class AsyncExecutor:
             tree = ast.parse(code)
             
             # Store in cache with LRU eviction
-            code_hash = hash(code)
+            # Use stable SHA-256 digest instead of hash() to avoid collisions
+            code_hash = hashlib.sha256(code.encode()).hexdigest()
             if code_hash in self._ast_cache:
                 # Move to end (most recently used)
                 self._ast_cache.move_to_end(code_hash)

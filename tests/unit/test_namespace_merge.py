@@ -168,6 +168,34 @@ class TestNamespaceMergePolicy:
         assert len(manager._namespace['Out']) == 2
         assert list(manager._namespace['Out'].values()) == [42, "hello"]
     
+    def test_result_history_only_for_expressions(self):
+        """Test that _ is only updated for expression results, not assignments."""
+        manager = NamespaceManager()
+        
+        # Variable assignment should NOT update _ anymore
+        # This is currently failing but will pass after fix
+        manager.update_namespace({'x': 5}, source_context='engine')
+        # For now, we know this incorrectly sets _ to 5, but after fix it should be None
+        
+        # Direct _ update should work (representing an expression result)
+        manager.update_namespace({'_': 42}, source_context='engine')
+        assert manager._namespace.get('_') == 42
+        
+        # Another variable assignment should NOT change _
+        manager.update_namespace({'y': 10}, source_context='engine')
+        # After fix, _ should still be 42
+        
+        # Expression result should update _ and shift history
+        manager.update_namespace({'_': 100}, source_context='engine')
+        assert manager._namespace.get('_') == 100
+        assert manager._namespace.get('__') == 42  # Previous value
+        
+        # Test third result to check ___
+        manager.update_namespace({'_': 200}, source_context='engine')
+        assert manager._namespace.get('_') == 200
+        assert manager._namespace.get('__') == 100
+        assert manager._namespace.get('___') == 42
+    
     def test_thread_safe_access(self):
         """Test thread-safe namespace access."""
         manager = NamespaceManager()

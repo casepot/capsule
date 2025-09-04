@@ -107,14 +107,15 @@ class NamespaceManager:
                 should_update = True
             
             if should_update:
-                # CRITICAL: Use item assignment, not replace
-                self._namespace[key] = value
-                changes[key] = value
-                
-                # Track result history for execution results
-                if key == '_' or (source_context in ['engine', 'thread'] and 
-                                  not key.startswith('_')):
+                # Special handling for _ to maintain history
+                if key == '_':
+                    # Let _update_result_history handle the update and shifting
                     self._update_result_history(value)
+                    changes[key] = value
+                else:
+                    # CRITICAL: Use item assignment, not replace
+                    self._namespace[key] = value
+                    changes[key] = value
         
         return changes
     
@@ -139,6 +140,18 @@ class NamespaceManager:
         if 'Out' in self._namespace and isinstance(self._namespace['Out'], dict):
             exec_num = len(self._namespace['Out'])
             self._namespace['Out'][exec_num] = result
+    
+    def record_expression_result(self, result: Any) -> None:
+        """Record an expression result (not an assignment).
+        
+        This method should be called by the executor when evaluating
+        an expression that produces a result to display.
+        
+        Args:
+            result: The expression result to record
+        """
+        if result is not None:
+            self.update_namespace({'_': result}, source_context='engine')
     
     @property
     def function_sources(self) -> Dict[str, str]:

@@ -57,7 +57,14 @@ class FrameBuffer:
         Returns:
             Frame data or None if no frame available
         """
-        deadline = asyncio.get_event_loop().time() + timeout if timeout else None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Fallback if no running loop (shouldn't happen in async context)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        
+        deadline = loop.time() + timeout if timeout else None
         
         while True:
             async with self._lock:
@@ -65,7 +72,7 @@ class FrameBuffer:
                     return self._frames.popleft()
             
             if deadline:
-                remaining = deadline - asyncio.get_event_loop().time()
+                remaining = deadline - loop.time()
                 if remaining <= 0:
                     return None
                 await asyncio.sleep(min(remaining, 0.01))
