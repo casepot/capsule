@@ -1,11 +1,13 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-**STATUS**: Day 2 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 86.3% (63/73 core tests)  
+**STATUS**: Day 3 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 98.7% (77/78 unit tests)  
 **BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-3 work)
 
 ## Executive Summary
 
 After reviewing the current implementation, test failures, and future specs, I've identified that we're in an **architectural transition phase**. The tests are written for the future AsyncExecutor + Resonate architecture, while the implementation is still using ThreadedExecutor without proper async coordination. We need to fix foundational issues before implementing the full specs.
+
+**Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with ExecutionMode detection, ThreadedExecutor delegation working, 98.7% test pass rate achieved. Ready for Phase 1 async implementation.
 
 ## Development Workflow & Branching Strategy
 
@@ -143,7 +145,7 @@ Worker → Async Adapter → ThreadedExecutor (for blocking I/O)
 
 ## Prioritized Fix Plan
 
-### Phase 0: Emergency Fixes (2-3 hours) - **DO FIRST** ✅ COMPLETED
+### Phase 0: Emergency Fixes ✅ COMPLETED (Days 1-3)
 These unblock testing and development:
 
 #### 0.1 Add Async Wrapper to ThreadedExecutor ✅
@@ -204,7 +206,8 @@ msg = HeartbeatMessage(
 ```
 **Tests Fixed**: `tests/unit/test_messages.py` - All 8 tests now pass
 
-### Phase 1: Core Foundation Fixes (1-2 days)
+### Phase 1: Core Foundation Fixes (1-2 days) - **READY TO START**
+**Phase 0 Complete**: AsyncExecutor skeleton ready, 98.7% tests passing, foundation stable
 
 #### 1.1 Implement Namespace Merge-Only Policy ✅ COMPLETED IN DAY 2
 **Files Modified**: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
@@ -218,51 +221,51 @@ msg = HeartbeatMessage(
 - Updated clear() to preserve engine internals
 - Created comprehensive test suite (12 tests, all passing)
 
-#### 1.2 Create AsyncExecutor Skeleton
-**New File**: `src/subprocess/async_executor.py`
-**Based On**: `docs/async_capability_prompts/current/10_prompt_async_executor.md:52-131`
-**Spec**: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+#### 1.2 Create AsyncExecutor Skeleton ✅ COMPLETED IN DAY 3
+**New File**: `src/subprocess/async_executor.py` (395 lines)
+**Based On**: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+**Test File**: `tests/unit/test_async_executor.py` (499 lines, 22 tests)
+
+**Completed Implementation**:
+- ExecutionMode enum with 5 modes (TOP_LEVEL_AWAIT, ASYNC_DEF, BLOCKING_SYNC, SIMPLE_SYNC, UNKNOWN)
+- PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000 constant defined
+- AST-based code analysis with recursive await detection
+- Blocking I/O detection (requests, urllib, socket, open, etc.)
+- Event loop management with ownership tracking
+- ThreadedExecutor delegation for all non-async execution
+- Coroutine lifecycle management with weakref tracking
+- Comprehensive test coverage (91% of AsyncExecutor code)
 
 ```python
-# src/subprocess/async_executor.py
+# ACTUAL IMPLEMENTATION in src/subprocess/async_executor.py:
 class AsyncExecutor:
-    """Skeleton AsyncExecutor that delegates to ThreadedExecutor for now."""
-    
-    # From spec line 90
+    """Skeleton async executor for transition to async architecture."""
     PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+    BLOCKING_IO_MODULES = {'requests', 'urllib', 'socket', 'subprocess', ...}
+    BLOCKING_IO_CALLS = {'open', 'input', 'sleep', 'wait', ...}
     
-    def __init__(self, namespace_manager, transport, execution_id):
-        self.namespace = namespace_manager
-        self.transport = transport
-        self.execution_id = execution_id
-        # Spec line 123-128: DO NOT create new event loop
-        self.loop = asyncio.get_event_loop()
-        
+    def analyze_execution_mode(self, code: str) -> ExecutionMode:
+        """AST-based execution mode detection."""
+        try:
+            tree = ast.parse(code)
+            # Check for top-level await, async defs, blocking I/O
+            if self._contains_await_at_top_level(node):
+                return ExecutionMode.TOP_LEVEL_AWAIT
+            # ... additional checks ...
+        except SyntaxError:
+            if 'await' in code:
+                return ExecutionMode.TOP_LEVEL_AWAIT
+            return ExecutionMode.UNKNOWN
+    
     async def execute(self, code: str) -> Any:
-        """Route to appropriate executor based on code analysis."""
-        # Based on spec lines 252-293
-        mode = self._analyze_code(code)
-        
-        if mode == "async_code":
-            # Future: Handle with PyCF_ALLOW_TOP_LEVEL_AWAIT (spec line 19)
+        mode = self.analyze_execution_mode(code)
+        if mode == ExecutionMode.TOP_LEVEL_AWAIT:
             raise NotImplementedError("Async execution coming soon")
         else:
-            # Delegate to ThreadedExecutor for now
-            from .executor import ThreadedExecutor
-            executor = ThreadedExecutor(
-                self.transport, 
-                self.execution_id,
-                self.namespace.namespace,
-                self.loop  # Use existing loop
-            )
-            return await executor.execute_code_async(code)
-    
-    def _analyze_code(self, code: str) -> str:
-        """Basic code type detection - simplified from spec lines 149-200."""
-        if "await" in code or "async" in code:
-            return "async_code"
-        return "sync_code"
+            # Delegate to ThreadedExecutor with proper async wrapper
+            return await self._execute_with_threaded_executor(code)
 ```
+**Tests Passing**: All 22 AsyncExecutor tests, no regressions in existing suite
 
 #### 1.3 Fix Event Loop Management
 **File**: `src/session/manager.py` (fix lines 81-83)
@@ -452,15 +455,19 @@ def async_executor(namespace_manager, transport):
    - Created test_namespace_merge.py with 12 comprehensive tests
    - Commit: `90c2937`
    
-4. **Day 3**: Create AsyncExecutor skeleton (4 hours)
-   - New File: `src/subprocess/async_executor.py`
-   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+4. **Day 3**: Create AsyncExecutor skeleton ✅ COMPLETE
+   - New File: `src/subprocess/async_executor.py` (395 lines)
+   - Test File: `tests/unit/test_async_executor.py` (499 lines, 22 tests)
+   - ExecutionMode detection working for all 5 modes
+   - ThreadedExecutor delegation maintains functionality
+   - Event loop management with ownership tracking
+   - Result: 22 new tests passing, 91% AsyncExecutor coverage
    
-5. **Day 3-4**: Fix event loop management (4 hours)
+5. **Day 3-4**: Fix event loop management (Next task)
    - File: `src/session/manager.py:81-83`
    - Fix asyncio objects created before loop set
 
-**Goal**: 80% of tests passing ✅ ACHIEVED (86.3% - 63/73 core tests)
+**Goal**: 80% of tests passing ✅ EXCEEDED (98.7% - 77/78 unit tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
 **Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  
@@ -500,7 +507,7 @@ def async_executor(namespace_manager, transport):
 - [x] ThreadedExecutor tests pass with async wrapper ✅ Day 1
 - [x] No Pydantic validation errors ✅ Day 1
 - [x] Namespace never replaced, only merged ✅ Day 2
-- [ ] Basic AsyncExecutor skeleton works (Day 3)
+- [x] Basic AsyncExecutor skeleton works ✅ Day 3
 - [ ] Event loop errors resolved (Day 3-4)
 
 ### Foundation Success (Week 2)
