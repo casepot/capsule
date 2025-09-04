@@ -90,9 +90,11 @@ Based on specifications in `docs/async_capability_prompts/current/`:
 - **Action**: Only updates '_' for expression results, not assignments
 - **Test**: Added explicit assertions in test_namespace_merge.py
 
-#### 3. MD5 vs SHA-256
-- **Status**: Already fixed in Day 4
-- **Action**: Changed to SHA-256 for cache keys
+#### 3. Cache Key Hashing (MD5 vs SHA-256)
+- **Status**: Intentional choice documented
+- **Action**: Using MD5 for non-cryptographic AST cache keys for speed. If a
+  stronger digest is required (e.g., cross-process cache IDs or security-
+  sensitive contexts), we will switch to SHA-256 for those specific cases.
 
 ### LOW Severity Issues
 

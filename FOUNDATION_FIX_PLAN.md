@@ -480,9 +480,11 @@ def async_executor(namespace_manager, transport):
    - **AST Traversal**: Verified working correctly, added comprehensive edge case tests
      - File: `tests/unit/test_async_executor.py` lines 251-339
      - Tests: await in function calls, list comprehensions, dict/set literals, conditionals
-   - **Hash Collisions**: Replaced Python hash() with SHA-256 digest
+   - **Hash Collisions**: Replaced Python `hash()` with a stable digest for cache keys
      - File: `src/subprocess/async_executor.py` line 146
-     - Changed from `hash(code)` to `hashlib.sha256(code.encode()).hexdigest()`
+     - Decision: Use `hashlib.md5(code.encode()).hexdigest()` for non-crypto
+       AST cache keys (faster, stable). If needed later, switch specific
+       contexts to SHA-256.
    - **Result History**: Fixed to only update _ for expression results
      - File: `src/subprocess/namespace.py` lines 111-118
      - Only updates _ when key='_', not on all variable assignments
@@ -696,3 +698,9 @@ The foundation fixes are **essential** before implementing the full specs. We're
 3. **Long-term**: Clear path to implement full specifications
 
 The key is to **fix the basics first**, then **build the bridge**, and finally **implement the vision**.
+
+## Deferred Refinements (Phase 1 Planning)
+
+- Output drain-timeout suppression policy: Keep current suppression in tests, but in Phase 1 define a configurable policy (flag/env), warn once per execution, and track a small metric so production regressions are visible without destabilizing tests.
+- Blocking I/O detection breadth: Extend `AsyncExecutor._contains_blocking_io` to detect common attribute calls (e.g., `time.sleep`, `requests.get`, `socket.recv`). Add tests first to capture expected patterns and limit false positives.
+- FrameBuffer wakeups: Replace the fixed 10ms sleep in `FrameBuffer.get_frame()` with event/condition wakeups (consistent with `transport.FrameReader`) to reduce latency and CPU wakeups under load.

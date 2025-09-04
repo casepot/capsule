@@ -122,7 +122,10 @@ Phase 0 implements critical fixes to unblock testing and establish a solid found
 #### MEDIUM Severity  
 1. ✅ **SyntaxError Detection** - Already improved with PyCF_ALLOW_TOP_LEVEL_AWAIT
 2. ✅ **Result History Logic** - Fixed and tested with proper assertions
-3. ✅ **MD5 vs SHA-256** - Already fixed in earlier changes
+3. ✅ **Cache Key Hashing** - Intentionally using MD5 for non-cryptographic
+   AST cache keys (speed). If we need stronger properties (e.g., cross-process
+   caches or security-sensitive contexts), we can switch to SHA-256 without
+   impacting behavior.
 
 #### LOW Severity
 1. ✅ **Cancellation Test Skip** - Documented as known limitation
@@ -191,3 +194,9 @@ Process Isolation + Resource Limits + Namespace Control
 **READY TO MERGE** `fix/foundation-phase0-emergency-fixes` to master
 
 The security concerns raised by reviewers have been thoroughly analyzed and addressed through documentation and architectural context. The eval/exec usage is intentional and properly secured through multiple layers of defense. All code improvements have been implemented and tested.
+
+## Deferred Refinements (Tracked for Phase 1)
+
+- Blocking I/O detection breadth: Extend `AsyncExecutor._contains_blocking_io` to handle `ast.Attribute` chains (e.g., `time.sleep()`, `requests.get()`, `socket.recv()`) and map imports to symbols. Add tests first to capture common patterns and reduce false positives.
+- Output drain timeout suppression configurability: In `ThreadedExecutor.execute_code_async`, gate suppression behind a flag or env var, emit a warning once per execution, and add a lightweight metric so production issues aren’t masked while keeping tests stable.
+- FrameBuffer polling removal: Replace the fixed 10ms sleep loop in `FrameBuffer.get_frame()` with an event/condition-based wakeup (align with `transport.FrameReader`) to reduce latency and wakeups under load.

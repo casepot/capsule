@@ -139,8 +139,10 @@ class AsyncExecutor:
             tree = ast.parse(code)
             
             # Store in cache with LRU eviction
-            # Use stable SHA-256 digest instead of hash() to avoid collisions
-            # Use MD5 for cache keys (non-cryptographic use)
+            # Use MD5 for cache keys (non-cryptographic use) for speed.
+            # If we ever need a stronger digest (e.g., cross-process cache
+            # keys or security-sensitive contexts), we can switch to SHA-256
+            # without changing behavior elsewhere.
             code_hash = hashlib.md5(code.encode()).hexdigest()
             if code_hash in self._ast_cache:
                 # Move to end (most recently used)
@@ -239,6 +241,12 @@ class AsyncExecutor:
         - Imports of blocking libraries
         - Calls to blocking functions
         - File operations without async
+        
+        TODO(Phase 1): Extend detection to handle attribute calls such as
+        `time.sleep()`, `requests.get()`, and `socket.socket().recv()`. This
+        likely requires resolving `ast.Attribute` chains and mapping imported
+        names to modules. Add tests first to capture common patterns before
+        broadening detection to reduce false positives.
         
         Args:
             tree: AST tree to analyze

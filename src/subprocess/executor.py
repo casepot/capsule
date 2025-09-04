@@ -691,6 +691,11 @@ class ThreadedExecutor:
             # Try to drain outputs but don't fail if it times out
             # The mock transport in tests may not handle this properly
             # Use configured drain timeout instead of hardcoded value
+            #
+            # TODO(Phase 1): Make this suppression configurable via a
+            # constructor flag or environment variable and emit a warning
+            # (once per execution) with a lightweight metric to avoid
+            # masking real transport ordering issues in production.
             try:
                 await self.drain_outputs(timeout=self._drain_timeout)
             except (OutputDrainTimeout, asyncio.TimeoutError) as e:

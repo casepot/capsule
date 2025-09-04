@@ -11,7 +11,14 @@ logger = structlog.get_logger()
 
 
 class FrameBuffer:
-    """Efficient frame buffer with zero-copy operations where possible."""
+    """Efficient frame buffer with zero-copy operations where possible.
+
+    TODO(Phase 1): Replace the 10ms polling in `get_frame()` with an
+    event/condition-based wakeup similar to `FrameReader` in
+    `src/protocol/transport.py`. This will reduce latency and CPU wakeups
+    under load. The current implementation is sufficient for Phase 0 and
+    covered by unit tests, but it's not optimal for high throughput.
+    """
     
     def __init__(self, max_frame_size: int = 10 * 1024 * 1024) -> None:
         self._buffer = bytearray()
@@ -71,6 +78,9 @@ class FrameBuffer:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     return None
+                # TODO(Phase 1): Remove this fixed sleep and notify waiters
+                # via an asyncio.Event/Condition when frames are appended.
+                # This aligns with the transport.FrameReader approach.
                 await asyncio.sleep(min(remaining, 0.01))
             else:
                 return None
@@ -145,12 +155,15 @@ class StreamMultiplexer:
 
 class RateLimiter:
     """Rate limiter for protocol messages with on-demand token computation.
-    
-    Eliminates polling by calculating exact wait time for next token.
-    
-    Note: RateLimiter must be used within an async context as it requires
-    an active event loop for time tracking. Both acquire() and try_acquire()
-    will raise RuntimeError if called outside an async context.
+
+    Eliminates polling by calculating exact wait time for the next token.
+
+    Note:
+    - Must be used within an async context for `acquire()` and
+      `try_acquire()` (both access the running loop's monotonic clock).
+    - Construction no longer requires a running loop; `_last_update` is
+      lazily initialized on first use. This keeps module-level construction
+      simple and avoids surprising import-time failures.
     """
     
     def __init__(
@@ -165,7 +178,8 @@ class RateLimiter:
         self._max_rate = max_messages_per_second
         self._burst_size = burst_size
         self._tokens = float(burst_size)
-        self._last_update = asyncio.get_running_loop().time()
+        # Lazily initialize at first use to avoid requiring a running loop
+        self._last_update: Optional[float] = None
         self._lock = asyncio.Lock()
         
         # Optional metrics
@@ -190,6 +204,10 @@ class RateLimiter:
         while True:
             async with self._lock:
                 now = asyncio.get_running_loop().time()
+                if self._last_update is None:
+                    # First use: initialize without delay
+                    self._last_update = now
+                
                 # Replenish tokens based on elapsed time
                 elapsed = now - self._last_update
                 self._tokens = min(
@@ -226,6 +244,9 @@ class RateLimiter:
         # RateLimiter should only be used in async context
         loop = asyncio.get_running_loop()
         now = loop.time()
+        if self._last_update is None:
+            # First use: initialize and consume from burst
+            self._last_update = now
         
         elapsed = now - self._last_update
         self._last_update = now

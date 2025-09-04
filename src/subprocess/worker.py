@@ -573,7 +573,8 @@ async def main() -> None:
         session_id=session_id,
         event_loop_id=id(loop),
         python_version=sys.version,
-        pid=sys.platform != 'win32' and psutil.Process().pid or None
+        # Prefer explicit ternary over and/or idiom for readability
+        pid=psutil.Process().pid if sys.platform != 'win32' else None,
     )
     
     # Create reader from stdin (use buffer for binary)
