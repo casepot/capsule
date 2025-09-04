@@ -115,14 +115,14 @@ class TestAsyncExecutorInitialization:
         
         # Check stats structure
         assert "executions" in executor.stats
-        assert "mode_counts" in executor.stats
         assert "errors" in executor.stats
         assert "ast_transforms" in executor.stats
+        assert hasattr(executor, 'mode_counts')
         
         # Check mode counts initialized for all modes
         for mode in ExecutionMode:
-            assert mode in executor.stats["mode_counts"]
-            assert executor.stats["mode_counts"][mode] == 0
+            assert mode in executor.mode_counts
+            assert executor.mode_counts[mode] == 0
 
 
 @pytest.mark.unit
@@ -493,7 +493,7 @@ class TestAsyncExecutorExecution:
             
             # Check stats updated
             assert executor.stats["executions"] == 1
-            assert executor.stats["mode_counts"][ExecutionMode.SIMPLE_SYNC] == 1
+            assert executor.mode_counts[ExecutionMode.SIMPLE_SYNC] == 1
             assert executor.stats["errors"] == 0
     
     @pytest.mark.asyncio

@@ -353,7 +353,7 @@ class ThreadedExecutor:
             # Check if queue is at capacity
             try:
                 qsize = self._aq.qsize()
-            except:
+            except (AttributeError, NotImplementedError):
                 qsize = 0  # Some platforms don't support qsize
                 
             if qsize >= self._aq.maxsize:
@@ -371,7 +371,7 @@ class ThreadedExecutor:
         elif self._backpressure == "error":
             try:
                 qsize = self._aq.qsize()
-            except:
+            except (AttributeError, NotImplementedError):
                 qsize = 0
             if qsize >= self._aq.maxsize:
                 raise OutputBackpressureExceeded("Output queue full")
@@ -382,7 +382,7 @@ class ThreadedExecutor:
             depth = self._aq.qsize() + 1
             if depth > self._max_queue_depth:
                 self._max_queue_depth = depth
-        except:
+        except (AttributeError, NotImplementedError):
             pass  # qsize not supported on all platforms
         
         # Enqueue the item - wrap in a function to handle exceptions
@@ -464,7 +464,7 @@ class ThreadedExecutor:
             pending = self._pending_sends
             try:
                 qsize = self._aq.qsize()
-            except:
+            except (AttributeError, NotImplementedError):
                 qsize = -1
             raise OutputDrainTimeout(
                 f"drain_outputs timeout after {timeout}s "

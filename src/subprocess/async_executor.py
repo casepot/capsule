@@ -14,7 +14,7 @@ import asyncio
 from collections import OrderedDict
 from enum import Enum
 import hashlib
-from typing import Any, Dict, Set
+from typing import Any, Set
 import weakref
 
 import structlog
@@ -112,10 +112,10 @@ class AsyncExecutor:
         # Execution statistics
         self.stats = {
             "executions": 0,
-            "mode_counts": {mode: 0 for mode in ExecutionMode},
             "errors": 0,
             "ast_transforms": 0
         }
+        self.mode_counts = {mode: 0 for mode in ExecutionMode}
         
         logger.info(
             "AsyncExecutor initialized",
@@ -293,13 +293,15 @@ class AsyncExecutor:
         
         # Analyze execution mode
         mode = self.analyze_execution_mode(code)
-        self.stats["mode_counts"][mode] += 1
+        self.mode_counts[mode] += 1
         
         logger.info(
-            "Executing code",
+            "execute_start",
             execution_id=self.execution_id,
             mode=mode.value,
-            code_length=len(code)
+            code_length=len(code),
+            has_event_loop=self.loop is not None,
+            stats_executions=self.stats["executions"]
         )
         
         try:

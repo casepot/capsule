@@ -168,6 +168,38 @@ Phase 0 implements critical fixes to unblock testing and establish a solid found
 - AsyncExecutor delegates to ThreadedExecutor (transition period)
 - Tests updated to use new patterns without breaking existing code
 
+## Phase 0 Polish & Final Refinements
+
+Following our principles of "fail fast, fail clearly" and "don't catch what you can't handle", additional improvements were made:
+
+### Error Handling Improvements
+- **Removed all dangerous fallbacks**: No more silent event loop creation in async contexts
+- **Fixed bare except statements**: Replaced with specific exception types (AttributeError, NotImplementedError)
+- **Added proper error messages**: Clear RuntimeError when AsyncExecutor called from wrong context
+
+### Specific Fixes
+- **framing.py (line 223)**: Removed time.time() fallback in RateLimiter - now requires async context
+- **executor.py (lines 356, 374, 385, 467)**: Fixed bare excepts for qsize() to catch specific exceptions
+- **session/manager.py (line 602)**: Added logging for transport cleanup errors instead of silent swallowing
+- **async_executor.py (lines 340-345)**: Added proper error handling for event loop access
+
+### Type Safety Improvements
+- Removed unused imports: Dict from async_executor.py, io/OutputMessage/StreamType from worker.py
+- Fixed type annotations: OrderedDict[str, ast.AST] for AST cache
+- Cleaned up unused message imports in session/manager.py
+
+### Structured Logging Enhancements
+- Added detailed logging in AsyncExecutor.execute() with event loop state
+- Added worker startup logging with session ID, event loop ID, and Python version
+- Improved error logging to include context instead of silently passing
+
+### New Test Coverage
+- Created `tests/unit/test_event_loop_handling.py` with comprehensive tests for:
+  - Event loop context requirements
+  - Platform compatibility for queue operations
+  - Error handling verification
+  - No bare except validation
+
 ## Known Issues
 
 ### Cancellation Test Coverage
@@ -176,6 +208,14 @@ Phase 0 implements critical fixes to unblock testing and establish a solid found
 - **Impact**: Test isolation issue only - functionality works correctly in production
 - **Mitigation**: Component-level tests provide coverage (test_cancellation_mechanism_components)
 - **Resolution**: Requires special test runner isolation (planned for Phase 1)
+
+## Final Polish Summary
+
+All dangerous fallbacks and error handling issues have been addressed following these principles:
+- **Fail fast, fail clearly**: Removed silent fallbacks, added explicit error messages
+- **Don't create global side effects**: No more event loop creation in async contexts
+- **Explicit over implicit**: Clear error handling instead of bare excepts
+- **Don't catch what you can't handle**: Only catch specific exceptions we can handle
 
 ## Next Steps (Phase 1)
 

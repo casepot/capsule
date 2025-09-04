@@ -219,14 +219,9 @@ class RateLimiter:
         Returns:
             True if acquired, False if rate limit exceeded
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            # No event loop running, use time.time() as fallback
-            import time
-            now = time.time()
-        else:
-            now = loop.time()
+        # RateLimiter should only be used in async context
+        loop = asyncio.get_running_loop()
+        now = loop.time()
         
         elapsed = now - self._last_update
         self._last_update = now

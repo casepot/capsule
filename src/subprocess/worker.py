@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import io
 import logging
 import sys
 import threading
@@ -32,10 +31,8 @@ from ..protocol.messages import (
     InputMessage,
     InputResponseMessage,
     MessageType,
-    OutputMessage,
     ReadyMessage,
     ResultMessage,
-    StreamType,
 )
 from ..protocol.transport import MessageTransport
 from .executor import ThreadedExecutor, OutputDrainTimeout
@@ -570,6 +567,14 @@ async def main() -> None:
     # Create transport using stdin/stdout
     # Use the existing event loop from asyncio.run()
     loop = asyncio.get_running_loop()
+    
+    logger.info(
+        "worker_start",
+        session_id=session_id,
+        event_loop_id=id(loop),
+        python_version=sys.version,
+        pid=sys.platform != 'win32' and psutil.Process().pid or None
+    )
     
     # Create reader from stdin (use buffer for binary)
     reader = asyncio.StreamReader()
