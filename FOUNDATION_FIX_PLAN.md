@@ -1,10 +1,44 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-**STATUS**: Day 1 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 88.6% (39/44)
+**STATUS**: Day 1 Complete (Phase 0 Emergency Fixes ✅) | Test Pass Rate: 88.6% (39/44)  
+**BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-3 work)
 
 ## Executive Summary
 
 After reviewing the current implementation, test failures, and future specs, I've identified that we're in an **architectural transition phase**. The tests are written for the future AsyncExecutor + Resonate architecture, while the implementation is still using ThreadedExecutor without proper async coordination. We need to fix foundational issues before implementing the full specs.
+
+## Development Workflow & Branching Strategy
+
+### Phase-Based Branches
+We're using a phase-based branching approach to keep related changes together while maintaining a clean history:
+
+| Phase | Branch Name | Days | Scope | Merge Criteria |
+|-------|------------|------|-------|----------------|
+| **Phase 0** | `fix/foundation-phase0-emergency-fixes` | 1-3 | Emergency fixes to unblock testing | ✅ Tests passing (>80%) |
+| **Phase 1** | `fix/foundation-phase1-async-executor` | 4-7 | AsyncExecutor foundation | Tests passing, no regressions |
+| **Phase 2** | `fix/foundation-phase2-bridge` | 8-10 | Bridge architecture | Full integration ready |
+
+### Workflow
+```bash
+# Current work (Phase 0, Days 1-3)
+git checkout fix/foundation-phase0-emergency-fixes
+# ... implement Days 2-3 fixes ...
+git commit -m "fix: implement namespace merge-only policy"
+
+# When Phase 0 complete
+git push origin fix/foundation-phase0-emergency-fixes
+# Create PR → Review → Merge to master
+
+# Start Phase 1 (Day 4)
+git checkout master && git pull
+git checkout -b fix/foundation-phase1-async-executor
+```
+
+### Merge to Master Criteria
+- ✅ All phase goals achieved
+- ✅ Tests passing (target >80% for Phase 0, >95% for Phase 1-2)
+- ✅ No regressions from previous phase
+- ✅ Code reviewed (if team environment)
 
 ## Key Files Referenced
 
@@ -408,18 +442,22 @@ def async_executor(namespace_manager, transport):
 
 ## Concrete Next Steps (In Order)
 
-### Week 1: Unblock Testing
+### Week 1: Unblock Testing (Phase 0 - Emergency Fixes)
+**Working Branch**: `fix/foundation-phase0-emergency-fixes`
+
 1. **Day 1 Morning**: Add async wrapper to ThreadedExecutor ✅ COMPLETE
    - File: `src/subprocess/executor.py` (lines 627-674)
    - Tests Fixed: All 5 executor tests passing
    - Added timeout protection for mock transports
+   - Commit: `016f42b`
    
 2. **Day 1 Afternoon**: Fix message field issues ✅ COMPLETE
    - Files: `tests/unit/test_messages.py` only (worker.py already correct)
    - Fixed: ResultMessage.execution_time, HeartbeatMessage fields
    - Result: All 8 message tests passing
+   - Commit: `016f42b`
    
-3. **Day 2**: Implement merge-only namespace policy (4 hours) - NEXT
+3. **Day 2**: Implement merge-only namespace policy (4 hours) - **NEXT**
    - File: `src/subprocess/namespace.py:28-40`
    - Spec: `docs/async_capability_prompts/current/24_spec_namespace_management.md:15-29`
    
@@ -433,7 +471,10 @@ def async_executor(namespace_manager, transport):
 
 **Goal**: 80% of tests passing ✅ ACHIEVED (88.6% - 39/44 tests)
 
-### Week 2: Build Bridge Architecture  
+### Week 2: Build Bridge Architecture (Phase 1 & 2)
+**Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  
+**Phase 2 Branch** (Days 8-10): `fix/foundation-phase2-bridge`
+
 6. **Day 5-6**: Implement execution mode router (8 hours)
    - Add to: `src/subprocess/async_executor.py`
    - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:149-247`
