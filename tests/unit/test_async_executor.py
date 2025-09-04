@@ -455,8 +455,8 @@ class TestAsyncExecutorExecution:
             assert result == 42
     
     @pytest.mark.asyncio
-    async def test_execute_top_level_await_raises_not_implemented(self):
-        """Test that top-level await raises NotImplementedError."""
+    async def test_execute_top_level_await_now_works(self):
+        """Test that top-level await now works (Phase 1 implementation)."""
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         
@@ -466,9 +466,10 @@ class TestAsyncExecutorExecution:
             execution_id="test-exec"
         )
         
-        # Top-level await should raise NotImplementedError
-        with pytest.raises(NotImplementedError, match="Async execution coming soon"):
-            await executor.execute("await asyncio.sleep(1)")
+        # Top-level await now works! 
+        # Simple expression that returns immediately
+        result = await executor.execute("await asyncio.sleep(0, 'success')")
+        assert result == 'success'
     
     @pytest.mark.asyncio
     async def test_execute_updates_stats(self):
