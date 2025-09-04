@@ -13,12 +13,10 @@ import structlog
 from ..protocol.messages import (
     CancelMessage,
     ExecuteMessage,
-    InputMessage,
     InputResponseMessage,
     InterruptMessage,
     Message,
     MessageType,
-    ReadyMessage,
     ShutdownMessage,
 )
 from ..protocol.transport import PipeTransport
@@ -599,8 +597,8 @@ class Session:
         if self._transport:
             try:
                 await self._transport.close()
-            except:
-                pass
+            except Exception as e:
+                logger.debug(f"Error closing transport (non-critical): {e}")
             self._transport = None
         
         # Kill process if still running

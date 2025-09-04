@@ -1,8 +1,50 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
+**STATUS**: Day 4+ Complete (Phase 0 Emergency Fixes + All PR Review ✅) | Test Pass Rate: 97.9% (94/96 unit tests)
+**BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-4 work, PR #10 ready to merge)
+
 ## Executive Summary
 
-After reviewing the current implementation, test failures, and future specs, I've identified that we're in an **architectural transition phase**. The tests are written for the future AsyncExecutor + Resonate architecture, while the implementation is still using ThreadedExecutor without proper async coordination. We need to fix foundational issues before implementing the full specs.
+**Last Updated**: After full spec review and deep analysis of Resonate integration patterns.
+
+After reviewing the current implementation, test failures, and **reading the full specifications in detail**, I've identified that we're in an **architectural transition phase** with a clear solution path. The specs elegantly solve the async/await vs yield paradigm through a **wrapper pattern** where Resonate wraps AsyncExecutor at the integration layer - no code transformation needed.
+
+**Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with proper lifecycle management, ThreadedExecutor delegation working with async wrapper, namespace merge-only policy enforced, ENGINE_INTERNALS centralized, all PR review feedback addressed. 97.6% test pass rate achieved (83/85 tests). Ready to merge to master.
+
+**Key Discovery**: The specs already solve the hard problems. Our refinements focus on making the bridge robust, testing edge cases early, and ensuring consistent behavior across local/remote modes.
+
+## Development Workflow & Branching Strategy
+
+### Phase-Based Branches
+We're using a phase-based branching approach to keep related changes together while maintaining a clean history:
+
+| Phase | Branch Name | Days | Scope | Merge Criteria |
+|-------|------------|------|-------|----------------|
+| **Phase 0** | `fix/foundation-phase0-emergency-fixes` | 1-3 | Emergency fixes to unblock testing | ✅ Tests passing (>80%) |
+| **Phase 1** | `fix/foundation-phase1-async-executor` | 4-7 | AsyncExecutor foundation | Tests passing, no regressions |
+| **Phase 2** | `fix/foundation-phase2-bridge` | 8-10 | Bridge architecture | Full integration ready |
+
+### Workflow
+```bash
+# Current work (Phase 0, Days 1-3)
+git checkout fix/foundation-phase0-emergency-fixes
+# ... implement Days 2-3 fixes ...
+git commit -m "fix: implement namespace merge-only policy"
+
+# When Phase 0 complete
+git push origin fix/foundation-phase0-emergency-fixes
+# Create PR → Review → Merge to master
+
+# Start Phase 1 (Day 4)
+git checkout master && git pull
+git checkout -b fix/foundation-phase1-async-executor
+```
+
+### Merge to Master Criteria
+- ✅ All phase goals achieved
+- ✅ Tests passing (target >80% for Phase 0, >95% for Phase 1-2)
+- ✅ No regressions from previous phase
+- ✅ Code reviewed (if team environment)
 
 ## Key Files Referenced
 
@@ -107,130 +149,127 @@ Worker → Async Adapter → ThreadedExecutor (for blocking I/O)
 
 ## Prioritized Fix Plan
 
-### Phase 0: Emergency Fixes (2-3 hours) - **DO FIRST**
+### Phase 0: Emergency Fixes ✅ COMPLETED (Days 1-3)
 These unblock testing and development:
 
-#### 0.1 Add Async Wrapper to ThreadedExecutor
-**File**: `src/subprocess/executor.py` (add after line 625)
+#### 0.1 Add Async Wrapper to ThreadedExecutor ✅
+**File**: `src/subprocess/executor.py` (added at lines 627-674)
 ```python
-# In ThreadedExecutor class, add:
+# ACTUAL IMPLEMENTATION in ThreadedExecutor class:
 async def execute_code_async(self, code: str) -> Any:
     """Async wrapper for compatibility with tests."""
-    loop = asyncio.get_event_loop()
-    
-    # Start output pump (line 386)
-    await self.start_output_pump()
-    
+    # Note: Output pump should already be started by caller
     try:
-        # Run sync execute_code in thread
+        loop = asyncio.get_event_loop()
+        self._result = None
+        self._error = None
+        
+        # Run sync execute_code in thread pool
         future = loop.run_in_executor(None, self.execute_code, code)
         await future
         
-        # Drain outputs (line 437)
-        await self.drain_outputs()
+        # Drain outputs with timeout protection for mock transports
+        try:
+            await self.drain_outputs(timeout=0.5)
+        except (OutputDrainTimeout, asyncio.TimeoutError):
+            pass  # OK in tests with mock transport
         
-        # Return result (line 610)
-        return self.result
+        if self._error:
+            raise self._error
+        return self._result
     finally:
-        # Stop output pump (line 467)
-        await self.stop_output_pump()
+        pass  # State reset on next execution
 ```
-**Fixes Tests**: `tests/unit/test_executor.py:34-170`
+**Tests Fixed**: `tests/unit/test_executor.py` - All 5 tests now pass
+**Also Updated**: Tests to use `AsyncMock()` for transport.send_message
 
-#### 0.2 Fix Message Field Issues
-**Files to Fix**:
-- `src/subprocess/worker.py` (when creating ResultMessage)
-- `tests/unit/test_messages.py:38-47` (test creation)
+#### 0.2 Fix Message Field Issues ✅
+**Files Fixed**:
+- `src/subprocess/worker.py` - NO CHANGES NEEDED (already had execution_time at lines 338, 349)
+- `tests/unit/test_messages.py` - FIXED test data
 
 ```python
-# In worker.py (around where ResultMessage would be created):
-result_msg = ResultMessage(
+# ACTUAL FIX in test_messages.py line 44:
+msg = ResultMessage(
     id=str(uuid.uuid4()),
     timestamp=time.time(),
-    execution_id=execution_id,
-    value=result,
-    repr=repr(result),
-    execution_time=time.time() - start_time  # ADD THIS - Required by line 84 in messages.py
+    execution_id="exec-123",
+    value=42,
+    repr="42",
+    execution_time=0.5,  # ADDED THIS FIELD
 )
 
-# HeartbeatMessage already correct at worker.py:212-218
-# Just ensure tests use all fields
+# ACTUAL FIX in test_messages.py lines 110-112:
+msg = HeartbeatMessage(
+    id="test-123",
+    timestamp=time.time(),
+    memory_usage=1024 * 1024,  # ADDED
+    cpu_percent=25.0,          # ADDED
+    namespace_size=10,         # ADDED
+)
 ```
-**Fixes Tests**: `tests/unit/test_messages.py:36-47, 106-113`
+**Tests Fixed**: `tests/unit/test_messages.py` - All 8 tests now pass
 
-### Phase 1: Core Foundation Fixes (1-2 days)
+### Phase 1: Core Foundation Fixes (1-2 days) - **READY TO START**
+**Phase 0 Complete**: AsyncExecutor skeleton ready, 97.6% tests passing, foundation stable
 
-#### 1.1 Implement Namespace Merge-Only Policy
-**File**: `src/subprocess/namespace.py` (modify `_setup_namespace` at lines 28-40)
+#### 1.1 Implement Namespace Merge-Only Policy ✅ COMPLETED IN DAY 2
+**Files Modified**: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
 **Spec**: `docs/async_capability_prompts/current/24_spec_namespace_management.md:87-102` (ENGINE_INTERNALS list)
 
-```python
-class NamespaceManager:
-    # Add ENGINE_INTERNALS from spec line 89-102
-    ENGINE_INTERNALS = {
-        '_', '__', '___', '_i', '_ii', '_iii',
-        'Out', 'In', '_oh', '_ih', '_exit_code', '_exception'
-    }
-    
-    def update_namespace(self, updates: Dict[str, Any], source: str = "user"):
-        """Update namespace with merge-only policy."""
-        # CRITICAL: Never replace, always merge (spec line 22)
-        if source == "user":
-            # Don't overwrite engine internals from user code
-            for key, value in updates.items():
-                if key not in self.ENGINE_INTERNALS:
-                    self._namespace[key] = value
-        else:
-            # Engine updates can modify internals
-            self._namespace.update(updates)
-```
-**Also Fix**: `src/subprocess/worker.py:126-134` to use update instead of assignment
+**Completed Implementation**:
+- Added ENGINE_INTERNALS constant with all protected keys
+- Fixed _setup_namespace() to use update() instead of replace
+- Added update_namespace() method with merge strategies (overwrite/preserve/smart)
+- Added _update_result_history() for tracking execution results (_, __, ___)
+- Updated clear() to preserve engine internals
+- Created comprehensive test suite (12 tests, all passing)
 
-#### 1.2 Create AsyncExecutor Skeleton
-**New File**: `src/subprocess/async_executor.py`
-**Based On**: `docs/async_capability_prompts/current/10_prompt_async_executor.md:52-131`
-**Spec**: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+#### 1.2 Create AsyncExecutor Skeleton ✅ COMPLETED IN DAY 3
+**New File**: `src/subprocess/async_executor.py` (395 lines)
+**Based On**: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+**Test File**: `tests/unit/test_async_executor.py` (499 lines, 22 tests)
+
+**Completed Implementation**:
+- ExecutionMode enum with 5 modes (TOP_LEVEL_AWAIT, ASYNC_DEF, BLOCKING_SYNC, SIMPLE_SYNC, UNKNOWN)
+- PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000 constant defined
+- AST-based code analysis with recursive await detection
+- Blocking I/O detection (requests, urllib, socket, open, etc.)
+- Event loop management with ownership tracking
+- ThreadedExecutor delegation for all non-async execution
+- Coroutine lifecycle management with weakref tracking
+- Comprehensive test coverage (91% of AsyncExecutor code)
 
 ```python
-# src/subprocess/async_executor.py
+# ACTUAL IMPLEMENTATION in src/subprocess/async_executor.py:
 class AsyncExecutor:
-    """Skeleton AsyncExecutor that delegates to ThreadedExecutor for now."""
-    
-    # From spec line 90
+    """Skeleton async executor for transition to async architecture."""
     PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+    BLOCKING_IO_MODULES = {'requests', 'urllib', 'socket', 'subprocess', ...}
+    BLOCKING_IO_CALLS = {'open', 'input', 'sleep', 'wait', ...}
     
-    def __init__(self, namespace_manager, transport, execution_id):
-        self.namespace = namespace_manager
-        self.transport = transport
-        self.execution_id = execution_id
-        # Spec line 123-128: DO NOT create new event loop
-        self.loop = asyncio.get_event_loop()
-        
+    def analyze_execution_mode(self, code: str) -> ExecutionMode:
+        """AST-based execution mode detection."""
+        try:
+            tree = ast.parse(code)
+            # Check for top-level await, async defs, blocking I/O
+            if self._contains_await_at_top_level(node):
+                return ExecutionMode.TOP_LEVEL_AWAIT
+            # ... additional checks ...
+        except SyntaxError:
+            if 'await' in code:
+                return ExecutionMode.TOP_LEVEL_AWAIT
+            return ExecutionMode.UNKNOWN
+    
     async def execute(self, code: str) -> Any:
-        """Route to appropriate executor based on code analysis."""
-        # Based on spec lines 252-293
-        mode = self._analyze_code(code)
-        
-        if mode == "async_code":
-            # Future: Handle with PyCF_ALLOW_TOP_LEVEL_AWAIT (spec line 19)
+        mode = self.analyze_execution_mode(code)
+        if mode == ExecutionMode.TOP_LEVEL_AWAIT:
             raise NotImplementedError("Async execution coming soon")
         else:
-            # Delegate to ThreadedExecutor for now
-            from .executor import ThreadedExecutor
-            executor = ThreadedExecutor(
-                self.transport, 
-                self.execution_id,
-                self.namespace.namespace,
-                self.loop  # Use existing loop
-            )
-            return await executor.execute_code_async(code)
-    
-    def _analyze_code(self, code: str) -> str:
-        """Basic code type detection - simplified from spec lines 149-200."""
-        if "await" in code or "async" in code:
-            return "async_code"
-        return "sync_code"
+            # Delegate to ThreadedExecutor with proper async wrapper
+            return await self._execute_with_threaded_executor(code)
 ```
+**Tests Passing**: All 22 AsyncExecutor tests, no regressions in existing suite
 
 #### 1.3 Fix Event Loop Management
 **File**: `src/session/manager.py` (fix lines 81-83)
@@ -396,50 +435,174 @@ def async_executor(namespace_manager, transport):
 
 ## Concrete Next Steps (In Order)
 
-### Week 1: Unblock Testing
-1. **Day 1 Morning**: Add async wrapper to ThreadedExecutor (2 hours)
-   - File: `src/subprocess/executor.py` (add after line 625)
-   - Tests Fixed: `tests/unit/test_executor.py:34-170`
+### Week 1: Unblock Testing (Phase 0 - Emergency Fixes)
+**Working Branch**: `fix/foundation-phase0-emergency-fixes`
+
+1. **Day 1 Morning**: Add async wrapper to ThreadedExecutor ✅ COMPLETE
+   - File: `src/subprocess/executor.py` (lines 627-674)
+   - Tests Fixed: All 5 executor tests passing
+   - Added timeout protection for mock transports
+   - Commit: `016f42b`
    
-2. **Day 1 Afternoon**: Fix message field issues (1 hour)
-   - Files: `src/subprocess/worker.py`, `tests/unit/test_messages.py:38-47`
-   - Add `execution_time` to ResultMessage
+2. **Day 1 Afternoon**: Fix message field issues ✅ COMPLETE
+   - Files: `tests/unit/test_messages.py` only (worker.py already correct)
+   - Fixed: ResultMessage.execution_time, HeartbeatMessage fields
+   - Result: All 8 message tests passing
+   - Commit: `016f42b`
    
-3. **Day 2**: Implement merge-only namespace policy (4 hours)
-   - File: `src/subprocess/namespace.py:28-40`
+3. **Day 2**: Implement merge-only namespace policy ✅ COMPLETE  
+   - Files: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
    - Spec: `docs/async_capability_prompts/current/24_spec_namespace_management.md:15-29`
+   - Added ENGINE_INTERNALS constant with protected keys
+   - Fixed _setup_namespace() to UPDATE instead of REPLACE
+   - Added update_namespace() method with merge strategies
+   - Created test_namespace_merge.py with 12 comprehensive tests
+   - Commit: `90c2937`
    
-4. **Day 3**: Create AsyncExecutor skeleton (4 hours)
-   - New File: `src/subprocess/async_executor.py`
-   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+4. **Day 3**: Create AsyncExecutor skeleton ✅ COMPLETE
+   - New File: `src/subprocess/async_executor.py` (398 lines)
+   - Test File: `tests/unit/test_async_executor.py` (536 lines, 23 tests)
+   - ExecutionMode detection working for all 5 modes
+   - ThreadedExecutor delegation maintains functionality
+   - Event loop management without ownership (no __del__ closing)
+   - Result: 23 new tests passing, 90% AsyncExecutor coverage
    
-5. **Day 3-4**: Fix event loop management (4 hours)
-   - File: `src/session/manager.py:81-83`
-   - Fix asyncio objects created before loop set
+5. **Day 4**: PR Review Feedback Fixes ✅ COMPLETE
+   - **Critical**: Removed dangerous __del__ loop closing from AsyncExecutor
+   - **Critical**: Added explicit lifecycle management (close() and context manager)
+   - **Critical**: Fixed deprecated get_event_loop() → get_running_loop()
+   - **Medium**: Created `src/subprocess/constants.py` for single ENGINE_INTERNALS source
+   - **Medium**: Fixed brittle/flaky tests with proper synchronization
+   - **Low**: Added LRU cache limit, removed unused imports, improved documentation
+   - Result: All reviewer concerns addressed
 
-**Goal**: 80% of tests passing
+6. **Day 4 (Extended)**: Additional PR Refinements ✅ COMPLETE
+   - **AST Traversal**: Verified working correctly, added comprehensive edge case tests
+     - File: `tests/unit/test_async_executor.py` lines 251-339
+     - Tests: await in function calls, list comprehensions, dict/set literals, conditionals
+   - **Hash Collisions**: Replaced Python `hash()` with a stable digest for cache keys
+     - File: `src/subprocess/async_executor.py` line 146
+     - Decision: Use `hashlib.md5(code.encode()).hexdigest()` for non-crypto
+       AST cache keys (faster, stable). If needed later, switch specific
+       contexts to SHA-256.
+   - **Result History**: Fixed to only update _ for expression results
+     - File: `src/subprocess/namespace.py` lines 111-118
+     - Only updates _ when key='_', not on all variable assignments
+   - **Event Loop Deprecations**: Fixed remaining get_event_loop() calls
+     - File: `src/subprocess/worker.py` line 572-573
+     - File: `src/protocol/framing.py` lines 60-75
+   - **Cancellation Tests**: Added component-level tests with documented limitations
+     - File: `tests/unit/test_executor.py` lines 223-292
+     - Known limitation: KeyboardInterrupt escapes test isolation
+   - **LRU Cache**: Added eviction test
+     - File: `tests/unit/test_async_executor.py` lines 366-412
+   - **Timeout Configuration**: Replaced hardcoded 0.5s with configurable _drain_timeout
+     - File: `src/subprocess/executor.py` line 675
+   - **Documentation**: Clarified thread safety claims
+     - File: `src/subprocess/async_executor.py` lines 80, 85-87
 
-### Week 2: Build Bridge Architecture  
-6. **Day 5-6**: Implement execution mode router (8 hours)
-   - Add to: `src/subprocess/async_executor.py`
-   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:149-247`
-   
-7. **Day 7**: Add promise abstraction layer (4 hours)
-   - New File: `src/subprocess/promise_manager.py`
-   - Bridge To: `docs/async_capability_prompts/current/00_foundation_resonate.md:109-162`
-   
-8. **Day 8**: Create capability base class (4 hours)
-   - Based On: `docs/async_capability_prompts/current/23_spec_capability_system.md`
-   
-9. **Day 9**: Fix test infrastructure (4 hours)
-   - Files: `tests/fixtures/sessions.py:18-42`
-   - Fix event loop issues in fixtures
-   
-10. **Day 10**: Integration testing and fixes (4 hours)
-    - Run full test suite
-    - Fix remaining issues
+7. **Day 4+ (Extended)**: Final Reviewer Feedback ✅ COMPLETE
+   - **Event Loop Management**: Removed loop acquisition from __init__ (lines 97-99)
+     - Loop now only obtained when needed in execute()
+     - Allows initialization outside async context
+   - **Event Loop in execute()**: Direct call without try/except (line 341)
+     - Uses `asyncio.get_running_loop()` directly
+     - Lets it raise naturally if not in async context
+   - **SyntaxError Detection**: Improved with PyCF_ALLOW_TOP_LEVEL_AWAIT compile test
+     - File: `src/subprocess/async_executor.py` lines 186-195
+     - Correctly handles `lambda: await foo()` as UNKNOWN
+   - **Test Coverage**: Added test_event_loop_handling.py with 11 tests
+     - Tests nested async contexts, concurrent sessions
+     - Validates all edge cases identified by reviewers
+   - Result: 94/96 unit tests passing (97.9%)
 
-**Goal**: 95% of tests passing, ready for Resonate integration
+**Goal**: 80% of tests passing ✅ EXCEEDED (97.9% - 94/96 unit tests)
+
+### Week 2: Build Bridge Architecture (Phase 1 & 2)
+**Phase 1 Branch** (Days 5-7): `fix/foundation-phase1-resonate-wrapper`  
+**Phase 2 Branch** (Days 8-10): `fix/foundation-phase2-integration`
+
+#### Critical Insight from Spec Review
+The specs solve the async/await vs yield paradigm through a **wrapper pattern** (refs below):
+- User code uses async/await normally (`22_spec_async_execution.md:252-293`)
+- AsyncExecutor handles async/await with PyCF_ALLOW_TOP_LEVEL_AWAIT (`22_spec_async_execution.md:17-25, 298-339`)
+- Resonate wraps AsyncExecutor in durable functions using yield (`22_spec_async_execution.md:671-734`, `21_spec_resonate_integration.md:133-190`)
+- No code transformation needed - separation of concerns at integration layer (`00_foundation_resonate.md:303-309`)
+
+6. **Day 5: Implement Resonate Wrapper Pattern** (8 hours)
+   - Create durable function wrapper for AsyncExecutor
+   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:671-734`
+   - Pattern:
+     ```python
+     @resonate.register
+     def durable_async_execute(ctx, args):
+         executor = AsyncExecutor(ctx.resonate, namespace_manager, execution_id)
+         result = yield ctx.lfc(executor.execute, {"code": code})
+         return result
+     ```
+   - Test that AsyncExecutor methods work with `ctx.lfc()`
+   
+7. **Day 6: Promise Adapter Layer** (4 hours)
+   - Create `AwaitableResonatePromise` for async/await compatibility
+   - Fix timing issues between Resonate promises and asyncio
+   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:319-377`
+   - Key: Make Resonate promises awaitable in async contexts
+   
+8. **Day 7: Migration Adapter Implementation** (4 hours)
+   - Implement `MigrationAdapter` from spec lines 894-922
+   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:894-922`
+   - Add intelligent routing based on execution modes:
+     ```python
+     def _should_use_resonate(self, code: str) -> bool:
+         mode = self.analyze_execution_mode(code)
+         return mode in [ExecutionMode.TOP_LEVEL_AWAIT, ExecutionMode.BLOCKING_SYNC]
+     ```
+   
+9. **Day 8: Dependency Injection Refinement** (4 hours)
+   - Fix singleton vs factory patterns for dependencies
+   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:243-314`
+   - Critical fix: AsyncExecutor needs factory function, not singleton
+   - Test namespace manager lifecycle with Resonate
+   
+10. **Day 9-10: Integration Testing** (8 hours)
+    - Test checkpoint recovery (`21_spec_resonate_integration.md:754-794`)
+    - Test local vs remote mode consistency
+    - Verify promise resolution in both modes
+    - Test HITL workflows with promises (`21_spec_resonate_integration.md:473-512`)
+    - Performance benchmarks per spec targets (`21_spec_resonate_integration.md:1085-1093`)
+
+**Goal**: 95% tests passing with Resonate integration working in local mode
+
+#### Early Detection Tests (Day 5 - Critical)
+```python
+# Test 1: Verify wrapper pattern works
+def test_resonate_wrapper_pattern():
+    """Based on 22_spec_async_execution.md:671-734"""
+    @resonate.register
+    def wrapped_execute(ctx, args):
+        executor = AsyncExecutor(ctx.resonate, namespace_manager, "test")
+        # This should work - AsyncExecutor's async method called via yield
+        result = yield ctx.lfc(executor.execute, {"code": "x = 1"})
+        return result
+    
+    result = wrapped_execute.run("test-1", {"code": "x = 1"})
+    assert result is not None
+
+# Test 2: Verify no paradigm conflict
+def test_async_await_vs_yield_separation():
+    """Ensure clean separation of concerns"""
+    code = "result = await asyncio.sleep(0, 'test')"
+    
+    # AsyncExecutor handles await internally
+    executor = AsyncExecutor(resonate, namespace_manager, "test")
+    # Resonate wraps with yield externally
+    @resonate.register
+    def durable_exec(ctx, args):
+        result = yield ctx.lfc(executor.execute, {"code": code})
+        return result
+    
+    assert durable_exec.run("test-2", {}) == 'test'
+```
 
 ### Week 3: Prepare for Full Specs
 11. Implement basic AsyncExecutor with PyCF_ALLOW_TOP_LEVEL_AWAIT
@@ -451,39 +614,80 @@ def async_executor(namespace_manager, transport):
 ## Success Criteria
 
 ### Immediate Success (Week 1)
-- [ ] ThreadedExecutor tests pass with async wrapper
-- [ ] No Pydantic validation errors
-- [ ] Namespace never replaced, only merged
-- [ ] Basic AsyncExecutor skeleton works
-- [ ] Event loop errors resolved
+- [x] ThreadedExecutor tests pass with async wrapper ✅ Day 1
+- [x] No Pydantic validation errors ✅ Day 1
+- [x] Namespace never replaced, only merged ✅ Day 2
+- [x] Basic AsyncExecutor skeleton works ✅ Day 3
+- [ ] Event loop errors resolved (Day 3-4)
 
-### Foundation Success (Week 2)
-- [ ] Code execution routed based on type
-- [ ] Promise abstraction layer works
-- [ ] Capabilities can use request/response pattern
-- [ ] Test infrastructure stable
+### Foundation Success (Week 2 - Resonate Integration)
+- [ ] Resonate wrapper pattern working (AsyncExecutor wrapped in durable functions)
+- [ ] Promise adapter bridges yield and await paradigms
+- [ ] Migration adapter routes code intelligently
+- [ ] Dependency injection with proper lifecycles
+- [ ] Local and remote modes behave identically
 - [ ] 95% test pass rate
 
-### Ready for Specs (Week 3)
-- [ ] AsyncExecutor handles top-level await
-- [ ] Protocol supports all message types
-- [ ] Clear migration path to Resonate
-- [ ] Performance acceptable
-- [ ] Architecture documentation complete
+### Integration Validation Tests
+- [ ] Test 1: AsyncExecutor.execute() works inside Resonate's `ctx.lfc()`
+- [ ] Test 2: Resonate promises are awaitable via adapter
+- [ ] Test 3: Same code produces same results in local and remote modes
+- [ ] Test 4: Checkpoint recovery restores namespace correctly
+- [ ] Test 5: HITL promises resolve correctly across async boundaries
+- [ ] Test 6: Performance meets spec targets (< 1ms local, < 10ms remote)
 
-## Risks and Mitigations
+### Ready for Production (Week 3)
+- [ ] AsyncExecutor handles top-level await with PyCF_ALLOW_TOP_LEVEL_AWAIT
+- [ ] Full Resonate integration with crash recovery
+- [ ] MigrationAdapter allows incremental adoption
+- [ ] Performance benchmarks documented
+- [ ] Architecture documentation reflects wrapper pattern
 
-### Risk 1: Async Wrapper Introduces Overhead
-**Mitigation**: Profile and optimize, accept temporary overhead for compatibility
+## Critical Learnings from Full Spec Review
 
-### Risk 2: Namespace Merge Conflicts
-**Mitigation**: Clear rules for what can be overwritten, comprehensive tests
+### The Wrapper Pattern Solution
+After reading the full specs, the architecture is elegantly solved:
+1. **No AST transformation needed** - User code remains unchanged
+2. **Separation of concerns** - AsyncExecutor handles async/await, Resonate handles durability
+3. **Clean integration layer** - Resonate wraps AsyncExecutor, not vice versa
+4. **Incremental adoption** - MigrationAdapter allows gradual transition
 
-### Risk 3: Event Loop Complexity
-**Mitigation**: Standardize on single event loop per session, document patterns
+### Key Integration Points (with Spec References)
+- **Promise Adapter**: Bridge between Resonate promises (yield-based) and asyncio futures (await-based)
+  - Spec: `21_spec_resonate_integration.md:319-418` (PromiseManager and PromiseBasedProtocol)
+  - Pattern: `00_foundation_resonate.md:109-162` (Protocol Bridge with Resonate Promises)
+- **Dependency Injection**: Use factory functions for per-execution instances
+  - Spec: `21_spec_resonate_integration.md:243-314` (Dependency Registration and Access)
+  - Critical: AsyncExecutor must be `singleton=False` (line 264)
+- **Checkpoint Strategy**: Namespace snapshots at each checkpoint for recovery
+  - Spec: `21_spec_resonate_integration.md:569-611` (CheckpointManager)
+  - Example: `21_spec_resonate_integration.md:754-794` (crash_resilient_execution)
+- **Local/Remote Parity**: Same behavior in both modes, different persistence
+  - Local: `21_spec_resonate_integration.md:51-85` (initialize_resonate_local)
+  - Remote: `21_spec_resonate_integration.md:87-126` (initialize_resonate_remote)
+  - Migration: `21_spec_resonate_integration.md:894-922` (MigrationAdapter)
 
-### Risk 4: Test Assumptions Invalid
-**Mitigation**: May need to adjust some tests to match transition architecture
+## Risks and Mitigations (Updated)
+
+### Risk 1: Promise Resolution Timing Mismatch
+**Issue**: Resonate promises may not be directly awaitable
+**Mitigation**: Create `AwaitableResonatePromise` adapter class
+**Test Early**: Day 5 - Test promise resolution in both paradigms
+
+### Risk 2: Dependency Lifecycle Issues
+**Issue**: AsyncExecutor needs new instance per execution, not singleton
+**Mitigation**: Use factory functions in dependency registration
+**Test Early**: Day 8 - Verify proper cleanup between executions
+
+### Risk 3: Local vs Remote Behavior Divergence
+**Issue**: Different behavior could break when deploying
+**Mitigation**: Extensive testing in both modes with same test cases
+**Test Early**: Day 9-10 - Run all tests in both local and remote modes
+
+### Risk 4: Performance Overhead in Wrapper Layer
+**Issue**: Multiple layers might introduce latency
+**Mitigation**: Benchmark against spec targets (< 1ms local, < 10ms remote)
+**Test Early**: Day 10 - Performance benchmarks
 
 ## Conclusion
 
@@ -494,3 +698,9 @@ The foundation fixes are **essential** before implementing the full specs. We're
 3. **Long-term**: Clear path to implement full specifications
 
 The key is to **fix the basics first**, then **build the bridge**, and finally **implement the vision**.
+
+## Deferred Refinements (Phase 1 Planning)
+
+- Output drain-timeout suppression policy: Keep current suppression in tests, but in Phase 1 define a configurable policy (flag/env), warn once per execution, and track a small metric so production regressions are visible without destabilizing tests.
+- Blocking I/O detection breadth: Extend `AsyncExecutor._contains_blocking_io` to detect common attribute calls (e.g., `time.sleep`, `requests.get`, `socket.recv`). Add tests first to capture expected patterns and limit false positives.
+- FrameBuffer wakeups: Replace the fixed 10ms sleep in `FrameBuffer.get_frame()` with event/condition wakeups (consistent with `transport.FrameReader`) to reduce latency and CPU wakeups under load.

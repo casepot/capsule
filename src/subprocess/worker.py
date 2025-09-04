@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import io
 import logging
 import sys
 import threading
@@ -32,13 +31,12 @@ from ..protocol.messages import (
     InputMessage,
     InputResponseMessage,
     MessageType,
-    OutputMessage,
     ReadyMessage,
     ResultMessage,
-    StreamType,
 )
 from ..protocol.transport import MessageTransport
 from .executor import ThreadedExecutor, OutputDrainTimeout
+from .constants import ENGINE_INTERNALS
 
 logger = structlog.get_logger()
 
@@ -99,6 +97,9 @@ class InputHandler:
 class SubprocessWorker:
     """Main subprocess worker that executes Python code."""
     
+    # Engine internals imported from constants module
+    # See constants.py for the complete list and documentation
+    
     def __init__(
         self,
         transport: MessageTransport,
@@ -119,11 +120,16 @@ class SubprocessWorker:
         self._setup_namespace()
     
     def _setup_namespace(self) -> None:
-        """Setup the initial namespace."""
+        """Setup the initial namespace.
+        
+        CRITICAL: Never replace namespace, always merge/update to preserve
+        engine internals and prevent KeyError failures.
+        """
         import builtins
         
-        # Start with clean namespace
-        self._namespace = {
+        # CRITICAL: Never replace, always update (spec line 22)
+        # Update with required built-ins instead of replacing
+        self._namespace.update({
             "__name__": "__main__",
             "__doc__": None,
             "__package__": None,
@@ -131,7 +137,17 @@ class SubprocessWorker:
             "__spec__": None,
             "__annotations__": {},
             "__builtins__": builtins,
-        }
+        })
+        
+        # Initialize engine internals with proper defaults
+        for key in ENGINE_INTERNALS:
+            if key not in self._namespace:
+                if key in ['Out', '_oh']:
+                    self._namespace[key] = {}
+                elif key in ['In', '_ih']:
+                    self._namespace[key] = []
+                else:
+                    self._namespace[key] = None
     
     async def _cancel_with_timeout(self, execution_id: str, grace_timeout_ms: int, thread: threading.Thread = None) -> bool:
         """Cancel execution with grace period before hard cancel.
@@ -549,8 +565,17 @@ async def main() -> None:
     session_id = sys.argv[1]
     
     # Create transport using stdin/stdout
-    # Get the event loop
-    loop = asyncio.get_event_loop()
+    # Get the event loop created by asyncio.run()
+    loop = asyncio.get_running_loop()
+    
+    logger.info(
+        "worker_start",
+        session_id=session_id,
+        event_loop_id=id(loop),
+        python_version=sys.version,
+        # Prefer explicit ternary over and/or idiom for readability
+        pid=psutil.Process().pid if sys.platform != 'win32' else None,
+    )
     
     # Create reader from stdin (use buffer for binary)
     reader = asyncio.StreamReader()

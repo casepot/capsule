@@ -41,6 +41,7 @@ class TestMessageCreation:
             execution_id="exec-123",
             value=42,
             repr="42",
+            execution_time=0.5,
         )
         assert msg.type == MessageType.RESULT
         assert msg.value == 42
@@ -106,6 +107,9 @@ class TestMessageSerialization:
         msg = HeartbeatMessage(
             id="test-123",
             timestamp=time.time(),
+            memory_usage=1024 * 1024,
+            cpu_percent=25.0,
+            namespace_size=10,
         )
         data = msg.model_dump()
         assert data["type"] == "heartbeat"

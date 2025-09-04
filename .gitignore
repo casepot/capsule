@@ -196,6 +196,7 @@ notes/
 TODO.txt
 .todo
 *.todo
+resonate-sdk-docs.md
 
 # Test outputs
 test_output/
