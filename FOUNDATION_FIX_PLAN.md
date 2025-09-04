@@ -1,6 +1,6 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-**STATUS**: Day 4 Complete (Phase 0 Emergency Fixes + PR Review ✅) | Test Pass Rate: 97.6% (83/85 unit tests)
+**STATUS**: Day 4+ Complete (Phase 0 Emergency Fixes + All PR Review ✅) | Test Pass Rate: 97.9% (94/96 unit tests)
 **BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-4 work, PR #10 ready to merge)
 
 ## Executive Summary
@@ -499,7 +499,22 @@ def async_executor(namespace_manager, transport):
    - **Documentation**: Clarified thread safety claims
      - File: `src/subprocess/async_executor.py` lines 80, 85-87
 
-**Goal**: 80% of tests passing ✅ EXCEEDED (97.6% - 83/85 unit tests)
+7. **Day 4+ (Extended)**: Final Reviewer Feedback ✅ COMPLETE
+   - **Event Loop Management**: Removed loop acquisition from __init__ (lines 97-99)
+     - Loop now only obtained when needed in execute()
+     - Allows initialization outside async context
+   - **Event Loop in execute()**: Direct call without try/except (line 341)
+     - Uses `asyncio.get_running_loop()` directly
+     - Lets it raise naturally if not in async context
+   - **SyntaxError Detection**: Improved with PyCF_ALLOW_TOP_LEVEL_AWAIT compile test
+     - File: `src/subprocess/async_executor.py` lines 186-195
+     - Correctly handles `lambda: await foo()` as UNKNOWN
+   - **Test Coverage**: Added test_event_loop_handling.py with 11 tests
+     - Tests nested async contexts, concurrent sessions
+     - Validates all edge cases identified by reviewers
+   - Result: 94/96 unit tests passing (97.9%)
+
+**Goal**: 80% of tests passing ✅ EXCEEDED (97.9% - 94/96 unit tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
 **Phase 1 Branch** (Days 5-7): `fix/foundation-phase1-resonate-wrapper`  
