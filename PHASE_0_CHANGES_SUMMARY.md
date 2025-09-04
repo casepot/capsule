@@ -239,6 +239,20 @@ Following additional reviewer feedback, these critical fixes were implemented:
   - Event loop context requirements
   - Platform-specific queue operations
   - No bare except validation
+  
+## Additional Code Quality Refinements
+
+### Performance Optimization
+- **async_executor.py (line 144)**: Replaced SHA-256 with MD5 for cache keys (non-cryptographic use)
+- Provides faster hashing for AST cache lookups
+
+### Documentation Improvements
+- **framing.py (lines 147-153)**: Added RateLimiter docstring note about async context requirement
+- **worker.py (line 568)**: Fixed comment accuracy about event loop creation
+
+### Test Reliability
+- **test_event_loop_handling.py**: Replaced brittle `inspect.getsource()` tests with behavior-driven assertions
+- Tests now verify actual functionality rather than implementation details
 
 ## Next Steps (Phase 1)
 
