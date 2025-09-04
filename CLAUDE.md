@@ -11,37 +11,47 @@ Capsule is a Python execution environment implementing a **Subprocess-Isolated E
 ## Development Commands
 
 ```bash
-# Install for development
-pip install -e .[dev]
+# Install/sync dependencies
+uv sync
 
 # Run all tests
-pytest
+uv run pytest
 
 # Run specific test file
-pytest tests/unit/test_executor.py
+uv run pytest tests/unit/test_executor.py
 
 # Run specific test
-pytest tests/unit/test_executor.py::TestThreadedExecutor::test_simple_execution
+uv run pytest tests/unit/test_executor.py::TestThreadedExecutor::test_simple_execution
+
+# Run specific test with verbose output
+uv run pytest tests/unit/test_executor.py::TestThreadedExecutor::test_simple_code_execution -xvs
 
 # Run test categories
-pytest -m unit          # Fast unit tests  
-pytest -m integration   # Integration tests
-pytest -m e2e          # End-to-end tests
+uv run pytest -m unit          # Fast unit tests  
+uv run pytest -m integration   # Integration tests
+uv run pytest -m e2e          # End-to-end tests
 
 # Run tests with coverage
-pytest --cov=src --cov-report=term-missing
+uv run pytest --cov=src --cov-report=term-missing
+uv run pytest --cov=src --cov-report=html
+
+# Run tests in parallel
+uv run pytest -n auto
+
+# Run fast tests only (exclude slow)
+uv run pytest -m "not slow"
 
 # Type checking
-mypy src/
-basedpyright src/
+uv run mypy src/
+uv run basedpyright src/
 
 # Linting and formatting
-ruff check src/
-black src/
-ruff format src/
+uv run ruff check src/
+uv run black src/
+uv run ruff format src/
 
 # Run tests with timeout protection
-pytest --timeout=30
+uv run pytest --timeout=30
 ```
 
 ## Architecture Overview
