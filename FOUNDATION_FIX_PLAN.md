@@ -5,9 +5,13 @@
 
 ## Executive Summary
 
-After reviewing the current implementation, test failures, and future specs, I've identified that we're in an **architectural transition phase**. The tests are written for the future AsyncExecutor + Resonate architecture, while the implementation is still using ThreadedExecutor without proper async coordination. We need to fix foundational issues before implementing the full specs.
+**Last Updated**: After full spec review and deep analysis of Resonate integration patterns.
+
+After reviewing the current implementation, test failures, and **reading the full specifications in detail**, I've identified that we're in an **architectural transition phase** with a clear solution path. The specs elegantly solve the async/await vs yield paradigm through a **wrapper pattern** where Resonate wraps AsyncExecutor at the integration layer - no code transformation needed.
 
 **Phase 0 Status**: ✅ COMPLETE - AsyncExecutor skeleton implemented with proper lifecycle management, ThreadedExecutor delegation working with async wrapper, namespace merge-only policy enforced, ENGINE_INTERNALS centralized, all PR review feedback addressed. 97.6% test pass rate achieved (83/85 tests). Ready to merge to master.
+
+**Key Discovery**: The specs already solve the hard problems. Our refinements focus on making the bridge robust, testing edge cases early, and ensuring consistent behavior across local/remote modes.
 
 ## Development Workflow & Branching Strategy
 
@@ -498,29 +502,90 @@ def async_executor(namespace_manager, transport):
 **Goal**: 80% of tests passing ✅ EXCEEDED (97.6% - 83/85 unit tests)
 
 ### Week 2: Build Bridge Architecture (Phase 1 & 2)
-**Phase 1 Branch** (Days 4-7): `fix/foundation-phase1-async-executor`  
-**Phase 2 Branch** (Days 8-10): `fix/foundation-phase2-bridge`
+**Phase 1 Branch** (Days 5-7): `fix/foundation-phase1-resonate-wrapper`  
+**Phase 2 Branch** (Days 8-10): `fix/foundation-phase2-integration`
 
-6. **Day 5-6**: Implement execution mode router (8 hours)
-   - Add to: `src/subprocess/async_executor.py`
-   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:149-247`
-   
-7. **Day 7**: Add promise abstraction layer (4 hours)
-   - New File: `src/subprocess/promise_manager.py`
-   - Bridge To: `docs/async_capability_prompts/current/00_foundation_resonate.md:109-162`
-   
-8. **Day 8**: Create capability base class (4 hours)
-   - Based On: `docs/async_capability_prompts/current/23_spec_capability_system.md`
-   
-9. **Day 9**: Fix test infrastructure (4 hours)
-   - Files: `tests/fixtures/sessions.py:18-42`
-   - Fix event loop issues in fixtures
-   
-10. **Day 10**: Integration testing and fixes (4 hours)
-    - Run full test suite
-    - Fix remaining issues
+#### Critical Insight from Spec Review
+The specs solve the async/await vs yield paradigm through a **wrapper pattern** (refs below):
+- User code uses async/await normally (`22_spec_async_execution.md:252-293`)
+- AsyncExecutor handles async/await with PyCF_ALLOW_TOP_LEVEL_AWAIT (`22_spec_async_execution.md:17-25, 298-339`)
+- Resonate wraps AsyncExecutor in durable functions using yield (`22_spec_async_execution.md:671-734`, `21_spec_resonate_integration.md:133-190`)
+- No code transformation needed - separation of concerns at integration layer (`00_foundation_resonate.md:303-309`)
 
-**Goal**: 95% of tests passing, ready for Resonate integration
+6. **Day 5: Implement Resonate Wrapper Pattern** (8 hours)
+   - Create durable function wrapper for AsyncExecutor
+   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:671-734`
+   - Pattern:
+     ```python
+     @resonate.register
+     def durable_async_execute(ctx, args):
+         executor = AsyncExecutor(ctx.resonate, namespace_manager, execution_id)
+         result = yield ctx.lfc(executor.execute, {"code": code})
+         return result
+     ```
+   - Test that AsyncExecutor methods work with `ctx.lfc()`
+   
+7. **Day 6: Promise Adapter Layer** (4 hours)
+   - Create `AwaitableResonatePromise` for async/await compatibility
+   - Fix timing issues between Resonate promises and asyncio
+   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:319-377`
+   - Key: Make Resonate promises awaitable in async contexts
+   
+8. **Day 7: Migration Adapter Implementation** (4 hours)
+   - Implement `MigrationAdapter` from spec lines 894-922
+   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:894-922`
+   - Add intelligent routing based on execution modes:
+     ```python
+     def _should_use_resonate(self, code: str) -> bool:
+         mode = self.analyze_execution_mode(code)
+         return mode in [ExecutionMode.TOP_LEVEL_AWAIT, ExecutionMode.BLOCKING_SYNC]
+     ```
+   
+9. **Day 8: Dependency Injection Refinement** (4 hours)
+   - Fix singleton vs factory patterns for dependencies
+   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:243-314`
+   - Critical fix: AsyncExecutor needs factory function, not singleton
+   - Test namespace manager lifecycle with Resonate
+   
+10. **Day 9-10: Integration Testing** (8 hours)
+    - Test checkpoint recovery (`21_spec_resonate_integration.md:754-794`)
+    - Test local vs remote mode consistency
+    - Verify promise resolution in both modes
+    - Test HITL workflows with promises (`21_spec_resonate_integration.md:473-512`)
+    - Performance benchmarks per spec targets (`21_spec_resonate_integration.md:1085-1093`)
+
+**Goal**: 95% tests passing with Resonate integration working in local mode
+
+#### Early Detection Tests (Day 5 - Critical)
+```python
+# Test 1: Verify wrapper pattern works
+def test_resonate_wrapper_pattern():
+    """Based on 22_spec_async_execution.md:671-734"""
+    @resonate.register
+    def wrapped_execute(ctx, args):
+        executor = AsyncExecutor(ctx.resonate, namespace_manager, "test")
+        # This should work - AsyncExecutor's async method called via yield
+        result = yield ctx.lfc(executor.execute, {"code": "x = 1"})
+        return result
+    
+    result = wrapped_execute.run("test-1", {"code": "x = 1"})
+    assert result is not None
+
+# Test 2: Verify no paradigm conflict
+def test_async_await_vs_yield_separation():
+    """Ensure clean separation of concerns"""
+    code = "result = await asyncio.sleep(0, 'test')"
+    
+    # AsyncExecutor handles await internally
+    executor = AsyncExecutor(resonate, namespace_manager, "test")
+    # Resonate wraps with yield externally
+    @resonate.register
+    def durable_exec(ctx, args):
+        result = yield ctx.lfc(executor.execute, {"code": code})
+        return result
+    
+    assert durable_exec.run("test-2", {}) == 'test'
+```
 
 ### Week 3: Prepare for Full Specs
 11. Implement basic AsyncExecutor with PyCF_ALLOW_TOP_LEVEL_AWAIT
@@ -538,33 +603,74 @@ def async_executor(namespace_manager, transport):
 - [x] Basic AsyncExecutor skeleton works ✅ Day 3
 - [ ] Event loop errors resolved (Day 3-4)
 
-### Foundation Success (Week 2)
-- [ ] Code execution routed based on type
-- [ ] Promise abstraction layer works
-- [ ] Capabilities can use request/response pattern
-- [ ] Test infrastructure stable
+### Foundation Success (Week 2 - Resonate Integration)
+- [ ] Resonate wrapper pattern working (AsyncExecutor wrapped in durable functions)
+- [ ] Promise adapter bridges yield and await paradigms
+- [ ] Migration adapter routes code intelligently
+- [ ] Dependency injection with proper lifecycles
+- [ ] Local and remote modes behave identically
 - [ ] 95% test pass rate
 
-### Ready for Specs (Week 3)
-- [ ] AsyncExecutor handles top-level await
-- [ ] Protocol supports all message types
-- [ ] Clear migration path to Resonate
-- [ ] Performance acceptable
-- [ ] Architecture documentation complete
+### Integration Validation Tests
+- [ ] Test 1: AsyncExecutor.execute() works inside Resonate's `ctx.lfc()`
+- [ ] Test 2: Resonate promises are awaitable via adapter
+- [ ] Test 3: Same code produces same results in local and remote modes
+- [ ] Test 4: Checkpoint recovery restores namespace correctly
+- [ ] Test 5: HITL promises resolve correctly across async boundaries
+- [ ] Test 6: Performance meets spec targets (< 1ms local, < 10ms remote)
 
-## Risks and Mitigations
+### Ready for Production (Week 3)
+- [ ] AsyncExecutor handles top-level await with PyCF_ALLOW_TOP_LEVEL_AWAIT
+- [ ] Full Resonate integration with crash recovery
+- [ ] MigrationAdapter allows incremental adoption
+- [ ] Performance benchmarks documented
+- [ ] Architecture documentation reflects wrapper pattern
 
-### Risk 1: Async Wrapper Introduces Overhead
-**Mitigation**: Profile and optimize, accept temporary overhead for compatibility
+## Critical Learnings from Full Spec Review
 
-### Risk 2: Namespace Merge Conflicts
-**Mitigation**: Clear rules for what can be overwritten, comprehensive tests
+### The Wrapper Pattern Solution
+After reading the full specs, the architecture is elegantly solved:
+1. **No AST transformation needed** - User code remains unchanged
+2. **Separation of concerns** - AsyncExecutor handles async/await, Resonate handles durability
+3. **Clean integration layer** - Resonate wraps AsyncExecutor, not vice versa
+4. **Incremental adoption** - MigrationAdapter allows gradual transition
 
-### Risk 3: Event Loop Complexity
-**Mitigation**: Standardize on single event loop per session, document patterns
+### Key Integration Points (with Spec References)
+- **Promise Adapter**: Bridge between Resonate promises (yield-based) and asyncio futures (await-based)
+  - Spec: `21_spec_resonate_integration.md:319-418` (PromiseManager and PromiseBasedProtocol)
+  - Pattern: `00_foundation_resonate.md:109-162` (Protocol Bridge with Resonate Promises)
+- **Dependency Injection**: Use factory functions for per-execution instances
+  - Spec: `21_spec_resonate_integration.md:243-314` (Dependency Registration and Access)
+  - Critical: AsyncExecutor must be `singleton=False` (line 264)
+- **Checkpoint Strategy**: Namespace snapshots at each checkpoint for recovery
+  - Spec: `21_spec_resonate_integration.md:569-611` (CheckpointManager)
+  - Example: `21_spec_resonate_integration.md:754-794` (crash_resilient_execution)
+- **Local/Remote Parity**: Same behavior in both modes, different persistence
+  - Local: `21_spec_resonate_integration.md:51-85` (initialize_resonate_local)
+  - Remote: `21_spec_resonate_integration.md:87-126` (initialize_resonate_remote)
+  - Migration: `21_spec_resonate_integration.md:894-922` (MigrationAdapter)
 
-### Risk 4: Test Assumptions Invalid
-**Mitigation**: May need to adjust some tests to match transition architecture
+## Risks and Mitigations (Updated)
+
+### Risk 1: Promise Resolution Timing Mismatch
+**Issue**: Resonate promises may not be directly awaitable
+**Mitigation**: Create `AwaitableResonatePromise` adapter class
+**Test Early**: Day 5 - Test promise resolution in both paradigms
+
+### Risk 2: Dependency Lifecycle Issues
+**Issue**: AsyncExecutor needs new instance per execution, not singleton
+**Mitigation**: Use factory functions in dependency registration
+**Test Early**: Day 8 - Verify proper cleanup between executions
+
+### Risk 3: Local vs Remote Behavior Divergence
+**Issue**: Different behavior could break when deploying
+**Mitigation**: Extensive testing in both modes with same test cases
+**Test Early**: Day 9-10 - Run all tests in both local and remote modes
+
+### Risk 4: Performance Overhead in Wrapper Layer
+**Issue**: Multiple layers might introduce latency
+**Mitigation**: Benchmark against spec targets (< 1ms local, < 10ms remote)
+**Test Early**: Day 10 - Performance benchmarks
 
 ## Conclusion
 
