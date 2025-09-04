@@ -353,7 +353,7 @@ async def func():
         )
         
         code = "x = 1 + 2"
-        code_hash = hashlib.sha256(code.encode()).hexdigest()
+        code_hash = hashlib.md5(code.encode()).hexdigest()
         
         # First analysis should cache the AST
         mode1 = executor.analyze_execution_mode(code)
@@ -386,7 +386,7 @@ async def func():
         for i in range(4):
             code = f"x = {i}"
             codes.append(code)
-            code_hash = hashlib.sha256(code.encode()).hexdigest()
+            code_hash = hashlib.md5(code.encode()).hexdigest()
             hashes.append(code_hash)
             executor.analyze_execution_mode(code)
         
@@ -402,7 +402,7 @@ async def func():
         
         # Add another new entry
         code = "y = 5"
-        new_hash = hashlib.sha256(code.encode()).hexdigest()
+        new_hash = hashlib.md5(code.encode()).hexdigest()
         executor.analyze_execution_mode(code)
         
         # Now codes[2] should be evicted, not codes[1] (which we just accessed)

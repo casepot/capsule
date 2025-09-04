@@ -140,7 +140,8 @@ class AsyncExecutor:
             
             # Store in cache with LRU eviction
             # Use stable SHA-256 digest instead of hash() to avoid collisions
-            code_hash = hashlib.sha256(code.encode()).hexdigest()
+            # Use MD5 for cache keys (non-cryptographic use)
+            code_hash = hashlib.md5(code.encode()).hexdigest()
             if code_hash in self._ast_cache:
                 # Move to end (most recently used)
                 self._ast_cache.move_to_end(code_hash)

@@ -147,6 +147,10 @@ class RateLimiter:
     """Rate limiter for protocol messages with on-demand token computation.
     
     Eliminates polling by calculating exact wait time for next token.
+    
+    Note: RateLimiter must be used within an async context as it requires
+    an active event loop for time tracking. Both acquire() and try_acquire()
+    will raise RuntimeError if called outside an async context.
     """
     
     def __init__(

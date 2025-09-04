@@ -565,7 +565,7 @@ async def main() -> None:
     session_id = sys.argv[1]
     
     # Create transport using stdin/stdout
-    # Use the existing event loop from asyncio.run()
+    # Get the event loop created by asyncio.run()
     loop = asyncio.get_running_loop()
     
     logger.info(

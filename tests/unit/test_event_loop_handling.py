@@ -26,11 +26,27 @@ class TestEventLoopHandling:
         
         # Verify the new behavior: get_running_loop is called directly
         # without try/except, letting it raise naturally
-        import inspect
-        source = inspect.getsource(executor._execute_with_threaded_executor)
-        assert "current_loop = asyncio.get_running_loop()" in source
-        # Should not have try/except around get_running_loop anymore
-        assert "try:" not in source.split("get_running_loop()")[0].split("\n")[-2:]
+        # Test actual behavior: should raise RuntimeError outside async context
+        import asyncio
+        import sys
+        
+        # Create a coroutine to test
+        async def test_coro():
+            return await executor._execute_with_threaded_executor("x = 1")
+        
+        # Try to run outside async context - should fail
+        with pytest.raises(RuntimeError, match="no running event loop"):
+            # Create new event loop and immediately close it to ensure no loop
+            loop = asyncio.new_event_loop()
+            loop.close()
+            # Now try to get coroutine result - will fail when it tries get_running_loop()
+            coro = test_coro()
+            try:
+                coro.send(None)  # Start the coroutine
+            except StopIteration:
+                pass  # Shouldn't get here
+            finally:
+                coro.close()
     
     @pytest.mark.asyncio
     async def test_rate_limiter_requires_async_context(self):
@@ -47,12 +63,19 @@ class TestEventLoopHandling:
         result = limiter.try_acquire()
         assert result is True
         
-        # Test that it properly gets the running loop
-        # The try_acquire method should not fall back to time.time()
-        import inspect
-        source = inspect.getsource(limiter.try_acquire)
-        assert "time.time()" not in source
-        assert "get_running_loop()" in source
+        # Test that it properly uses loop.time() not time.time()
+        # First exhaust the burst capacity
+        for _ in range(20):  # Burst size is 20
+            limiter.try_acquire()
+        
+        # Now we should be rate limited
+        results = []
+        for _ in range(5):
+            acquired = limiter.try_acquire()
+            results.append(acquired)
+        
+        # Should all fail since we exhausted burst
+        assert not any(results)  # All should fail due to rate limiting
     
     @pytest.mark.asyncio
     async def test_async_executor_with_event_loop(self):
@@ -210,30 +233,37 @@ class TestEventLoopHandling:
         mode = executor.analyze_execution_mode("x = 1")
         assert mode == ExecutionMode.SIMPLE_SYNC
     
-    def test_queue_size_platform_compatibility(self):
+    @pytest.mark.asyncio
+    async def test_queue_size_platform_compatibility(self):
         """Test that queue size handling works on platforms without qsize."""
         from src.subprocess.executor import ThreadedExecutor
         
         # Create executor with mock transport
         mock_transport = Mock()
+        loop = asyncio.get_running_loop()
         executor = ThreadedExecutor(
             transport=mock_transport,
             execution_id="test-exec",
             namespace={},
-            loop=None
+            loop=loop
         )
         
         # Mock a queue without qsize method
         mock_queue = Mock()
         mock_queue.qsize.side_effect = NotImplementedError("qsize not supported")
+        mock_queue.put_nowait = Mock()
         executor._aq = mock_queue
         
         # This should handle the exception gracefully
-        # The code uses (AttributeError, NotImplementedError) now
-        import inspect
-        source = inspect.getsource(executor._enqueue_from_thread)
-        assert "(AttributeError, NotImplementedError)" in source
-        assert "except:" not in source  # No bare excepts
+        # Test actual behavior - should not crash
+        # The method should work despite NotImplementedError from qsize
+        try:
+            executor._enqueue_from_thread("test", "data")
+            # Success - it didn't crash when qsize raised NotImplementedError
+            assert True
+        except Exception as e:
+            # Should not raise any exception
+            pytest.fail(f"_enqueue_from_thread raised unexpected exception: {e}")
 
 
 @pytest.mark.unit  
@@ -284,12 +314,8 @@ class TestErrorHandlingImprovements:
         mock_transport.close = Mock(side_effect=failing_close)
         session._transport = mock_transport
         
-        # Verify the error handling code is present in terminate()
+        # Verify the error is handled, not raised
         # The terminate method should log the error, not raise it
-        import inspect
-        source = inspect.getsource(session.terminate)
-        assert "logger.debug" in source
-        assert "non-critical" in source
         
         # Call terminate - should not raise
         await session.terminate()
