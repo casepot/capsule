@@ -195,7 +195,10 @@ scratch/
 notes/
 TODO.txt
 .todo
-*.tod
+*.todo
+
+# Completion logs (kept locally)
+completion-logs/
 
 # Test outputs
 test_output/
