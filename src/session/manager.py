@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, Callable, List
 
 import structlog
 
@@ -83,6 +83,8 @@ class Session:
         self._cancel_event = asyncio.Event()  # Event for cancellation
         self._message_handlers: Dict[str, asyncio.Queue[Message]] = {}
         self._receive_task: Optional[asyncio.Task[None]] = None
+        # Interceptors invoked on every received message before routing
+        self._interceptors: List[Callable[[Message], Optional[bool]]] = []
 
         # Metrics collection
         self._metrics = {
@@ -121,6 +123,8 @@ class Session:
                 raise RuntimeError(f"Cannot start session in state {self._state}")
 
             try:
+                # Reset cancellation event for new lifecycle
+                self._cancel_event = asyncio.Event()
                 # Start subprocess
                 self._process = await asyncio.create_subprocess_exec(
                     self._python_path,
@@ -223,6 +227,19 @@ class Session:
         Args:
             message: Message to route
         """
+        # Run passive interceptors first (single-loop invariant)
+        if self._interceptors:
+            for interceptor in list(self._interceptors):
+                try:
+                    _ = interceptor(message)
+                except Exception as e:
+                    # Interceptors must never break routing; log and continue
+                    logger.warning(
+                        "message_interceptor_error",
+                        error=str(e),
+                        interceptor=getattr(interceptor, "__name__", str(interceptor)),
+                    )
+
         # Check if message has execution_id and route to that execution's queue
         execution_id = getattr(message, "execution_id", None)
         if execution_id:
@@ -235,6 +252,24 @@ class Session:
         if "general" not in self._message_handlers:
             self._message_handlers["general"] = asyncio.Queue()
         await self._message_handlers["general"].put(message)
+
+    # --- Message interceptor API -------------------------------------------------
+    def add_message_interceptor(self, fn: Callable[[Message], Optional[bool]]) -> None:
+        """Register a passive message interceptor.
+
+        Interceptors are called for every received message on the session's event
+        loop, before routing to internal queues. They must be non-blocking and
+        must not consume messages. The return value is ignored.
+        """
+        if fn not in self._interceptors:
+            self._interceptors.append(fn)
+
+    def remove_message_interceptor(self, fn: Callable[[Message], Optional[bool]]) -> None:
+        """Unregister a previously added interceptor."""
+        try:
+            self._interceptors.remove(fn)
+        except ValueError:
+            pass
 
     async def _wait_for_message_cancellable(
         self,

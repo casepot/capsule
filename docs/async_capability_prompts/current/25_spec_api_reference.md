@@ -39,54 +39,54 @@ PyREPL3 API
 
 ### Initialization
 
-#### `initialize_resonate_local()`
+#### `initialize_resonate_local(session, resonate=None)`
 
-Initialize Resonate in local mode for development.
+Initialize Resonate in local mode and wire dependencies to a provided Session. (Ready)
 
 **Signature:**
 ```python
-def initialize_resonate_local() -> Resonate
+from typing import Optional
+from src.session.manager import Session
+
+def initialize_resonate_local(session: Session, resonate: Optional[Resonate] = None) -> Resonate
 ```
 
+**Parameters:**
+- `session` (Session): The session that owns the transport and receive loop
+- `resonate` (Optional[Resonate]): Existing instance to configure; creates `Resonate.local()` if None
+
 **Returns:**
-- `Resonate`: Configured Resonate instance
+- `Resonate`: Configured instance with durable functions and DI registered
+
+**Registers (DI):** `namespace_manager`, `protocol_bridge`, `input_capability`, `async_executor`
 
 **Example:**
 ```python
-resonate = initialize_resonate_local()
-# Zero external dependencies, uses in-memory storage
-```
+from src.session.manager import Session
+from src.integration.resonate_init import initialize_resonate_local
 
-**Exceptions:**
-- `ConfigurationError`: If initialization fails
+session = Session()
+await session.start()
+resonate = initialize_resonate_local(session)
+```
 
 ---
 
-#### `initialize_resonate_remote()`
+#### `initialize_resonate_remote(...)`
 
-Initialize Resonate in remote mode for production.
+Planned: Remote initializer is a design target, not implemented in this codebase.
 
-**Signature:**
+Reference (planned design):
 ```python
 def initialize_resonate_remote(
     host: str = "http://localhost:8001",
     api_key: Optional[str] = None,
     worker_group: str = "pyrepl3-workers",
     worker_id: Optional[str] = None
-) -> Resonate
-```
+) -> Resonate:
+    ...
 
-**Parameters:**
-- `host` (str): Resonate server URL
-- `api_key` (Optional[str]): API key for authentication
-- `worker_group` (str): Worker group name
-- `worker_id` (Optional[str]): Unique worker ID
-
-**Returns:**
-- `Resonate`: Configured Resonate instance
-
-**Example:**
-```python
+# Example (planned)
 resonate = initialize_resonate_remote(
     host="https://resonate-server.example.com",
     api_key="secret-key-123",
@@ -94,9 +94,43 @@ resonate = initialize_resonate_remote(
 )
 ```
 
-**Exceptions:**
-- `ConnectionError`: If unable to connect to server
-- `AuthenticationError`: If API key is invalid
+---
+
+### Session Manager (Ready)
+
+`Session` owns the worker subprocess and the single event loop that reads from the transport. Only the `Session` may read; all other components observe via interceptors or `execute()`.
+
+Key methods:
+- `await start()` / `await shutdown()` / `await restart()` / `await terminate()`
+- `async for msg in execute(ExecuteMessage, timeout=None)` → streams Output/Result/Error/Input
+- `await input_response(input_id: str, data: str)`
+- `add_message_interceptor(fn)` / `remove_message_interceptor(fn)`
+
+Single‑loop invariant: do not read the transport directly in tests or components.
+
+### ResonateProtocolBridge (Ready → Beta)
+
+`ResonateProtocolBridge(resonate, session)` sends protocol messages and resolves durable promises when responses are routed by session interceptors.
+
+Correlation rules:
+- Execute → Result/Error: `ExecuteMessage.id` (worker execution_id) ↔ durable id `exec:{execution_id}`
+- Input → InputResponse: `InputMessage.id` ↔ durable id `{execution_id}:input:{message.id}`
+
+The bridge never calls `receive_message`.
+
+### Durable Functions (Promise‑First) (Ready)
+
+Generator pattern for durable execute:
+```python
+promise = yield ctx.promise(id=f"exec:{execution_id}")
+exec_msg = ExecuteMessage(id=execution_id, timestamp=time.time(), code=code, capture_source=True)
+yield bridge.send_request("execute", execution_id, exec_msg, timeout=ctx.config.tla_timeout, promise_id=f"exec:{execution_id}")
+raw = yield promise  # JSON for ResultMessage/ErrorMessage
+```
+
+### Input Capability (Ready)
+
+`InputCapability(resonate, bridge).request_input(prompt, execution_id)` sends `InputMessage` via the bridge and awaits the returned promise; safely parses `{ "input": "..." }`.
 
 ---
 
@@ -353,7 +387,7 @@ resonate.promises.reject(
 
 ---
 
-## AsyncExecutor API
+## AsyncExecutor API (Skeleton / Transition)
 
 ### Core Execution
 
@@ -361,28 +395,22 @@ resonate.promises.reject(
 
 Initialize AsyncExecutor instance.
 
-**Signature:**
+**Signature (current codebase):**
 ```python
 def __init__(
-    resonate: Resonate,
     namespace_manager: NamespaceManager,
-    execution_id: str
+    transport: MessageTransport | None,
+    execution_id: str,
+    *,
+    tla_timeout: float = 30.0,
+    ast_cache_max_size: int | None = 100,
+    blocking_modules: set[str] | None = None,
+    blocking_methods_by_module: dict[str, set[str]] | None = None,
+    warn_on_blocking: bool = True,
 )
 ```
 
-**Parameters:**
-- `resonate` (Resonate): Resonate instance
-- `namespace_manager` (NamespaceManager): Namespace manager
-- `execution_id` (str): Unique execution ID
-
-**Example:**
-```python
-executor = AsyncExecutor(
-    resonate=resonate,
-    namespace_manager=namespace_mgr,
-    execution_id="exec-456"
-)
-```
+Note: Provided via a DI factory and not used in promise‑first durable flows. A full native async implementation is planned for later phases.
 
 ---
 

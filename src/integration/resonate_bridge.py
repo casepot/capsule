@@ -11,7 +11,9 @@ from typing import Any, Optional
 import json
 
 from ..protocol.messages import (
+    ErrorMessage,
     InputResponseMessage,
+    ResultMessage,
     Message,
 )
 
@@ -24,10 +26,22 @@ class ResonateProtocolBridge:
     - route_response(message)-> bool: resolves promise; False if unmatched.
     """
 
-    def __init__(self, resonate: Any, transport: Any):
+    def __init__(self, resonate: Any, session_or_sender: Any):
+        """Bridge that correlates protocol requests with durable promises.
+
+        Args:
+            resonate: Resonate instance providing promises API
+            session_or_sender: Object with `send_message(Message)` used to send
+                protocol messages (typically the Session). This preserves the
+                single-loop invariant by avoiding additional readers.
+        """
         self._resonate = resonate
-        self._transport = transport
-        # Track request-id -> promise-id for correlation
+        self._sender = session_or_sender
+        # Map correlation key -> durable promise id
+        # Keys:
+        #   - Execute: ExecuteMessage.id (equals execution_id in worker)
+        #   - Input:   InputMessage.id
+        #   - Others as extended
         self._pending: dict[str, str] = {}
 
     async def send_request(
@@ -36,6 +50,8 @@ class ResonateProtocolBridge:
         execution_id: str,
         message: Message,
         timeout: float | None = None,
+        *,
+        promise_id: Optional[str] = None,
     ) -> Any:
         """Create a durable promise and send a protocol message.
 
@@ -44,19 +60,36 @@ class ResonateProtocolBridge:
         Input/InputResponse uses input_id. The bridge should be the single source of
         truth for this mapping to keep durable correlation deterministic.
         """
-        promise_id = f"{execution_id}:{capability_id}:{message.id}"
-        # Timeout in milliseconds; default 30s
-        timeout_ms = int((timeout or 30.0) * 1000)
-        promise = self._resonate.promises.create(
-            id=promise_id,
-            timeout=timeout_ms,
-            data="{}",
-        )
-        # Record mapping to resolve later
-        self._pending[message.id] = promise_id
-        # Send message over transport
-        await self._transport.send_message(message)
-        return promise  # awaitable via SDK (promise.result())
+        created_promise = None
+        corr_key: Optional[str] = None
+
+        if capability_id == "execute":
+            # Promise should already be created by durable function via ctx.promise
+            # Use provided promise_id; correlate by ExecuteMessage.id (== execution_id in worker)
+            if not promise_id:
+                # Fallback to deterministic id if not provided
+                promise_id = f"exec:{execution_id}"
+            corr_key = getattr(message, "id", None)
+        else:
+            # Create a new durable promise for other capabilities (e.g., input)
+            pid = promise_id or f"{execution_id}:{capability_id}:{getattr(message, 'id', 'req')}"
+            timeout_ms = int((timeout or 30.0) * 1000)
+            created_promise = self._resonate.promises.create(
+                id=pid,
+                timeout=timeout_ms,
+                data="{}",
+            )
+            promise_id = pid
+            corr_key = getattr(message, "id", None)
+
+        if corr_key:
+            self._pending[str(corr_key)] = str(promise_id)
+
+        # Send message via session/sender
+        await self._sender.send_message(message)
+
+        # Return created promise if we created one (e.g., input). Execute path returns None.
+        return created_promise
 
     async def route_response(self, message: Message) -> bool:
         corr = self._extract_correlation_key(message)
@@ -94,6 +127,9 @@ class ResonateProtocolBridge:
         """
         if isinstance(message, InputResponseMessage):
             return message.input_id
-        # Unknown mapping for this vertical slice
-        # Could be extended to support Result/Error tied to ExecuteMessage
+        if isinstance(message, ResultMessage):
+            return message.execution_id
+        if isinstance(message, ErrorMessage):
+            # Error may include execution_id when tied to an execution
+            return message.execution_id or None
         return None

@@ -15,9 +15,8 @@ class InputCapability:
     Uses Resonate promises for HITL input request/response.
     """
 
-    def __init__(self, resonate: Any, transport: Any, bridge: Any):
+    def __init__(self, resonate: Any, bridge: Any):
         self._resonate = resonate
-        self._transport = transport
         self._bridge = bridge
 
     async def request_input(self, prompt: str, execution_id: str) -> str:

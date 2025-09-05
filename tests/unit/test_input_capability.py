@@ -9,7 +9,6 @@ from src.integration.capability_input import InputCapability
 async def test_input_capability_request_roundtrip():
     # Arrange
     resonate = Mock()
-    transport = AsyncMock()
     bridge = AsyncMock()
 
     # Promise mock with .result returning JSON string
@@ -19,7 +18,7 @@ async def test_input_capability_request_roundtrip():
 
     bridge.send_request.return_value = Promise()
 
-    cap = InputCapability(resonate, transport, bridge)
+    cap = InputCapability(resonate, bridge)
 
     # Act
     value = await cap.request_input("Prompt?", execution_id="E-1")
@@ -38,7 +37,6 @@ async def test_input_capability_request_roundtrip():
 @pytest.mark.asyncio
 async def test_input_capability_invalid_json_returns_empty():
     resonate = Mock()
-    transport = AsyncMock()
     bridge = AsyncMock()
 
     class Promise:
@@ -47,6 +45,6 @@ async def test_input_capability_invalid_json_returns_empty():
 
     bridge.send_request.return_value = Promise()
 
-    cap = InputCapability(resonate, transport, bridge)
+    cap = InputCapability(resonate, bridge)
     value = await cap.request_input("Prompt?", execution_id="E-2")
     assert value == ""

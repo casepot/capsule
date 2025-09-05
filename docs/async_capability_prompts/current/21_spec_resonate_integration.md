@@ -50,43 +50,22 @@ This specification defines the integration patterns, configurations, and impleme
 
 ## Initialization Patterns
 
-### Local Mode Initialization
+### Local Mode Initialization (Current Code Wiring)
 
 ```python
-from resonate_sdk import Resonate
-from typing import Optional
-import os
+from src.session.manager import Session
+from src.integration.resonate_init import initialize_resonate_local
 
-def initialize_resonate_local() -> Resonate:
-    """
-    Initialize Resonate in local mode for development.
-    Zero external dependencies - uses in-memory storage.
-    """
-    # Create local instance
-    resonate = Resonate.local(
-        # Configuration for local mode
-        config={
-            "storage": "memory",
-            "promise_timeout_default": 300,  # 5 minutes
-            "max_retries": 3,
-            "retry_backoff": "exponential",
-            "log_level": os.getenv("LOG_LEVEL", "INFO")
-        }
-    )
-    
-    # Register core functions
-    _register_durable_functions(resonate)
-    
-    # Initialize dependencies
-    _initialize_dependencies(resonate)
-    
-    # Set up promise handlers
-    _configure_promise_handlers(resonate)
-    
-    return resonate
+session = Session()
+await session.start()
+resonate = initialize_resonate_local(session)
+
+# Session is the sole transport reader; the bridge is wired via a message
+# interceptor so durable promises are resolved when Result/Error/InputResponse
+# messages arrive.
 ```
 
-### Remote Mode Initialization
+### Remote Mode Initialization (Planned)
 
 ```python
 def initialize_resonate_remote(

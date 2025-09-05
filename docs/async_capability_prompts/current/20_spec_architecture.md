@@ -195,18 +195,30 @@ Execution starts → Creates durable checkpoint
     Continues to completion
 ```
 
+## Single-Loop Invariant and Message Flow
+
+Only one event loop per session coordinates transport I/O. The Session is the sole reader of protocol messages from the worker; other components observe via a message interception hook invoked on the session’s loop before routing.
+
+- Session: owns subprocess, transport, receive loop, and routing to per‑execution/general queues.
+- Interceptors: passive callbacks registered via `add_message_interceptor(callable)`, used to forward `Result`, `Error`, and `InputResponse` to the ResonateProtocolBridge.
+- Bridge: sends protocol messages via the Session; never reads the transport. Correlates requests to durable promises.
+
+Testing guidance: do not read from the transport directly in tests—use `Session.execute(...)` or interceptors to observe messages. Direct reads create competing readers and race conditions.
+
 ## Deployment Modes
 
 ### Local Development Mode
 
 ```python
 # Zero external dependencies
-resonate = Resonate.local()
+from src.session.manager import Session
+from src.integration.resonate_init import initialize_resonate_local
 
-# Everything works except crash recovery
-# Uses in-memory storage
-# Single-process execution
-# Immediate promise resolution
+session = Session()
+await session.start()
+resonate = initialize_resonate_local(session)
+
+# Session is the single transport reader; bridge is wired via interceptors
 ```
 
 **Characteristics:**
@@ -278,6 +290,19 @@ self._namespace.update(new_namespace)
 - Built-in correlation
 - Distributed by design
 - HITL support native
+
+### 5. Single Loop Ownership & Interceptors
+**Decision:** Enforce one event loop per session; expose a message interceptor hook to preserve single ownership while enabling passive routing to the bridge.
+
+**Rationale:**
+- Prevents competing readers and nondeterministic message ordering
+- Keeps I/O centralized and observable
+- Enables promise resolution without blocking the session loop
+
+**Implementation:**
+```python
+session.add_message_interceptor(bridge.route_response)  # passive; bridge never reads
+```
 
 ## Performance Considerations
 

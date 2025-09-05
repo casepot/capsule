@@ -205,40 +205,22 @@ def execute_with_input(ctx, args):
 class InputCapability:
     """Input capability using Resonate promises for HITL."""
     
-    def __init__(self, resonate: Resonate, transport: MessageTransport):
+    def __init__(self, resonate: Resonate, bridge: Any):
         self._resonate = resonate
-        self._transport = transport
+        self._bridge = bridge
     
     async def request_input(self, prompt: str, execution_id: str) -> str:
         """Request input from user via HITL promise."""
         
-        # Create promise for this input request
-        promise_id = f"input:{execution_id}:{uuid.uuid4()}"
-        
-        # Create promise that will be resolved by UI
-        promise = self._resonate.promises.create(
-            id=promise_id,
-            timeout=int(time.time() * 1000) + 300000,  # 5 min timeout
-            data=json.dumps({
-                'prompt': prompt,
-                'waiting_for': 'user_input',
-                'execution_id': execution_id
-            })
-        )
-        
-        # Send prompt to UI
-        await self._transport.send_message(InputMessage(
-            id=promise_id,
+        # Send via protocol bridge and await durable promise
+        msg = InputMessage(
+            id=str(uuid.uuid4()),
             prompt=prompt,
             execution_id=execution_id
-        ))
-        
-        # UI will call: resonate.promises.resolve(id=promise_id, data=user_input)
-        # This can happen in a different process/machine
-        
-        # Wait for resolution
+        )
+        promise = await self._bridge.send_request("input", execution_id, msg, timeout=300.0)
         result = await promise.result()
-        return json.loads(result)['input']
+        return json.loads(result).get('input', '')
 ```
 
 ## Configuration and Initialization
@@ -247,42 +229,30 @@ class InputCapability:
 ```python
 # src/subprocess/resonate_init.py
 
-def initialize_resonate_local() -> Resonate:
+def initialize_resonate_local(session: Session, resonate: Optional[Resonate] = None) -> Resonate:
     """Initialize Resonate in local mode for development."""
     
-    resonate = Resonate.local()
+    resonate = resonate or Resonate.local()
     
     # Register all durable functions
     register_executor_functions(resonate)
-    register_capability_functions(resonate)
     
-    # Set up dependencies
-    initialize_capabilities(resonate, transport)
+    # Set up dependencies (bridge uses session; session is single reader)
+    bridge = ResonateProtocolBridge(resonate, session)
+    resonate.set_dependency("protocol_bridge", bridge)
+    resonate.set_dependency("input_capability", lambda: InputCapability(resonate, bridge))
     
     return resonate
 ```
 
-### Production Setup (Remote)
+### Production Setup (Remote — Planned)
 ```python
 def initialize_resonate_remote(
     host: str = "http://localhost:8001",
     worker_group: str = "pyrepl3-workers"
 ) -> Resonate:
-    """Initialize Resonate in remote mode for production."""
-    
-    resonate = Resonate.remote(
-        host=host,
-        group=worker_group,
-        # Use poller for receiving tasks
-        transport="poll"  
-    )
-    
-    # Same registration as local
-    register_executor_functions(resonate)
-    register_capability_functions(resonate)
-    initialize_capabilities(resonate, transport)
-    
-    return resonate
+    """Planned: remote initializer; not implemented in this codebase."""
+    ...
 ```
 
 ## Migration Path
