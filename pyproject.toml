@@ -46,34 +46,48 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_any_unimported = true
+disallow_any_generics = true
+disallow_subclassing_any = true
 no_implicit_optional = true
+no_implicit_reexport = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 check_untyped_defs = true
+warn_unreachable = true
+strict_equality = true
+show_error_codes = true
+pretty = true
 plugins = ["pydantic.mypy"]
+mypy_path = ["typings"]
+
+[tool.pydantic-mypy]
+warn_untyped_fields = true
 
 [[tool.mypy.overrides]]
 module = ["msgpack", "dill"]
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = ["resonate", "resonate.*"]
-ignore_missing_imports = true
-follow_imports = "skip"
+# Local stubs for resonate are provided under typings/
 
 [tool.basedpyright]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
-reportMissingTypeStubs = false
-reportUnknownMemberType = false
-reportUnknownArgumentType = false
-reportUnknownVariableType = false
-reportUnknownLambdaType = false
-reportUnknownParameterType = false
-reportMissingParameterType = false
+extraPaths = ["typings"]
+useLibraryCodeForTypes = true
+strictListInference = true
+strictDictionaryInference = true
+strictSetInference = true
+reportMissingTypeStubs = "warning"
+reportUnknownMemberType = "warning"
+reportUnknownArgumentType = "warning"
+reportUnknownVariableType = "warning"
+reportUnknownLambdaType = "warning"
+reportUnknownParameterType = "warning"
+reportMissingParameterType = "warning"
+reportUntypedFunctionDecorator = "warning"
 
 [tool.ruff]
 target-version = "py311"

@@ -118,10 +118,11 @@ class SessionPool:
                 pass
 
         # Shutdown all sessions
-        tasks = []
+        tasks: list[asyncio.Task[None]] = []
         for session in self._all_sessions.values():
             if session is not None:  # Skip placeholders
-                tasks.append(asyncio.create_task(session.shutdown("Pool shutdown")))
+                t: asyncio.Task[None] = asyncio.create_task(session.shutdown("Pool shutdown"))
+                tasks.append(t)
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -412,7 +413,7 @@ class SessionPool:
 
     async def ensure_min_sessions(self) -> None:
         """Ensure minimum number of idle sessions are available."""
-        tasks = []
+        tasks: list[asyncio.Task[None]] = []
 
         async with self._lock:
             current_idle = self._idle_sessions.qsize()
@@ -440,7 +441,7 @@ class SessionPool:
 
         # Wait for all sessions to be created
         if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results: list[object] = await asyncio.gather(*tasks, return_exceptions=True)
 
             created = 0
             for result in results:
@@ -507,12 +508,14 @@ class SessionPool:
                         current_idle=current_idle,
                     )
 
-                    tasks = []
+                    tasks: list[asyncio.Task[None]] = []
                     for _ in range(needed):
                         task = asyncio.create_task(self._create_and_add_session())
                         tasks.append(task)
 
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    results: list[object] = await asyncio.gather(
+                        *tasks, return_exceptions=True
+                    )
 
                     created = 0
                     for result in results:
@@ -573,7 +576,7 @@ class SessionPool:
         self._metrics.health_check_runs += 1
 
         # Check idle sessions
-        idle_sessions = []
+        idle_sessions: list[Session] = []
 
         # Drain queue to check all sessions
         while not self._idle_sessions.empty():

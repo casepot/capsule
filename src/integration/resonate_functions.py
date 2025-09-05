@@ -7,7 +7,8 @@ AsyncExecutor via DI factory. The function follows generator-style
 durable function semantics expected by the Resonate SDK.
 """
 
-from typing import Any, Callable
+from typing import Any, Callable, Generator
+from .types import DurableResult
 
 
 def register_executor_functions(resonate: Any) -> Any:
@@ -18,7 +19,7 @@ def register_executor_functions(resonate: Any) -> Any:
     """
 
     @resonate.register(name="durable_execute", version=1)  # type: ignore[misc]
-    def durable_execute(ctx: Any, args: dict[str, Any]) -> Any:
+    def durable_execute(ctx: Any, args: dict[str, Any]) -> Generator[Any, Any, DurableResult]:
         """
         Executes code durably via AsyncExecutor. Uses DI:
           - async_executor: created via factory (singleton=False)
@@ -86,7 +87,7 @@ def register_executor_functions(resonate: Any) -> Any:
                     asyncio.set_event_loop(None)
                     loop.close()
 
-            result = yield ctx.lfc(_run_executor_sync, {"code": code})
+            result: Any = yield ctx.lfc(_run_executor_sync, {"code": code})
         except Exception as e:  # pragma: no cover - error path validated via notes
             # Add diagnostic context where supported
             if hasattr(e, "add_note"):

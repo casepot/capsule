@@ -32,7 +32,7 @@ class Checkpoint:
             Compressed checkpoint data
         """
         # Create checkpoint dictionary
-        checkpoint_dict = {
+        checkpoint_dict: Dict[str, Any] = {
             "version": "1.0",
             "namespace": self._serialize_namespace(),
             "function_sources": self.function_sources,
@@ -63,7 +63,8 @@ class Checkpoint:
         decompressed = gzip.decompress(data)
 
         # Deserialize
-        checkpoint_dict = dill.loads(decompressed)
+        from typing import cast
+        checkpoint_dict = cast(Dict[str, Any], dill.loads(decompressed))
 
         # Validate version
         version = checkpoint_dict.get("version")
@@ -85,7 +86,7 @@ class Checkpoint:
         Returns:
             Serialized namespace
         """
-        serialized = {}
+        serialized: Dict[str, Any] = {}
 
         for key, value in self.namespace.items():
             # Skip built-in attributes
@@ -120,7 +121,7 @@ class Checkpoint:
         Returns:
             Restored namespace
         """
-        namespace = {}
+        namespace: Dict[str, Any] = {}
 
         for key, item in serialized.items():
             if item["type"] == "value":
@@ -367,7 +368,7 @@ class CheckpointManager:
         Returns:
             Validation results
         """
-        issues = []
+        issues: list[str] = []
 
         # Check for missing imports
         for import_stmt in checkpoint.imports:

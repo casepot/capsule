@@ -87,7 +87,7 @@ class NamespaceManager:
         if not updates:
             return {}
 
-        changes = {}
+        changes: Dict[str, Any] = {}
 
         for key, value in updates.items():
             # Skip protected keys unless from engine context
@@ -181,7 +181,7 @@ class NamespaceManager:
         try:
             # Deep copy the namespace
             # Note: Some objects may not be deep-copyable
-            snapshot = {}
+            snapshot: Dict[str, Any] = {}
 
             for key, value in self._namespace.items():
                 try:
@@ -432,7 +432,7 @@ class NamespaceManager:
         Preserves engine internals while clearing user-defined content.
         """
         # Save engine internals before clearing
-        saved_internals = {}
+        saved_internals: Dict[str, Any] = {}
         for key in ENGINE_INTERNALS:
             if key in self._namespace:
                 saved_internals[key] = self._namespace[key]
@@ -486,7 +486,7 @@ class NamespaceManager:
         """
         import json
 
-        serializable = {}
+        serializable: Dict[str, Any] = {}
 
         for key, value in self._namespace.items():
             # Skip special attributes

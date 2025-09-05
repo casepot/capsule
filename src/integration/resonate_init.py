@@ -45,15 +45,16 @@ def initialize_resonate_local(transport: Any, resonate: Optional[Any] = None) ->
     resonate.set_dependency("protocol_bridge", bridge)
 
     # Async executor factory (new instance per execution).
-    resonate.set_dependency(
-        "async_executor",
-        lambda ctx: async_executor_factory(
+    def _exec_factory(ctx: Any) -> Any:
+        timeout = getattr(getattr(ctx, "config", None), "tla_timeout", None)
+        return async_executor_factory(
             ctx=ctx,
             namespace_manager=namespace_manager,
             transport=transport,
-            tla_timeout=getattr(getattr(ctx, "config", None), "tla_timeout", None),
-        ),
-    )
+            tla_timeout=timeout,
+        )
+
+    resonate.set_dependency("async_executor", _exec_factory)
 
     # HITL input capability
     resonate.set_dependency(

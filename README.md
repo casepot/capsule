@@ -140,6 +140,9 @@ pytest
 mypy src/
 basedpyright src/
 
+# Typing strategy and decisions
+# See docs/TYPING.md for details on strict settings, local stubs, and conventions
+
 # Format
 black src/
 ruff format src/
