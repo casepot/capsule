@@ -14,7 +14,10 @@
     },
     "gemini": {
       "enabled": true,
-      "model": "gemini-2.5-pro"
+      "model": "gemini-2.5-pro",
+      "flags": {
+        "yolo": true
+      }
     }
   },
   
