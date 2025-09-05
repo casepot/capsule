@@ -699,6 +699,57 @@ The foundation fixes are **essential** before implementing the full specs. We're
 
 The key is to **fix the basics first**, then **build the bridge**, and finally **implement the vision**.
 
+## PR #11 Triage (Immediate vs Phase 1)
+
+Context: Reviews for PR #11 (branch: `fix/foundation-phase1-resonate-wrapper`) surfaced one high‑severity correctness bug in `AsyncExecutor` plus a few medium/low items. Below is the disposition and how it maps to work now vs Phase 1.
+
+### Fix Now (Day 5 scope)
+- Correct globals binding for top‑level await (direct path): Use the live session namespace dict for `globals` when executing compiled code so any functions created bind their `__globals__` to the real, persistent mapping. Keep a separate `local_ns` to capture top‑level assignments for merge‑only updates.
+  - Code: `src/subprocess/async_executor.py` (replaced `self.namespace.namespace.copy()` with the live mapping and added explanatory comments)
+  - Rationale: Prevents functions from capturing a stale globals mapping and ensures `global` assignments persist across executions.
+- Correct globals binding for AST fallback path: Execute the transformed module with the real session namespace as `globals` so `__async_exec__` binds to the live mapping. Continue merging `locals()` back into the namespace.
+  - Code: `src/subprocess/async_executor.py` (same correction as above; added comments)
+  - Rationale: Aligns both paths with the merge‑only policy and prevents divergence between function `__globals__` and the session namespace.
+- Remove redundant `weakref` import inside method: Use the module‑level import to avoid redeclaration.
+  - Code: `src/subprocess/async_executor.py` (`_track_coroutine`)
+  - Rationale: Minor cleanliness; avoids confusion flagged in review.
+
+Notes
+- Tests: Add targeted tests in Phase 1 to validate that functions defined under both paths retain `__globals__` pointing at the live mapping and that subsequent executions see updated globals. Current suite lacks this coverage (as reviews noted).
+- Spec alignment: Changes are consistent with `24_spec_namespace_management.md` (merge‑only policy) and the PyCF top‑level await behavior noted in the PDF and `22_spec_async_execution.md`.
+
+### Phase 1 (Plan and implement)
+- Dependency Injection factory pattern: Replace error‑prone “get + initialize()” with a factory that yields fully initialized instances per execution context.
+  - Docs: Update `docs/async_capability_prompts/current/21_spec_resonate_integration.md` to show factory registration and access. Ensure AsyncExecutor, NamespaceManager, and transport instances have clear lifecycles.
+  - Code: Introduce DI hooks around the Resonate wrapper; remove any implicit singleton assumptions.
+- Resonate wrapper + promise adapter: Implement the wrapper pattern where Resonate drives durability while AsyncExecutor handles async/await natively. Provide an awaitable adapter over Resonate promises.
+  - Docs: `00_foundation_resonate.md`, `22_spec_async_execution.md`
+  - Code: Wrapper function(s) and `AwaitableResonatePromise` abstraction per spec.
+- Execution mode routing hardening: Finish routing logic and expand blocking‑I/O detection (attribute chains like `time.sleep`, `requests.get`, `socket.recv`). Add tests first to constrain false positives.
+  - Docs: `22_spec_async_execution.md`
+  - Code: Extend AST analysis to resolve `ast.Attribute` and imported name aliases.
+- Top‑level await AST fallback correctness:
+  - Add pre‑exec globals snapshot and apply post‑exec global diffs AFTER locals merge so global writes take precedence (fixes cases like `global g; g=...` being overwritten by wrapper locals).
+  - Adjust AST transform to preserve module‑level semantics for assigned names (emit `ast.Global` where safe) to avoid closure capture of names like `g` inside functions defined in the wrapper.
+  - Tests: New xfails in `tests/unit/test_async_executor_namespace_binding.py` capture these gaps; flip to passing once implemented.
+- Test/CI hygiene:
+  - Relax/mark flaky perf assertion in `tests/unit/test_top_level_await.py` (threshold <100ms). Prefer monotonic timers and a higher ceiling or mark as flaky for CI.
+  - Ensure CI runs unit tests on PRs (e.g., `pytest -m unit`).
+- Config hygiene: Remove or document `.reviewrc.json` “yolo” flag; default to safe behavior and document any local‑only toggles.
+- Compatibility note (AST args): The `ast.arguments` constructor differences for Python <3.8 were flagged in review. Our target is Python 3.11+; add an explicit note in code and docs. If we choose to support older versions later, add version‑guarded construction in Phase 1.
+
+### TODOs added in code
+- `src/subprocess/async_executor.py`:
+  - Marked the blocking‑I/O detection broadening as a Phase 1 TODO.
+  - Added comments around live‑globals usage to prevent regressions.
+  - Left a note near AST usage to revisit cross‑version `ast.arguments` construction only if supporting <3.8.
+  - Added TODOs for pre‑exec globals snapshot diff and fallback merge ordering; noted closure capture with plan to hoist via `ast.Global` where safe.
+
+### Acceptance criteria updates
+- Immediate: Both top‑level await execution paths bind function `__globals__` to the live namespace mapping; namespace updates continue to use merge‑only policy; no namespace replacement anywhere.
+- Phase 1: DI refactor to factory pattern, Resonate wrapper + awaitable promises, expanded routing/detection, improved test/CI hygiene, and config cleanup.
+  - AST fallback: Global diffs applied after locals, no closure capture of would‑be globals for functions defined in fallback; new tests pass without xfail.
+
 ## Deferred Refinements (Phase 1 Planning)
 
 - Output drain-timeout suppression policy: Keep current suppression in tests, but in Phase 1 define a configurable policy (flag/env), warn once per execution, and track a small metric so production regressions are visible without destabilizing tests.

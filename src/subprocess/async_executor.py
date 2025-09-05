@@ -419,9 +419,12 @@ class AsyncExecutor:
             # Compile with top-level await support
             compiled = compile(code, '<async_session>', 'exec', flags=flags)
             
-            # Create execution namespace
+            # Create execution namespaces
+            # IMPORTANT: Use the real session namespace as globals so that
+            # any functions defined bind their __globals__ to the live mapping.
+            # Keep a separate locals dict to capture assignments for merge-only updates.
             local_ns = {}
-            global_ns = self.namespace.namespace.copy()
+            global_ns = self.namespace.namespace  # use live namespace (no copy)
             
             # Ensure asyncio is available
             if 'asyncio' not in global_ns:
@@ -444,7 +447,7 @@ class AsyncExecutor:
                 result = coro_or_result
                 
             # Update namespace with changes (merge, don't replace!)
-            # This captures any variables assigned during execution
+            # This captures any variables assigned during execution (locals).
             if local_ns:
                 changes = self.namespace.update_namespace(
                     local_ns,
@@ -522,6 +525,8 @@ class AsyncExecutor:
         
         # Create async wrapper function at AST level
         # This directly follows spec lines 385-399
+        # TODO(Phase 1): If supporting Python <3.8, adjust ast.arguments
+        # construction (posonlyargs not present). Current target is 3.11+.
         async_wrapper = ast.AsyncFunctionDef(
             name='__async_exec__',
             args=ast.arguments(
@@ -551,8 +556,15 @@ class AsyncExecutor:
         compiled = compile(new_module, '<async_transform>', 'exec')
         
         # Execute to define the async function
+        # IMPORTANT: Use the live session namespace as globals so the created
+        # function's __globals__ points at the real mapping (no stale copies).
         local_ns = {}
-        global_ns = self.namespace.namespace.copy()
+        global_ns = self.namespace.namespace  # use live namespace (no copy)
+        # TODO(Phase 1): Capture a shallow snapshot of the globals BEFORE exec
+        # (e.g., pre_globals = dict(self.namespace.namespace)) so we can diff
+        # global writes after execution even though we're using the live mapping
+        # here. Without a snapshot, comparing global_ns to self.namespace.namespace
+        # will not detect changes since they are the same object.
         
         # Ensure asyncio is available
         if 'asyncio' not in global_ns:
@@ -595,6 +607,14 @@ class AsyncExecutor:
                     updates[key] = value
                 
                 # Update namespace with local variables
+                # NOTE: In AST fallback, names assigned at the top level become
+                # locals of the wrapper function (not true globals). If the code
+                # also performs global assignments via helper functions, the
+                # locals snapshot may overwrite global updates. Phase 1 will:
+                #  - Apply a globals diff (from pre-snapshot) AFTER this locals
+                #    merge to ensure global writes take precedence.
+                #  - Potentially hoist top-level assignments via ast.Global to
+                #    preserve module-level semantics and avoid closure capture.
                 if updates:
                     changes = self.namespace.update_namespace(
                         updates,
@@ -628,6 +648,9 @@ class AsyncExecutor:
                 continue
             
             # Check if this is new or changed
+            # NOTE: Since global_ns IS self.namespace.namespace here, diffing
+            # against the same mapping won't detect changes. Phase 1 will use
+            # a pre-exec snapshot to compute this diff properly.
             if key not in self.namespace.namespace:
                 updates[key] = value
             elif self.namespace.namespace.get(key) != value:
@@ -667,7 +690,6 @@ class AsyncExecutor:
         Args:
             coro: Coroutine to track
         """
-        import weakref
         # Use weak reference to avoid keeping coroutine alive
         self._pending_coroutines.add(weakref.ref(coro))
         logger.debug(

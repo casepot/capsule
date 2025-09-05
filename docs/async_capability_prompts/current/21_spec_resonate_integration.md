@@ -10,6 +10,8 @@
 
 This specification defines the integration patterns, configurations, and implementation details for incorporating Resonate SDK as the foundational durability and orchestration layer in PyREPL3. Resonate provides automatic recovery, distributed execution, promise-based communication, and dependency injection while maintaining zero-dependency operation for local development.
 
+> NOTE (Phase 1 action): The current dependency access example uses a “get + initialize()” pattern for `AsyncExecutor`. We will replace this with a factory pattern that returns fully initialized instances per execution to avoid temporal coupling and runtime errors. See FOUNDATION_FIX_PLAN.md “PR #11 Triage” for details.
+
 ## Integration Architecture
 
 ### Core Integration Points
