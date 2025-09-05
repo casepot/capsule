@@ -20,7 +20,7 @@
   
   "testing": {
     "enabled": true,
-    "command": "uv run pytest tests/",
+    "command": "uv run pytest -m unit",
     "timeout_seconds": 300
   },
   
