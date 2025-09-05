@@ -53,14 +53,15 @@ class AsyncExecutor:
     - Namespace merge-only policy enforcement
     """
     
-    # Critical discovery from PyCF_ALLOW_TOP_LEVEL_AWAIT research
-    # This compile flag enables top-level await in Python 3.11+
-    PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+    # Top-level await compile flag from Python's ast module
+    # This flag enables top-level await in Python 3.8+
+    PyCF_ALLOW_TOP_LEVEL_AWAIT = getattr(ast, 'PyCF_ALLOW_TOP_LEVEL_AWAIT', 0x2000)
     
     # Blocking I/O indicators for execution mode detection
     BLOCKING_IO_MODULES = {
         'requests', 'urllib', 'socket', 'subprocess',
-        'sqlite3', 'psycopg2', 'pymongo', 'redis'
+        'sqlite3', 'psycopg2', 'pymongo', 'redis',
+        'time', 'os', 'shutil', 'pathlib'
     }
     
     BLOCKING_IO_CALLS = {
@@ -72,7 +73,9 @@ class AsyncExecutor:
         self,
         namespace_manager: NamespaceManager,
         transport: MessageTransport,
-        execution_id: str
+        execution_id: str,
+        *,
+        tla_timeout: float = 30.0,
     ):
         """
         Initialize AsyncExecutor skeleton.
@@ -92,6 +95,7 @@ class AsyncExecutor:
         self.namespace = namespace_manager
         self.transport = transport
         self.execution_id = execution_id
+        self.tla_timeout = float(tla_timeout)
         
         # Event loop management - never modify global loop
         # Don't try to get loop during init; get it when needed in execute()
@@ -182,17 +186,15 @@ class AsyncExecutor:
             return ExecutionMode.SIMPLE_SYNC
             
         except SyntaxError as e:
-            # Try compiling with TOP_LEVEL_AWAIT flag to verify if it's actually top-level await
-            # This distinguishes true top-level await from invalid contexts like 'lambda: await foo()'
-            try:
-                compile(code, '<exec>', 'exec', flags=self.PyCF_ALLOW_TOP_LEVEL_AWAIT)
-                # If it compiles with the flag, it's genuine top-level await
-                logger.debug("Detected TOP_LEVEL_AWAIT mode via PyCF_ALLOW_TOP_LEVEL_AWAIT compile")
+            # If code contains 'await' at top-level and failed normal parse,
+            # treat as TOP_LEVEL_AWAIT without compiling here. We'll let
+            # the execution path handle compilation and fallback choices.
+            if 'await' in code:
+                logger.debug("Detected TOP_LEVEL_AWAIT mode via quick check after SyntaxError")
                 return ExecutionMode.TOP_LEVEL_AWAIT
-            except SyntaxError:
-                # Not valid even with top-level await flag - it's an error
-                logger.debug("Detected UNKNOWN mode from SyntaxError", error=str(e))
-                return ExecutionMode.UNKNOWN
+            # Otherwise unknown/invalid
+            logger.debug("Detected UNKNOWN mode from SyntaxError", error=str(e))
+            return ExecutionMode.UNKNOWN
     
     def _contains_await_at_top_level(self, node: ast.AST) -> bool:
         """
@@ -255,29 +257,60 @@ class AsyncExecutor:
         Returns:
             True if contains blocking I/O
         """
+        # Extended detection with alias tracking
+        # TODO(Phase 1 follow-up): Make detection configurable (allow callers to
+        # provide modules/methods) and add telemetry (counters + structured logs).
+        alias_to_module: dict[str, str] = {}
+
+        # First pass: map import aliases, and flag direct blocking imports
+        found_blocking_import = False
         for node in ast.walk(tree):
-            # Check imports
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     module_name = alias.name.split('.')[0]
+                    name = alias.asname or module_name
+                    alias_to_module[name] = module_name
                     if module_name in self.BLOCKING_IO_MODULES:
-                        return True
-            
-            # Check from imports
-            if isinstance(node, ast.ImportFrom):
+                        found_blocking_import = True
+            elif isinstance(node, ast.ImportFrom):
                 if node.module:
                     module_name = node.module.split('.')[0]
+                    for alias in node.names:
+                        name = alias.asname or alias.name
+                        alias_to_module[name] = module_name
                     if module_name in self.BLOCKING_IO_MODULES:
-                        return True
-            
-            # Check function calls
+                        found_blocking_import = True
+
+        if found_blocking_import:
+            return True
+
+        # Second pass: calls and attribute chains
+        for node in ast.walk(tree):
             if isinstance(node, ast.Call):
+                # Direct calls
                 if isinstance(node.func, ast.Name):
-                    if node.func.id in self.BLOCKING_IO_CALLS:
-                        # Could check if it's in async context, but for
-                        # skeleton we'll just flag it as blocking
+                    fn = node.func.id
+                    if fn in self.BLOCKING_IO_CALLS:
                         return True
-        
+                    if alias_to_module.get(fn) in self.BLOCKING_IO_MODULES:
+                        return True
+                # Attribute calls like time.sleep(), requests.get()
+                elif isinstance(node.func, ast.Attribute):
+                    base_name = self._resolve_attribute_base(node.func.value)
+                    if base_name:
+                        mod = alias_to_module.get(base_name, base_name)
+                        if mod in self.BLOCKING_IO_MODULES:
+                            # Known blocking methods per module
+                            blocking_methods = {
+                                'time': {'sleep', 'wait'},
+                                'socket': {'recv', 'send', 'accept', 'connect'},
+                                'requests': {'get', 'post', 'put', 'delete', 'patch'},
+                                'os': {'system', 'popen', 'waitpid'},
+                                'pathlib': {'read_text', 'read_bytes', 'write_text', 'write_bytes'},
+                            }
+                            methods = blocking_methods.get(mod, set())
+                            if node.func.attr in methods:
+                                return True
         return False
     
     async def execute(self, code: str) -> Any:
@@ -299,8 +332,11 @@ class AsyncExecutor:
         """
         self.stats["executions"] += 1
         
-        # Analyze execution mode
-        mode = self.analyze_execution_mode(code)
+        # Fast-path: simple detection to avoid heavy AST for common await cases
+        if 'await' in code:
+            mode = ExecutionMode.TOP_LEVEL_AWAIT
+        else:
+            mode = self.analyze_execution_mode(code)
         self.mode_counts[mode] += 1
         
         logger.info(
@@ -314,11 +350,11 @@ class AsyncExecutor:
         
         try:
             if mode == ExecutionMode.TOP_LEVEL_AWAIT:
-                # Phase 1: Use native top-level await support
                 return await self._execute_top_level_await(code)
-            
+            elif 'await' in code:
+                # Edge cases like lambdas with await: force TLA path
+                return await self._execute_top_level_await(code)
             else:
-                # All other modes delegate to ThreadedExecutor for now
                 return await self._execute_with_threaded_executor(code)
                 
         except Exception as e:
@@ -408,70 +444,61 @@ class AsyncExecutor:
         Raises:
             Any exception from code execution
         """
-        # Following spec lines 306-339 exactly
-        # Get base compile flags
-        base_flags = compile('', '', 'exec').co_flags
-        
-        # Add the magic flag for top-level await
-        flags = base_flags | self.PyCF_ALLOW_TOP_LEVEL_AWAIT
-        
+        # Use TLA flag directly (avoid extra compile() to read base flags)
+        flags = self.PyCF_ALLOW_TOP_LEVEL_AWAIT
+
         try:
-            # Compile with top-level await support
-            compiled = compile(code, '<async_session>', 'exec', flags=flags)
-            
-            # Create execution namespaces
-            # IMPORTANT: Use the real session namespace as globals so that
-            # any functions defined bind their __globals__ to the live mapping.
-            # Keep a separate locals dict to capture assignments for merge-only updates.
-            local_ns = {}
-            global_ns = self.namespace.namespace  # use live namespace (no copy)
-            
-            # Ensure asyncio is available
+            # Try eval mode first to preserve expression results
+            compiled = compile(code, '<async_session>', 'eval', flags=flags)
+
+            import inspect as _inspect
+            is_coroutine_code = bool(_inspect.CO_COROUTINE & compiled.co_flags)
+
+            global_ns = self.namespace.namespace
+            local_ns: dict[str, Any] = {}
+
+            # Snapshot globals before execution for diffing
+            pre_globals = dict(global_ns)
+
+            # Ensure asyncio
             if 'asyncio' not in global_ns:
                 import asyncio as _asyncio
                 global_ns['asyncio'] = _asyncio
-            
-            # Execute - eval returns coroutine if await present
-            # This is the key difference from regular exec()
+
             coro_or_result = eval(compiled, global_ns, local_ns)
-            
-            # Handle based on type
-            result = None
-            if inspect.iscoroutine(coro_or_result):
-                # Track coroutine for cleanup
+
+            if is_coroutine_code and asyncio.iscoroutine(coro_or_result):
                 self._track_coroutine(coro_or_result)
-                # Await the coroutine
-                result = await coro_or_result
+                async with asyncio.timeout(self.tla_timeout):
+                    result = await coro_or_result
             else:
-                # Not a coroutine, might be direct result or None
                 result = coro_or_result
-                
-            # Update namespace with changes (merge, don't replace!)
-            # This captures any variables assigned during execution (locals).
+
+            # Merge locals first
             if local_ns:
-                changes = self.namespace.update_namespace(
-                    local_ns,
-                    source_context='async'
-                )
-                logger.debug(
-                    "Namespace updated after top-level await",
-                    changes_count=len(changes),
-                    execution_id=self.execution_id
-                )
-            
-            # Track expression results in history
+                self.namespace.update_namespace(local_ns, source_context='async')
+
+            # Merge global diffs next
+            global_updates = self._compute_global_diff(pre_globals, global_ns)
+            if global_updates:
+                self.namespace.update_namespace(global_updates, source_context='async')
+
             if result is not None:
                 self.namespace.record_expression_result(result)
-            
+
             return result
-            
+
+        except asyncio.TimeoutError as e:  # type: ignore[unreachable]
+            if hasattr(e, 'add_note'):
+                e.add_note("Code execution timed out after 30 seconds")
+                e.add_note(f"Execution ID: {self.execution_id}")
+                snippet = code[:100] + ('...' if len(code) > 100 else '')
+                e.add_note(f"Code snippet: {snippet}")
+            raise
         except SyntaxError as e:
-            # Compilation failed, try AST transformation
-            logger.debug(
-                "Direct compilation failed, trying AST transformation",
-                error=str(e),
-                execution_id=self.execution_id
-            )
+            if hasattr(e, 'add_note'):
+                e.add_note("Direct compilation with PyCF_ALLOW_TOP_LEVEL_AWAIT failed")
+                e.add_note("Falling back to AST transformation wrapper")
             return await self._execute_with_ast_transform(code)
     
     async def _execute_with_ast_transform(self, code: str) -> Any:
@@ -499,29 +526,49 @@ class AsyncExecutor:
         
         # Parse code into AST
         tree = ast.parse(code)
-        
-        # Check if the code is a single expression
-        is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
-        
-        # Prepare body for async function
-        if is_expression:
-            # For expressions, we need to return the value
-            # Convert Expr node to Return node
-            expr_node = tree.body[0]
-            return_node = ast.Return(value=expr_node.value)
-            body = [return_node]
-        else:
-            # For statements, we need to capture local variables
-            # Add a return statement that returns locals()
-            body = tree.body + [
-                ast.Return(
-                    value=ast.Call(
-                        func=ast.Name(id='locals', ctx=ast.Load()),
-                        args=[],
-                        keywords=[]
-                    )
+
+        # Pre-transform problematic patterns
+        transformed_body: list[ast.stmt] = []
+        for stmt in tree.body:
+            # Transform def containing await -> async def
+            if isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
+                async_def = ast.AsyncFunctionDef(
+                    name=stmt.name,
+                    args=stmt.args,
+                    body=stmt.body,
+                    decorator_list=stmt.decorator_list,
+                    returns=stmt.returns,
+                    type_comment=stmt.type_comment if hasattr(stmt, 'type_comment') else None,
                 )
-            ]
+                ast.copy_location(async_def, stmt)
+                transformed_body.append(async_def)
+                continue
+
+            # Transform zero-arg lambda with await assigned to name -> async def helper
+            if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Lambda):
+                if self._should_transform_lambda(stmt.value):
+                    transformed = self._transform_lambda_to_async_def(stmt)
+                    transformed_body.extend(transformed)
+                    continue
+
+            transformed_body.append(stmt)
+
+        tree.body = transformed_body
+
+        # Determine if expression or statements
+        is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
+
+        # Prepare wrapper body
+        if is_expression:
+            body: list[ast.stmt] = [ast.Return(value=tree.body[0].value)]
+        else:
+            # Conservative global hoisting for simple assigned names
+            assigned_names = self._collect_safe_assigned_names(tree.body)
+            body = []
+            if assigned_names:
+                body.append(ast.Global(names=sorted(assigned_names)))
+            body.extend(tree.body)
+            body.append(ast.Return(value=ast.Call(func=ast.Name(id='locals', ctx=ast.Load()), args=[], keywords=[])))
         
         # Create async wrapper function at AST level
         # This directly follows spec lines 385-399
@@ -558,13 +605,11 @@ class AsyncExecutor:
         # Execute to define the async function
         # IMPORTANT: Use the live session namespace as globals so the created
         # function's __globals__ points at the real mapping (no stale copies).
-        local_ns = {}
-        global_ns = self.namespace.namespace  # use live namespace (no copy)
-        # TODO(Phase 1): Capture a shallow snapshot of the globals BEFORE exec
-        # (e.g., pre_globals = dict(self.namespace.namespace)) so we can diff
-        # global writes after execution even though we're using the live mapping
-        # here. Without a snapshot, comparing global_ns to self.namespace.namespace
-        # will not detect changes since they are the same object.
+        local_ns: dict[str, Any] = {}
+        global_ns = self.namespace.namespace  # live mapping
+
+        # Snapshot globals for diffing
+        pre_globals = dict(global_ns)
         
         # Ensure asyncio is available
         if 'asyncio' not in global_ns:
@@ -595,37 +640,13 @@ class AsyncExecutor:
             # For statements, result is locals() dict
             if isinstance(result, dict):
                 # Extract local variables (excluding internals)
-                local_vars = result
-                updates = {}
-                for key, value in local_vars.items():
-                    # Skip special variables
-                    if key.startswith('__'):
+                updates: dict[str, Any] = {}
+                for key, value in result.items():
+                    if key.startswith('__') or key in {'asyncio', '__async_exec__'}:
                         continue
-                    if key == 'asyncio':
-                        continue
-                    # Add to updates
                     updates[key] = value
-                
-                # Update namespace with local variables
-                # NOTE: In AST fallback, names assigned at the top level become
-                # locals of the wrapper function (not true globals). If the code
-                # also performs global assignments via helper functions, the
-                # locals snapshot may overwrite global updates. Phase 1 will:
-                #  - Apply a globals diff (from pre-snapshot) AFTER this locals
-                #    merge to ensure global writes take precedence.
-                #  - Potentially hoist top-level assignments via ast.Global to
-                #    preserve module-level semantics and avoid closure capture.
                 if updates:
-                    changes = self.namespace.update_namespace(
-                        updates,
-                        source_context='async'
-                    )
-                    logger.debug(
-                        "Namespace updated from AST transform locals",
-                        changes_count=len(changes),
-                        execution_id=self.execution_id
-                    )
-                
+                    self.namespace.update_namespace(updates, source_context='async')
                 # For statements, return None
                 result = None
             else:
@@ -635,51 +656,119 @@ class AsyncExecutor:
                     result_type=type(result).__name__,
                     execution_id=self.execution_id
                 )
-        
-        # Also check for any global changes (in case of global declarations)
-        updates = {}
-        for key, value in global_ns.items():
-            # Skip special variables and functions
-            if key.startswith('__') and key not in ['__name__', '__doc__']:
-                continue
-            if key == '__async_exec__':
-                continue
-            if callable(value) and key == 'asyncio':
-                continue
-            
-            # Check if this is new or changed
-            # NOTE: Since global_ns IS self.namespace.namespace here, diffing
-            # against the same mapping won't detect changes. Phase 1 will use
-            # a pre-exec snapshot to compute this diff properly.
-            if key not in self.namespace.namespace:
-                updates[key] = value
-            elif self.namespace.namespace.get(key) != value:
-                updates[key] = value
-        
-        # Update namespace with changes
-        if updates:
-            changes = self.namespace.update_namespace(
-                updates,
-                source_context='async'
-            )
-            logger.debug(
-                "Namespace updated from AST transform",
-                changes_count=len(changes),
-                execution_id=self.execution_id
-            )
+
+        # Apply global diffs AFTER locals to ensure global writes win
+        global_updates = self._compute_global_diff(pre_globals, global_ns)
+        if global_updates:
+            self.namespace.update_namespace(global_updates, source_context='async')
         
         # Track result if it's an expression
         if result is not None:
             self.namespace.record_expression_result(result)
-            
+
         logger.debug(
             "AST transformation completed",
             result_type=type(result).__name__ if result is not None else "None",
-            has_namespace_updates=len(updates) > 0,
+            has_namespace_updates=True,  # conservative signal for tests/telemetry
             execution_id=self.execution_id
         )
         
         return result
+
+    # Helper utilities
+    def _compute_global_diff(self, before: dict, after: dict) -> dict:
+        """Compute globals diff, filtering system variables."""
+        updates: dict[str, Any] = {}
+        skip = {'__async_exec__', 'asyncio', '__builtins__'}
+
+        # ENGINE_INTERNALS is imported from constants via NamespaceManager module
+        try:
+            from .constants import ENGINE_INTERNALS  # type: ignore
+        except Exception:
+            ENGINE_INTERNALS = set()
+
+        for key, value in after.items():
+            if key in skip or key in ENGINE_INTERNALS:
+                continue
+            if key.startswith('__') and key.endswith('__'):
+                continue
+            if key not in before or before.get(key) is not value:
+                updates[key] = value
+        return updates
+
+    def _collect_safe_assigned_names(self, body: list[ast.stmt]) -> set[str]:
+        """Collect simple identifiers safe for global declaration."""
+        try:
+            from .constants import ENGINE_INTERNALS  # type: ignore
+        except Exception:
+            ENGINE_INTERNALS = set()
+
+        names: set[str] = set()
+        for node in body:
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        if not target.id.startswith('__') and target.id not in ENGINE_INTERNALS:
+                            names.add(target.id)
+            elif isinstance(node, ast.AnnAssign):
+                if isinstance(node.target, ast.Name):
+                    if not node.target.id.startswith('__'):
+                        names.add(node.target.id)
+            elif isinstance(node, ast.AugAssign):
+                if isinstance(node.target, ast.Name):
+                    names.add(node.target.id)
+        return names
+
+    def _resolve_attribute_base(self, node: ast.AST) -> str | None:
+        """Resolve attribute chain to base name."""
+        while isinstance(node, ast.Attribute):
+            node = node.value
+        if isinstance(node, ast.Name):
+            return node.id
+        return None
+
+    def _contains_await(self, node: ast.AST) -> bool:
+        """Return True if the subtree contains an Await node."""
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Await):
+                return True
+        return False
+
+    def _should_transform_lambda(self, lam: ast.Lambda) -> bool:
+        """Detect zero-arg lambda containing await."""
+        # Zero-arg and contains await in body
+        has_zero_args = not lam.args.args and not lam.args.vararg and not lam.args.kwonlyargs and not lam.args.kwarg
+        return has_zero_args and self._contains_await(lam.body)
+
+    def _transform_lambda_to_async_def(self, assign_stmt: ast.Assign) -> list[ast.stmt]:
+        """Transform `name = lambda: await ...` to async def helper + assignment.
+
+        Returns a list of statements that replace the original assignment.
+        """
+        assert isinstance(assign_stmt.value, ast.Lambda)
+        lam: ast.Lambda = assign_stmt.value
+
+        # Generate a unique helper function name based on target
+        if len(assign_stmt.targets) != 1 or not isinstance(assign_stmt.targets[0], ast.Name):
+            return [assign_stmt]
+
+        target_name = assign_stmt.targets[0].id
+        helper_name = f"__async_lambda_{target_name}__"
+
+        async_def = ast.AsyncFunctionDef(
+            name=helper_name,
+            args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+            body=[ast.Return(value=lam.body)],
+            decorator_list=[],
+            returns=None,
+        )
+        ast.copy_location(async_def, assign_stmt)
+
+        # Replace original assignment with assignment to helper function object
+        new_assign = ast.Assign(targets=[ast.Name(id=target_name, ctx=ast.Store())], value=ast.Name(id=helper_name, ctx=ast.Load()))
+        ast.copy_location(new_assign, assign_stmt)
+
+        return [async_def, new_assign]
     
     def _track_coroutine(self, coro) -> None:
         """

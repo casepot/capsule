@@ -242,15 +242,22 @@ class DurableFunctionLifecycle:
 ### Dependency Registration
 
 ```python
+from src.integration.resonate_wrapper import async_executor_factory
+
 def _initialize_dependencies(resonate: Resonate):
     """Register all system dependencies with Resonate."""
     
-    # Core execution dependencies
+    # Core execution dependencies (factory-based to avoid temporal coupling)
     resonate.set_dependency(
         "async_executor",
-        AsyncExecutor,
-        singleton=True,
-        lazy=True
+        lambda ctx: async_executor_factory(
+            ctx=ctx,
+            namespace_manager=ctx.get_dependency("namespace_manager"),
+            transport=ctx.get_dependency("transport"),
+            # Optional: override default TLA timeout (seconds)
+            # tla_timeout=15.0,
+        ),
+        singleton=False  # New instance per execution
     )
     
     resonate.set_dependency(
@@ -292,14 +299,9 @@ class DependencyAccessor:
         self.context = context
         
     def get_executor(self) -> AsyncExecutor:
-        """Get async executor with proper initialization."""
-        executor = self.context.get_dependency("async_executor")
-        if not executor.initialized:
-            executor.initialize(
-                resonate=self.context.resonate,
-                execution_id=self.context.execution_id
-            )
-        return executor
+        """Get async executor instance."""
+        # Factory returns fully initialized instance
+        return self.context.get_dependency("async_executor")(self.context)
         
     def get_capability(self, name: str) -> Optional[Capability]:
         """Get capability if allowed by security policy."""
@@ -394,7 +396,10 @@ class PromiseBasedProtocol:
         payload: dict,
         timeout: float = 30.0
     ) -> Any:
-        """Send request and await response via promise."""
+        """Send request and await response via promise.
+        
+        Uses Python 3.11+ asyncio.timeout() for safer timeout handling.
+        """
         # Create unique request ID
         request_id = f"{request_type}:{uuid.uuid4()}"
         
@@ -409,14 +414,23 @@ class PromiseBasedProtocol:
         # Send request (external system will resolve promise)
         await self._dispatch_request(request_id, request_type, payload)
         
-        # Wait for promise resolution
+        # Wait for promise resolution with asyncio.timeout (Python 3.11+)
         try:
-            result = await promise.result()
-            return json.loads(result) if isinstance(result, str) else result
-        except PromiseTimeout:
-            raise TimeoutError(f"Request {request_id} timed out")
+            async with asyncio.timeout(timeout):
+                result = await promise.result()
+                return json.loads(result) if isinstance(result, str) else result
+        except asyncio.TimeoutError as e:
+            # Add execution context using Python 3.11+ exception notes
+            e.add_note(f"Request ID: {request_id}")
+            e.add_note(f"Request type: {request_type}")
+            e.add_note(f"Timeout: {timeout} seconds")
+            raise TimeoutError(f"Request {request_id} timed out") from e
         except PromiseRejected as e:
-            raise RuntimeError(f"Request {request_id} failed: {e}")
+            # Enrich error with context
+            if hasattr(e, 'add_note'):
+                e.add_note(f"Request ID: {request_id}")
+                e.add_note(f"Request type: {request_type}")
+            raise RuntimeError(f"Request {request_id} failed: {e}") from e
 ```
 
 ## HITL (Human-In-The-Loop) Integration
@@ -708,7 +722,7 @@ class CrossWorkerMessaging:
 
 ```python
 class ErrorRecoveryHandler:
-    """Implements error recovery strategies."""
+    """Implements error recovery strategies with modern Python patterns."""
     
     def __init__(self, resonate: Resonate):
         self.resonate = resonate
@@ -748,6 +762,39 @@ class ErrorRecoveryHandler:
                 "preserve_state": True
             }
         )
+        
+    async def execute_with_recovery(
+        self,
+        operation: Callable,
+        context: dict,
+        timeout: float = 30.0
+    ) -> Any:
+        """Execute operation with comprehensive error handling.
+        
+        Uses Python 3.11+ features for robust error management.
+        """
+        try:
+            # Use asyncio.timeout for cleaner timeout handling
+            async with asyncio.timeout(timeout):
+                result = await operation()
+                return result
+        except asyncio.TimeoutError as e:
+            # Enrich timeout error with context
+            e.add_note(f"Operation: {operation.__name__}")
+            e.add_note(f"Timeout: {timeout} seconds")
+            e.add_note(f"Context: {context}")
+            raise
+        except Exception as e:
+            # Add recovery context to any error
+            if hasattr(e, 'add_note'):
+                e.add_note(f"Recovery attempted for: {operation.__name__}")
+                e.add_note(f"Execution context: {context}")
+            
+            # Attempt recovery based on error type
+            if isinstance(e, (ConnectionError, OSError)):
+                return await self._retry_with_backoff(operation, e)
+            else:
+                raise
 ```
 
 ### Crash Recovery Implementation
@@ -1093,6 +1140,84 @@ def configure_tls(resonate: Resonate):
 | Checkpoint Creation | < 5ms | < 50ms |
 | Recovery Time | N/A | < 1s |
 
+## Structured Concurrency Patterns (Python 3.11+)
+
+### TaskGroup Integration
+
+```python
+class ResonateTaskGroup:
+    """Integrates Python 3.11+ TaskGroup with Resonate promises."""
+    
+    def __init__(self, resonate: Resonate):
+        self.resonate = resonate
+        
+    async def execute_parallel_promises(
+        self,
+        promises: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """Execute multiple promises in parallel with structured concurrency.
+        
+        Uses TaskGroup to ensure all tasks complete or cancel together.
+        If any promise fails, all others are cancelled automatically.
+        """
+        results = []
+        
+        async with asyncio.TaskGroup() as tg:
+            # Create tasks for each promise
+            tasks = []
+            for promise_config in promises:
+                task = tg.create_task(
+                    self._execute_promise(promise_config)
+                )
+                tasks.append(task)
+            
+        # All tasks completed successfully if we get here
+        # TaskGroup raises ExceptionGroup on any failure
+        return [task.result() for task in tasks]
+        
+    async def execute_with_timeout_group(
+        self,
+        operations: List[Callable],
+        timeout: float = 30.0
+    ) -> List[Any]:
+        """Execute operations with shared timeout and cancellation.
+        
+        Combines TaskGroup with asyncio.timeout for robust execution.
+        """
+        async with asyncio.timeout(timeout):
+            async with asyncio.TaskGroup() as tg:
+                tasks = []
+                for op in operations:
+                    task = tg.create_task(op())
+                    tasks.append(task)
+                    
+        return [task.result() for task in tasks]
+```
+
+### Exception Group Handling
+
+```python
+def handle_execution_errors(eg: ExceptionGroup) -> None:
+    """Handle grouped exceptions from concurrent execution.
+    
+    Python 3.11+ provides except* syntax for selective handling.
+    """
+    try:
+        raise eg
+    except* TimeoutError as timeout_group:
+        # Handle all timeout errors
+        for e in timeout_group.exceptions:
+            logger.warning(f"Operation timed out: {e}")
+    except* ValueError as value_group:
+        # Handle validation errors
+        for e in value_group.exceptions:
+            logger.error(f"Validation failed: {e}")
+    except* Exception as other_group:
+        # Handle remaining errors
+        for e in other_group.exceptions:
+            logger.error(f"Unexpected error: {e}")
+```
+
 ## Future Enhancements
 
 ### Planned Features
@@ -1111,6 +1236,74 @@ def configure_tls(resonate: Resonate):
    - GraphQL support
    - WebSocket promises
    - Stream processing
+
+### Python 3.12+ Forward Compatibility
+
+#### Subinterpreter Support (PEP 684)
+
+```python
+class SubinterpreterIntegration:
+    """Forward compatibility for Python 3.12+ subinterpreters.
+    
+    When Python 3.12's per-interpreter GIL becomes available,
+    we can use subinterpreters instead of subprocesses for
+    better performance with maintained isolation.
+    """
+    
+    def __init__(self, resonate: Resonate):
+        self.resonate = resonate
+        self.use_subinterpreters = self._check_subinterpreter_support()
+        
+    def _check_subinterpreter_support(self) -> bool:
+        """Check if subinterpreters with per-interpreter GIL are available."""
+        import sys
+        if sys.version_info < (3, 12):
+            return False
+            
+        try:
+            # Check for PEP 684 support
+            import _interpreters
+            # Test if per-interpreter GIL is enabled
+            return hasattr(_interpreters, 'create') and \
+                   getattr(_interpreters, 'PER_INTERPRETER_GIL', False)
+        except ImportError:
+            return False
+            
+    async def execute_isolated(
+        self,
+        code: str,
+        use_subinterpreter: Optional[bool] = None
+    ) -> Any:
+        """Execute code in isolated context.
+        
+        Uses subinterpreters if available, otherwise falls back
+        to subprocess isolation.
+        """
+        if use_subinterpreter is None:
+            use_subinterpreter = self.use_subinterpreters
+            
+        if use_subinterpreter:
+            return await self._execute_in_subinterpreter(code)
+        else:
+            return await self._execute_in_subprocess(code)
+```
+
+#### Free-Threading Support (PEP 703)
+
+```python
+# Forward compatibility for no-GIL Python (experimental in 3.13+)
+def check_nogil_support() -> bool:
+    """Check if Python was compiled with --disable-gil."""
+    import sys
+    return getattr(sys, '_is_gil_disabled', lambda: False)()
+
+if check_nogil_support():
+    # Use thread-based parallelism for CPU-bound tasks
+    executor_class = ThreadPoolExecutor
+else:
+    # Use process-based parallelism for CPU-bound tasks
+    executor_class = ProcessPoolExecutor
+```
 
 ## Appendices
 

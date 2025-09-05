@@ -243,8 +243,12 @@ result = str(await asyncio.sleep(0, 42))
             execution_id="test-flag"
         )
         
-        # Verify the flag value
-        assert executor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x1000000
+        # Verify the flag value matches Python's ast module
+        import ast
+        if hasattr(ast, 'PyCF_ALLOW_TOP_LEVEL_AWAIT'):
+            assert executor.PyCF_ALLOW_TOP_LEVEL_AWAIT == ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        else:
+            assert executor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x2000
         
         # Test that flag enables compilation
         code = "await asyncio.sleep(0)"

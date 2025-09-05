@@ -2,7 +2,7 @@
 
 ## Your Mission
 
-You are tasked with implementing an async-first execution model that supports top-level await WITHOUT using IPython as a dependency. Build a custom async executor using the compile flag `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000` discovered through investigation, wrapped in Resonate durable functions for automatic recovery and distributed execution support.
+You are tasked with implementing an async-first execution model that supports top-level await WITHOUT using IPython as a dependency. Build a custom async executor using the compile flag `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000` from Python's ast module, wrapped in Resonate durable functions for automatic recovery and distributed execution support.
 
 ## Context Gathering Requirements
 
@@ -14,8 +14,8 @@ Before implementing, you MUST understand:
 - **Invariant**: Namespace must be under our control without breaking display hooks
 
 ### 2. Critical Technical Discovery
-- **The Magic Flag**: `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000` enables top-level await in compile()
-- **How It Works**: Add to compile flags: `compile(code, '<session>', 'exec', flags=base_flags | 0x1000000)`
+- **The Magic Flag**: `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000` enables top-level await in compile()
+- **How It Works**: Add to compile flags: `compile(code, '<session>', 'exec', flags=base_flags | 0x2000)`
 - **Edge Case**: Some code needs AST transformation before compilation
 
 ### 3. Architecture Recognition
@@ -61,7 +61,7 @@ class AsyncExecutor:
     """Custom async executor with top-level await support and Resonate durability."""
     
     # Critical discovery from investigation
-    PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+    PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000
     
     def __init__(
         self, 
@@ -130,7 +130,10 @@ class AsyncExecutor:
         return False
     
     async def _execute_with_top_level_await(self, code: str) -> Any:
-        """Execute code with top-level await - NEW IMPLEMENTATION."""
+        """Execute code with top-level await - NEW IMPLEMENTATION.
+        
+        Uses Python 3.11+ features for robust async execution.
+        """
         
         # Get base compile flags
         base_flags = compile('', '', 'exec').co_flags
@@ -142,25 +145,41 @@ class AsyncExecutor:
             # Try direct compilation with the flag
             compiled = compile(code, '<async_session>', 'exec', flags=flags)
             
+            # Check if compiled code is a coroutine (Python 3.11+ pattern)
+            import inspect
+            is_coroutine_code = bool(inspect.CO_COROUTINE & compiled.co_flags)
+            
             # Create namespace (DO NOT replace, merge!)
             local_ns = {}
             global_ns = self.namespace.namespace.copy()
             
-            # Execute - may return a coroutine
+            # Execute - may return a coroutine if CO_COROUTINE is set
             result = eval(compiled, global_ns, local_ns)
             
-            # Handle coroutine result
-            if asyncio.iscoroutine(result):
-                result = await result
+            # Handle coroutine result with timeout (Python 3.11+)
+            if is_coroutine_code and asyncio.iscoroutine(result):
+                # Use asyncio.timeout for cleaner timeout handling
+                async with asyncio.timeout(30.0):  # 30 second timeout
+                    result = await result
             
             # Update namespace with changes (merge, don't replace!)
             self.namespace.update_namespace(local_ns, source_context='async')
             
             return result
             
-        except SyntaxError:
+        except SyntaxError as e:
+            # Add context to error (Python 3.11+ exception notes)
+            if hasattr(e, 'add_note'):
+                e.add_note("Direct compilation with PyCF_ALLOW_TOP_LEVEL_AWAIT failed")
+                e.add_note("Falling back to AST transformation")
             # Needs AST transformation - wrap in async function
             return await self._execute_with_ast_transform(code)
+        except asyncio.TimeoutError as e:
+            # Enrich timeout error with context
+            if hasattr(e, 'add_note'):
+                e.add_note(f"Code execution timed out after 30 seconds")
+                e.add_note(f"Execution ID: {self.execution_id}")
+            raise
     
     async def _execute_with_ast_transform(self, code: str) -> Any:
         """Transform code for top-level await - FALLBACK."""
@@ -296,7 +315,7 @@ def initialize_executor_system():
 - Zero dependencies beyond standard library
 
 ### 2. Implementation Checklist
-- [ ] Use `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000` flag
+- [ ] Use `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000` flag
 - [ ] Never replace namespace entirely (merge only)
 - [ ] Handle both compilable and AST-transform cases
 - [ ] Track pending coroutines for cleanup
@@ -311,9 +330,13 @@ async def test_compile_flag_usage():
     code = "import asyncio; result = await asyncio.sleep(0, 'test')"
     
     # This MUST work with our flag
-    flags = compile('', '', 'exec').co_flags | 0x1000000
+    flags = compile('', '', 'exec').co_flags | 0x2000
     compiled = compile(code, '<test>', 'exec', flags=flags)
     assert compiled is not None
+    
+    # Verify CO_COROUTINE flag is set (Python 3.11+ pattern)
+    import inspect
+    assert bool(inspect.CO_COROUTINE & compiled.co_flags), "CO_COROUTINE flag should be set"
 
 async def test_namespace_preservation():
     """Ensure namespace updates don't cause KeyError."""
@@ -396,3 +419,58 @@ def test_resonate_recovery():
 4. Protocol message queuing
 
 This is ~400 lines of code, not 2000 like IPython.
+
+## Python 3.11+ Patterns to Use
+
+### 1. Structured Concurrency with TaskGroup
+```python
+async def execute_parallel_tasks(tasks: List[Callable]) -> List[Any]:
+    """Execute multiple async tasks with structured concurrency."""
+    async with asyncio.TaskGroup() as tg:
+        futures = [tg.create_task(task()) for task in tasks]
+    # All tasks complete or all cancelled on error
+    return [f.result() for f in futures]
+```
+
+### 2. Timeout with asyncio.timeout()
+```python
+async def execute_with_timeout(coro, timeout: float):
+    """Execute coroutine with timeout (Python 3.11+)."""
+    async with asyncio.timeout(timeout):
+        return await coro
+```
+
+### 3. Exception Notes for Context
+```python
+try:
+    result = await execute(code)
+except Exception as e:
+    # Add execution context (Python 3.11+)
+    e.add_note(f"Execution ID: {execution_id}")
+    e.add_note(f"Code snippet: {code[:100]}")
+    raise
+```
+
+### 4. CO_COROUTINE Flag Checking
+```python
+import inspect
+
+# Check if compiled code will return a coroutine
+compiled = compile(code, '<exec>', 'exec', flags=flags)
+is_coroutine_code = bool(inspect.CO_COROUTINE & compiled.co_flags)
+```
+
+## Forward Compatibility Notes
+
+### Python 3.12+ Subinterpreters (PEP 684)
+When available, consider using subinterpreters instead of subprocesses for better performance:
+```python
+# Future pattern when interpreters module is available
+if sys.version_info >= (3, 12) and hasattr(sys, '_interpreters'):
+    # Use subinterpreter for isolation
+    interp = interpreters.create()
+    result = interp.exec(code)
+else:
+    # Fall back to subprocess isolation
+    result = subprocess_executor.execute(code)
+```

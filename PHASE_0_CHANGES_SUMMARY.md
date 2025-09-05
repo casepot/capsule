@@ -30,7 +30,7 @@ Phase 0 implements critical fixes to unblock testing and establish a solid found
 - Event loop management without ownership (no dangerous __del__)
 - Explicit lifecycle management (close() method and context manager)
 - ThreadedExecutor delegation for all execution modes
-- PyCF_ALLOW_TOP_LEVEL_AWAIT constant (0x1000000) for Python 3.11+
+- PyCF_ALLOW_TOP_LEVEL_AWAIT constant (0x2000) for Python 3.8+
 - Thread safety documentation clarified - relies on GIL (lines 80, 85-87)
 
 #### `src/subprocess/constants.py` (23 lines)

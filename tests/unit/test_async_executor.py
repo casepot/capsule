@@ -28,8 +28,12 @@ class TestExecutionMode:
     
     def test_pycf_allow_top_level_await_constant(self):
         """Test that PyCF_ALLOW_TOP_LEVEL_AWAIT has correct value."""
-        # This is the critical compile flag discovered in research
-        assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x1000000
+        # Should match Python's ast module value
+        import ast
+        if hasattr(ast, 'PyCF_ALLOW_TOP_LEVEL_AWAIT'):
+            assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        else:
+            assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x2000
     
     def test_blocking_io_modules_defined(self):
         """Test that blocking I/O modules are defined."""

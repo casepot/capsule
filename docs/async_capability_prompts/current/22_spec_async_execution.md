@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This specification defines the AsyncExecutor implementation for PyREPL3, providing top-level await support without IPython dependencies. The system leverages the discovered `PyCF_ALLOW_TOP_LEVEL_AWAIT` compile flag (0x1000000) to enable native async/await syntax at the module level, with automatic execution mode detection and AST transformation fallback mechanisms.
+This specification defines the AsyncExecutor implementation for PyREPL3, providing top-level await support without IPython dependencies. The system leverages the `PyCF_ALLOW_TOP_LEVEL_AWAIT` compile flag (0x2000) to enable native async/await syntax at the module level, with automatic execution mode detection and AST transformation fallback mechanisms.
 
 ## Technical Foundation
 
@@ -16,7 +16,7 @@ This specification defines the AsyncExecutor implementation for PyREPL3, providi
 
 ```python
 # Critical compile flag that enables top-level await
-PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000
 
 # Usage pattern
 base_flags = compile('', '', 'exec').co_flags
@@ -87,7 +87,7 @@ class AsyncExecutor:
     """
     
     # Critical discovery from investigation
-    PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+    PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000
     
     # Blocking I/O indicators
     BLOCKING_IO_MODULES = {
@@ -312,6 +312,11 @@ class AsyncExecutor:
             # Try direct compilation with flag
             compiled = compile(code, '<async_session>', 'exec', flags=flags)
             
+            # Check if compiled code contains top-level await by inspecting CO_COROUTINE flag
+            # This is more reliable than checking the result type
+            import inspect
+            is_coroutine_code = bool(inspect.CO_COROUTINE & compiled.co_flags)
+            
             # Create execution namespace
             local_ns = {}
             global_ns = self.namespace.get_for_execution('async')
@@ -319,12 +324,13 @@ class AsyncExecutor:
             # Execute compiled code
             coro_or_result = eval(compiled, global_ns, local_ns)
             
-            # Handle result based on type
-            if inspect.iscoroutine(coro_or_result):
+            # Handle result based on CO_COROUTINE flag and actual type
+            if is_coroutine_code and inspect.iscoroutine(coro_or_result):
                 # Track coroutine
                 self._track_coroutine(coro_or_result)
-                # Await the coroutine
-                result = await coro_or_result
+                # Await the coroutine with timeout (Python 3.11+)
+                async with asyncio.timeout(30):  # Default 30 second timeout
+                    result = await coro_or_result
             else:
                 result = coro_or_result
                 
@@ -1129,12 +1135,29 @@ class ImportController:
 
 ### A. PyCF_ALLOW_TOP_LEVEL_AWAIT Details
 
-The `PyCF_ALLOW_TOP_LEVEL_AWAIT` flag (0x1000000) was introduced in Python 3.8 to enable top-level await in the interactive interpreter. Key characteristics:
+The `PyCF_ALLOW_TOP_LEVEL_AWAIT` flag (0x2000) was introduced in Python 3.8 to enable top-level await in interactive environments. Key characteristics:
 
-- Allows `await` expressions at module level
-- Returns coroutine object when await is encountered
-- Requires event loop for execution
-- Compatible with compile() function
+**How It Works:**
+- Allows `await` expressions at module level in interactive contexts
+- When used, compiled code object has `CO_COROUTINE` flag set in `co_flags`
+- Returns coroutine object that must be awaited (not immediate execution)
+- Check with: `bool(inspect.CO_COROUTINE & compiled.co_flags)`
+
+**Critical Limitations:**
+- **Cannot be used in importable modules** - only works in:
+  - Interactive environments (REPL, IPython, Jupyter)
+  - Explicitly compiled code with the flag
+  - Scripts run with `python -m asyncio`
+- Standard module imports will still raise SyntaxError with top-level await
+- Requires active event loop to execute the resulting coroutine
+
+**Best Practice Pattern:**
+```python
+compiled = compile(code, '<exec>', 'exec', flags=flags)
+if inspect.CO_COROUTINE & compiled.co_flags:
+    result = eval(compiled, globals, locals)
+    result = await result  # Must await the coroutine
+```
 
 ### B. AST Node Reference
 
@@ -1144,10 +1167,49 @@ Common AST nodes for async code:
 - `ast.AsyncFor`: Async for loop
 - `ast.AsyncWith`: Async with statement
 
-### C. Event Loop Considerations
+### C. Modern Python 3.11+ Async Features
+
+**Structured Concurrency with TaskGroup:**
+```python
+async def execute_concurrent_tasks(self, tasks: list) -> list:
+    """Execute multiple tasks with structured concurrency (Python 3.11+)."""
+    results = []
+    exceptions = []
+    
+    async with asyncio.TaskGroup() as tg:
+        for task_code in tasks:
+            task = tg.create_task(self.execute(task_code))
+            results.append(task)
+    
+    # All tasks complete or all are cancelled on error
+    # Exceptions are grouped in an ExceptionGroup
+    return [await r for r in results]
+```
+
+**Timeout Management (Python 3.11+):**
+```python
+# Preferred over asyncio.wait_for() in Python 3.11+
+async with asyncio.timeout(30):  # 30 second timeout
+    result = await coroutine
+```
+
+**Enhanced Error Context (Python 3.11+):**
+```python
+try:
+    result = await self.execute(code)
+except Exception as e:
+    # Add execution context using exception notes
+    e.add_note(f"Execution ID: {self.execution_id}")
+    e.add_note(f"Execution mode: {mode.value}")
+    e.add_note(f"Session: {self.session_id}")
+    raise
+```
+
+### D. Event Loop Considerations
 
 Event loop management strategies:
-- Reuse existing loop when possible
+- Reuse existing loop when possible (`asyncio.get_running_loop()`)
 - Create new loop only when necessary
-- Clean up loop on executor destruction
-- Handle nested loop scenarios
+- Use `asyncio.timeout()` for execution timeouts (3.11+)
+- Handle nested loop scenarios with care
+- Clean up pending coroutines on executor destruction

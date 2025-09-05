@@ -109,7 +109,7 @@ Protocol Layer
    - ThreadedExecutor coordinates with main loop via `call_soon_threadsafe`
 
 3. **Execution Mode Detection (Future)**
-   - TOP_LEVEL_AWAIT: Use PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
+   - TOP_LEVEL_AWAIT: Use PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000
    - ASYNC_DEF: AsyncExecutor
    - BLOCKING_SYNC: ThreadedExecutor  
    - SIMPLE_SYNC: Direct execution

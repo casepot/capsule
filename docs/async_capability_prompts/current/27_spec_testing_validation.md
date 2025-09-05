@@ -57,7 +57,7 @@ class TestAsyncExecutor:
     def test_pcf_allow_top_level_await_flag(self):
         """Test that PyCF_ALLOW_TOP_LEVEL_AWAIT flag works."""
         # This is THE critical discovery - must work
-        assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x1000000
+        assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x2000
         
         # Test compilation with flag
         code = "await asyncio.sleep(0)"
