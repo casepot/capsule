@@ -37,4 +37,3 @@ class InputCapability:
         except Exception:
             return ""
         return data.get("input", "")
-

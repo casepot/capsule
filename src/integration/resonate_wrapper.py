@@ -46,6 +46,10 @@ def async_executor_factory(
     execution_id: Optional[str] = None,
     *,
     tla_timeout: Optional[float] = None,
+    ast_cache_max_size: int | None = None,
+    blocking_modules: set[str] | None = None,
+    blocking_methods_by_module: dict[str, set[str]] | None = None,
+    warn_on_blocking: bool | None = None,
 ) -> AsyncExecutor:
     """Factory returning ready-to-use AsyncExecutor instances.
 
@@ -66,6 +70,16 @@ def async_executor_factory(
         if tla_timeout is not None
         else getattr(getattr(ctx, "config", None), "tla_timeout", 30.0)
     )
+    # Config overrides for detection and cache size, if present on ctx.config
+    cfg = getattr(ctx, "config", None)
+    if ast_cache_max_size is None and cfg is not None:
+        ast_cache_max_size = getattr(cfg, "ast_cache_max_size", None)
+    if blocking_modules is None and cfg is not None:
+        blocking_modules = getattr(cfg, "blocking_modules", None)
+    if blocking_methods_by_module is None and cfg is not None:
+        blocking_methods_by_module = getattr(cfg, "blocking_methods_by_module", None)
+    if warn_on_blocking is None and cfg is not None:
+        warn_on_blocking = getattr(cfg, "warn_on_blocking", True)
     # TODO(loop-ownership): Ensure the executor receives the loop that owns the
     # transport. The durable layer must not create or run event loops; if a sync
     # submit() facade is needed for ctx.lfc, implement it by posting to this loop
@@ -75,4 +89,8 @@ def async_executor_factory(
         transport=transport,
         execution_id=exec_id,
         tla_timeout=float(timeout),
+        ast_cache_max_size=ast_cache_max_size if ast_cache_max_size is not None else 100,
+        blocking_modules=blocking_modules,
+        blocking_methods_by_module=blocking_methods_by_module,
+        warn_on_blocking=True if warn_on_blocking is None else bool(warn_on_blocking),
     )

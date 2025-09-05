@@ -51,12 +51,12 @@ _ = await asyncio.sleep(0)
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="AST fallback may override global writes with locals snapshot; Phase 1 will fix precedence and global diffing.")
 async def test_direct_tla_global_assignment_inside_function_persists():
     """A function that assigns to a global should persist the change.
 
-    This is xfail until AST fallback precedence (locals vs globals) is corrected
-    when direct TLA is unavailable and wrapper is used.
+    Phase 1 resolution: Both direct TLA and AST fallback now preserve
+    module-level globals. The wrapper hoists simple assigned names via
+    'global' and merges global diffs after locals.
     """
     ns = NamespaceManager()
     executor = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="tla-live-2")
@@ -118,12 +118,11 @@ _ = await asyncio.sleep(0)
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="Closure captures g from wrapper; Phase 1 will adjust AST transform to preserve module-level globals.")
 async def test_ast_fallback_function_sees_global_updates(monkeypatch):
     """Force AST fallback and verify that later global updates are observed.
 
-    Xfail until AST transform is improved to avoid capturing locals as closures
-    for names meant to be module-level globals.
+    Phase 1 resolution: AST transform preserves module-level globals and
+    functions bind __globals__ to the live mapping; later updates are observed.
     """
     ns = NamespaceManager()
     executor = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="tla-fallback-1b")
@@ -163,11 +162,11 @@ z = await addg(12)
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-@pytest.mark.xfail(reason="AST fallback currently prefers locals() merge over global diffs; Phase 1 will fix ordering and snapshot diffing.")
 async def test_ast_fallback_global_assignment_persists(monkeypatch):
     """Force AST fallback and verify global assignment inside function updates globals.
 
-    Xfail until AST fallback merge ordering and global snapshot diff are implemented.
+    Phase 1 resolution: AST fallback merge orders locals() first and global diffs
+    after, ensuring module-level assignments persist.
     """
     ns = NamespaceManager()
     executor = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="tla-fallback-2")

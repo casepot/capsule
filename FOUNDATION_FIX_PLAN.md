@@ -1,12 +1,19 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
-> Phase 1 Status Update (2025-09-05)
+> Status Update (2025-09-05)
 
-- Phase 0: COMPLETE
-- Phase 1: COMPLETE — AsyncExecutor with top‑level await (TLA), AST fallback, merge‑only namespace semantics, routing + blocking I/O detection, DI factory, and unit CI workflow.
-- Unit tests: 111/111 passing (unit suite) + 3 xpassed expected transitions.
-- Integration tests (informational): 19 passed, 11 failing; failures are in session/worker/transport orchestration and are scoped for Phase 2.
-- Notable corrections: PyCF constant is `0x2000` (not `0x1000000`). TLA timeout is now configurable via `AsyncExecutor(tla_timeout=...)` and `async_executor_factory(..., tla_timeout=...)`.
+- Phase 0: COMPLETE — Emergency fixes
+- Phase 1: COMPLETE — AsyncExecutor core with TLA, AST fallback, routing, blocking I/O detection, DI factory
+- Phase 1b: IN PROGRESS — AsyncExecutor refinements (namespace binding fixed, enhanced detection, configurability, telemetry, compile flags)
+- Phase 2a: COMPLETE — Resonate vertical slice (experimental proof-of-concept)
+- Phase 2b: TODO — Promise-first refinement
+- Phase 2c: TODO — Integration stabilization
+- Phase 3-6: TODO — Full implementation (~3-4 weeks to production)
+
+**Current PR #11 Status**: Phase 1 + Phase 2a vertical slice
+- Unit tests: 124/129 passing (XPASS resolved for namespace binding; 2 skipped)
+- Integration tests: 28/30 passing (2 failing in checkpoint/worker lifecycle)
+- Notable: Using ctx.lfc workaround (not promise-first), minimal capabilities, local-only
 
 Next steps (Phase 2 preview):
 - Address integration failures (worker last‑expression result delivery, large output handling, checkpoint create/restore, concurrent executions, transport backpressure/drain ordering).
@@ -25,11 +32,18 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 
 ### Roadmap Summary (Updated)
 
-| Phase | PR Name | Scope | Status |
+| Phase | Scope | Status | Timeline |
 | - | - | - | - |
-| Phase 0 | foundation-phase0-emergency-fixes | ThreadedExecutor async wrapper, protocol fixes, namespace merge-only | COMPLETE |
-| Phase 1 | async-executor-core | AsyncExecutor with TLA + AST fallback, routing, blocking I/O detection, DI factory, unit CI | COMPLETE (ready to merge) |
-| Phase 2 | resonate-integration | Durable functions, protocol bridge with promises, HITL capability, checkpoints, local/remote adapters | PLANNED |
+| Phase 0 | Emergency fixes: ThreadedExecutor async wrapper, protocol fixes, namespace merge-only | COMPLETE | ✅ |
+| Phase 1 | AsyncExecutor core: TLA + AST fallback, routing, blocking I/O detection, DI factory | COMPLETE | ✅ |
+| Phase 1b | AsyncExecutor refinements: namespace binding fixes, enhanced blocking I/O, caching | TODO | 2-3 days |
+| Phase 2a | Resonate vertical slice: basic durable_execute, minimal bridge, InputCapability | COMPLETE | ✅ |
+| Phase 2b | Promise-first refinement: ctx.promise pattern, complete protocol bridge | TODO | 2-3 days |
+| Phase 2c | Integration stabilization: worker/session fixes, checkpoint/restore | TODO | 2-3 days |
+| Phase 3 | Full AsyncExecutor: EventLoopCoordinator, CoroutineManager, Cancellation, true async | TODO | 3-4 days |
+| Phase 4 | Full capability system: File, Network, complete HITL, security policies | TODO | 3-4 days |
+| Phase 5 | Remote & production: server support, retry logic, MigrationAdapter | TODO | 3-4 days |
+| Phase 6 | Performance & observability: benchmarks, OpenTelemetry, metrics | TODO | 2-3 days |
 
 ### PR: async-executor-core (Phase 1)
 
@@ -49,20 +63,64 @@ This section supersedes older mixed notes below. It defines a clear split betwee
   - Integration: Not required for this PR (tracked for Phase 2).
 - Dependencies:
   - None on Resonate SDK. Uses local DI only.
-- Status: COMPLETE. 111/111 unit tests passing (+3 xpassed expected transitions).
+- Status: COMPLETE. Core functionality implemented.
 
-### PR: resonate-integration (Phase 2)
+### Phase 1b: AsyncExecutor Refinements (IN PROGRESS)
 
 - Deliverables:
-  - Promise‑first durable function `durable_execute(ctx, args)`: create promise → send Execute over `ResonateProtocolBridge` → `yield` promise → return result. Checkpoints optional until SDK exposes Context API.
-  - `ResonateProtocolBridge` that maps protocol request/response to durable promises with deterministic correlation.
-  - Minimal HITL `InputCapability` using durable promises (create, wait, resolve) with transport message correlation.
-  - Local/remote init adapters (real SDK required) with DI graph registration and explicit single‑loop ownership notes.
-- Integration Stabilization Tasks:
-  - Worker/session last-expression result delivery (ensure `ResultMessage.value` semantics are consistent for multi-line cells).
-  - Large output/message chunking and drain ordering under backpressure.
-  - Checkpoint create/restore validation and state consistency.
-  - Event loop lifecycle audit (bind asyncio primitives to correct loop; avoid cross-loop usage).
+  - Namespace binding fixes COMPLETE (locals-first merge, then global diffs; live __globals__ under both paths)
+  - AST transform preserves module-level globals (simple global hoist) COMPLETE
+  - Enhanced blocking I/O detection (aliases + attribute chains including `time.sleep`, `requests.get/post`, `urllib.request.urlopen`, `socket.socket().recv/send/accept/connect`, `os.system`, `subprocess.run/Popen`, `pathlib.Path.read*/write*`, `open`) COMPLETE
+  - Configurable AST cache size via constructor/factory and env override (`ASYNC_EXECUTOR_AST_CACHE_SIZE`) COMPLETE
+  - Telemetry counters/logging knobs for detection COMPLETE
+  - Consider ThreadedExecutor pooling for performance (DOCUMENTED ONLY)
+  - Convert 3 XPASS tests to asserts COMPLETE
+- Acceptance Criteria:
+  - All namespace binding tests pass without XPASS (DONE)
+  - Blocking I/O detection catches common patterns (DONE)
+  - Configuration options exposed for cache size and detection modules (DONE)
+- Dependencies:
+  - Phase 1 completion
+- Status: IN PROGRESS. Unit suite green; integration unchanged (Phase 2 scope only).
+
+### Phase 2a: Resonate Vertical Slice (COMPLETE - Current PR #11)
+
+- Deliverables:
+  - Basic `durable_execute` function (using ctx.lfc workaround, NOT promise-first yet)
+  - Minimal `ResonateProtocolBridge` (only handles InputResponseMessage correlation)
+  - Single `InputCapability` implementation using promises
+  - Local-only initialization with DI wiring
+- Known Limitations:
+  - Using ctx.lfc synchronous wrapper instead of promise-first pattern
+  - Protocol bridge incomplete (no Execute/Result/Error correlation)
+  - Only one capability implemented (InputCapability)
+  - No remote mode support
+  - 2 integration tests failing (checkpoint/worker lifecycle)
+- Status: COMPLETE as experimental proof-of-concept. Production implementation in Phase 2b/2c.
+
+### Phase 2b: Promise-First Refinement (TODO)
+
+- Deliverables:
+  - Replace ctx.lfc with ctx.promise pattern (avoiding event loop hazards)
+  - Complete ResonateProtocolBridge with Execute/Result/Error correlation
+  - Fix event loop ownership issues (single-loop invariant)
+  - Resolve failing integration tests
+- Acceptance Criteria:
+  - No event loop creation in durable functions
+  - All protocol messages properly correlated via promises
+  - Integration tests passing
+- Dependencies:
+  - Phase 2a completion
+- Status: TODO. Critical for production Resonate integration.
+
+### Phase 2c: Integration Stabilization (TODO)
+
+- Deliverables:
+  - Worker/session last-expression result delivery 
+  - Large output/message chunking and drain ordering
+  - Checkpoint create/restore implementation
+  - Event loop lifecycle audit and fixes
+  - Concurrent execution safety
 - Acceptance Criteria:
   - Local‑mode durable execution works end‑to‑end (no server) using promise‑first flows; HITL round‑trips work via bridge + promise.
   - Output ordering preserved (outputs precede Result resolution for same execution).
@@ -72,18 +130,100 @@ This section supersedes older mixed notes below. It defines a clear split betwee
   - Integration (local): durable execute promise resolution, input flow; output‑before‑result ordering; single‑loop invariant checks.
   - Remote: mocked interface parity (no real network required for Phase 2).
 - Dependencies:
-  - AsyncExecutor core (Phase 1) merged.
-  - Stable transport framing for message correlation.
-- Status: PLANNED. Work begins after Phase 1 PR merges.
+  - Phase 2b completion
+  - Stable transport framing
+- Status: TODO. Required for reliable execution.
+
+### Phase 3: Full AsyncExecutor Implementation (TODO)
+
+- Deliverables:
+  - EventLoopCoordinator class for proper event loop management
+  - Enhanced CoroutineManager with lifecycle tracking
+  - ExecutionCancellation support for interrupting executions
+  - ASTOptimizer for performance improvements
+  - True async execution (not delegation to ThreadedExecutor)
+  - Message queue for non-async contexts
+- Acceptance Criteria:
+  - AsyncExecutor handles all execution modes natively
+  - Proper coroutine cleanup and cancellation
+  - Event loop coordination without conflicts
+- Dependencies:
+  - Phase 1b completion
+- Status: TODO. Required for full async capabilities.
+
+### Phase 4: Full Capability System (TODO)
+
+- Deliverables:
+  - Complete capability implementations (File, Network, System, etc.)
+  - Security policy enforcement at capability level
+  - Complete HITL workflows with all interaction types
+  - Capability injection framework per spec
+- Acceptance Criteria:
+  - All capabilities from spec implemented
+  - Security boundaries enforced
+  - HITL workflows fully functional
+- Dependencies:
+  - Phase 2c and Phase 3 completion
+- Status: TODO. Required for complete functionality.
+
+### Phase 5: Remote Mode & Production (TODO)
+
+- Deliverables:
+  - Remote Resonate server support
+  - Connection management and retry logic
+  - MigrationAdapter for incremental adoption
+  - Production hardening (graceful degradation, circuit breakers)
+  - Resource limits enforcement
+- Acceptance Criteria:
+  - Works with remote Resonate server
+  - Handles network failures gracefully
+  - Production-ready reliability
+- Dependencies:
+  - Phase 4 completion
+- Status: TODO. Required for distributed deployment.
+
+### Phase 6: Performance & Observability (TODO)
+
+- Deliverables:
+  - Performance benchmarks and CI guards
+  - OpenTelemetry integration
+  - Metrics collection and reporting
+  - Structured logging throughout
+  - Configurable detection policies
+- Acceptance Criteria:
+  - Meets performance targets (<1ms local, <10ms remote)
+  - Full observability stack integrated
+  - CI enforces performance regression prevention
+- Dependencies:
+  - Phase 5 completion
+- Status: TODO. Required for production operations.
 
 ### Work Breakdown & Order (Updated)
 
-1) Merge PR async-executor-core (Phase 1).
-2) Implement `durable_execute` and DI wiring; add unit tests (wrapper + checkpoints) [Resonate integration].
-3) Implement `ResonateProtocolBridge` promises; add unit tests; minimal local-mode adapter.
-4) Implement HITL `InputCapability` using bridge; add unit tests (promise roundtrip).
-5) Integration stabilization in worker/session (result delivery, large output, checkpoints, loop lifecycle) and corresponding integration tests.
-6) Add telemetry/configuration for blocking I/O detection; performance micro-benchmarks and CI guards.
+**Current Status**: PR #11 ready to merge (Phase 1 + Phase 2a vertical slice)
+
+**Immediate Next Steps (Phase 1b - 2-3 days):**
+1) Fix namespace binding issues (global diffs after locals)
+2) Enhance blocking I/O detection (attribute chains)
+3) Make AST cache configurable
+4) Fix 3 XPASS tests
+
+**Promise-First Refinement (Phase 2b - 2-3 days):**
+5) Replace ctx.lfc with ctx.promise pattern
+6) Complete protocol bridge correlation
+7) Fix event loop ownership issues
+8) Resolve integration test failures
+
+**Integration Stabilization (Phase 2c - 2-3 days):**
+9) Worker/session robustness improvements
+10) Checkpoint/restore implementation
+11) Large output handling
+
+**Full Implementation (Phases 3-6 - 3-4 weeks):**
+12) Complete AsyncExecutor implementation
+13) Full capability system
+14) Remote mode support
+15) Performance and observability
 
 ### Interfaces & Dependencies
 
@@ -859,12 +999,21 @@ Notes
 - Config hygiene: Remove or document `.reviewrc.json` “yolo” flag; default to safe behavior and document any local‑only toggles.
 - Compatibility note (AST args): The `ast.arguments` constructor differences for Python <3.8 were flagged in review. Our target is Python 3.11+; add an explicit note in code and docs. If we choose to support older versions later, add version‑guarded construction in Phase 1.
 
-### TODOs added in code
-- `src/subprocess/async_executor.py`:
-  - Marked the blocking‑I/O detection broadening as a Phase 1 TODO.
-  - Added comments around live‑globals usage to prevent regressions.
-  - Left a note near AST usage to revisit cross‑version `ast.arguments` construction only if supporting <3.8.
-  - Added TODOs for pre‑exec globals snapshot diff and fallback merge ordering; noted closure capture with plan to hoist via `ast.Global` where safe.
+### Key TODOs in Current Implementation
+
+**AsyncExecutor (`src/subprocess/async_executor.py`):**
+- Line 109-110: Make AST cache size configurable via constructor parameter
+- Line 248-252: Extend blocking I/O detection to handle attribute chains (`time.sleep()`, `requests.get()`)
+- Line 261-262: Make blocking I/O detection configurable, add telemetry
+- Line 394-395: Consider pooling ThreadedExecutor instances for performance
+- Line 575-576: Python <3.8 compatibility notes (current target is 3.11+)
+- Namespace binding fixes for AST fallback path (global diffs after locals)
+
+**Resonate Integration:**
+- `src/integration/resonate_functions.py:34-38`: Replace ctx.lfc with promise-first flow
+- `src/integration/resonate_bridge.py:42-46`: Standardize promise ID formats and correlation rules
+- `src/integration/resonate_bridge.py:90-93`: Add Execute/Result/Error correlation
+- `src/integration/resonate_functions.py:73-78`: Handle event loop ownership properly
 
 ### Acceptance criteria updates
 - Immediate: Both top‑level await execution paths bind function `__globals__` to the live namespace mapping; namespace updates continue to use merge‑only policy; no namespace replacement anywhere.
