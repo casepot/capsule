@@ -10,15 +10,15 @@ durable function semantics expected by the Resonate SDK.
 from typing import Any, Callable
 
 
-def register_executor_functions(resonate: Any):
+def register_executor_functions(resonate: Any) -> Any:
     """Register durable executor-related functions with Resonate.
 
     Registers:
     - durable_execute v1.0.0
     """
 
-    @resonate.register(name="durable_execute", version=1)
-    def durable_execute(ctx, args):  # type: ignore[unused-ignore]
+    @resonate.register(name="durable_execute", version=1)  # type: ignore[misc]
+    def durable_execute(ctx: Any, args: dict[str, Any]) -> Any:
         """
         Executes code durably via AsyncExecutor. Uses DI:
           - async_executor: created via factory (singleton=False)
@@ -56,10 +56,10 @@ def register_executor_functions(resonate: Any):
             # IMPORTANT: Do NOT create a new loop if the executor/transport already
             # owns a loop. In a full bridge-first design, this durable function will
             # not manage loops at all.
-            def _run_executor_sync(_ctx, a):
+            def _run_executor_sync(_ctx: Any, a: dict[str, Any]) -> Any:
                 import asyncio
 
-                async def _inner():
+                async def _inner() -> Any:
                     return await executor.execute(a["code"])
 
                 # If a loop is running in this thread, we cannot run_until_complete.

@@ -25,14 +25,17 @@ structlog.configure(
 )
 
 from ..protocol.messages import (
+    CancelMessage,
     ErrorMessage,
     ExecuteMessage,
     HeartbeatMessage,
+    InterruptMessage,
     InputMessage,
     InputResponseMessage,
     MessageType,
     ReadyMessage,
     ResultMessage,
+    ShutdownMessage,
 )
 from ..protocol.transport import MessageTransport
 from .executor import ThreadedExecutor, OutputDrainTimeout
@@ -86,7 +89,8 @@ class InputHandler:
                 raise TimeoutError("Input timeout exceeded")
 
             if message.type == "input_response":
-                response = message  # type: ignore
+                from typing import cast
+                response = cast(InputResponseMessage, message)
                 if response.input_id == input_msg.id:
                     return response.data
 
@@ -152,7 +156,7 @@ class SubprocessWorker:
                     self._namespace[key] = None
 
     async def _cancel_with_timeout(
-        self, execution_id: str, grace_timeout_ms: int, thread: threading.Thread = None
+        self, execution_id: str, grace_timeout_ms: int, thread: threading.Thread | None = None
     ) -> bool:
         """Cancel execution with grace period before hard cancel.
 
@@ -187,8 +191,8 @@ class SubprocessWorker:
                 logger.info(f"Thread finished for {execution_id}")
                 return True  # Cancelled successfully
             # Otherwise check if executor was cleared (backward compatibility)
-            executor = self._active_executor
-            if executor is None or executor.execution_id != execution_id:
+            active_id = getattr(self._active_executor, "execution_id", None)
+            if active_id != execution_id:
                 return True  # Cancelled successfully
 
             await asyncio.sleep(0.01)  # Check every 10ms
@@ -520,7 +524,8 @@ class SubprocessWorker:
 
                 elif msg_type == "cancel" or message.type == MessageType.CANCEL:
                     # Handle cancellation request
-                    cancel_msg = message  # type: ignore
+                    from typing import cast
+                    cancel_msg = cast(CancelMessage, message)
                     logger.info(
                         "Cancel requested",
                         execution_id=cancel_msg.execution_id,
@@ -544,7 +549,8 @@ class SubprocessWorker:
 
                 elif msg_type == "interrupt" or message.type == MessageType.INTERRUPT:
                     # Handle interrupt request (immediate)
-                    interrupt_msg = message  # type: ignore
+                    from typing import cast
+                    interrupt_msg = cast(InterruptMessage, message)
                     logger.info(
                         "Interrupt requested",
                         execution_id=interrupt_msg.execution_id,
@@ -566,7 +572,8 @@ class SubprocessWorker:
                             break
 
                 elif msg_type == "shutdown" or message.type == MessageType.SHUTDOWN:
-                    shutdown_msg = message  # type: ignore
+                    from typing import cast
+                    shutdown_msg = cast(ShutdownMessage, message)
                     logger.info("Shutdown requested", reason=shutdown_msg.reason)
                     self._running = False
                     break

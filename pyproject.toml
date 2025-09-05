@@ -28,6 +28,8 @@ dev = [
     "ruff>=0.1.0",
     "black>=24.0.0",
     "resonate-sdk>=0.0.0",
+    "types-psutil",
+    "types-aiofiles",
 ]
 
 [build-system]
@@ -49,6 +51,16 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 check_untyped_defs = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["msgpack", "dill"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["resonate", "resonate.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.basedpyright]
 venvPath = "."
@@ -128,4 +140,7 @@ dev = [
     "pytest-timeout>=2.3.0",
     "pytest-xdist>=3.5.0",
     "resonate-sdk>=0.0.0",
+    "types-psutil",
+    "types-aiofiles",
+    "mypy>=1.17.1",
 ]

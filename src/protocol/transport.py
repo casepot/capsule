@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import struct
-from typing import Optional
+from typing import Optional, cast
 
 import msgpack
 import structlog
@@ -218,7 +218,8 @@ class MessageTransport:
 
         data: bytes
         if self._use_msgpack:
-            data = msgpack.packb(data_dict, use_bin_type=True)
+            # msgpack lacks precise type hints; cast to bytes for type checkers
+            data = cast(bytes, msgpack.packb(data_dict, use_bin_type=True))
         else:
             data = json.dumps(data_dict).encode("utf-8")
 

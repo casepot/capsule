@@ -63,7 +63,7 @@ def _create_cancel_tracer(
     event_count = 0
     checked_count = 0
 
-    def tracer(frame: Any, event: str, arg: Any) -> Any:  # type: ignore[misc]
+    def tracer(frame: Any, event: str, arg: Any) -> Any:
         nonlocal event_count, checked_count
 
         # ALWAYS return the tracer to ensure it's installed in new frames
@@ -141,8 +141,7 @@ class ThreadSafeOutput:
 
     def write(self, data: str) -> int:
         """Write data to queue with proper line handling."""
-        if not isinstance(data, str):
-            data = str(data)
+        data = str(data)
 
         self._buffer += data
 
@@ -566,13 +565,14 @@ class ThreadedExecutor:
             # Set tracer for the current thread
             # This is required for the tracer to work in exec/eval frames
             sys.settrace(tracer)
-        monitoring_id = None
+        # monitoring_id reserved for future tracing hook
 
         try:
             # Only create protocol input if not already overridden
             if "input" not in self._namespace or not callable(self._namespace.get("input")):
+                from typing import cast
                 protocol_input = self.create_protocol_input()
-                builtins.input = protocol_input
+                builtins.input = cast(Any, protocol_input)
                 self._namespace["input"] = protocol_input
 
                 # Also override in builtins dict if present

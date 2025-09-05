@@ -36,4 +36,4 @@ class InputCapability:
             data = json.loads(result)
         except Exception:
             return ""
-        return data.get("input", "")
+        return str(data.get("input", ""))

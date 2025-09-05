@@ -70,7 +70,7 @@ class SessionPool:
                 self._config.recycle_after_executions = recycle_after_executions
         self._idle_sessions: asyncio.Queue[Session] = asyncio.Queue()
         self._active_sessions: Set[Session] = set()
-        self._all_sessions: Dict[str, Session] = {}
+        self._all_sessions: Dict[str, Session | None] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
         self._warmup_needed = asyncio.Event()  # Event-driven warmup trigger

@@ -36,7 +36,7 @@ class ResonateProtocolBridge:
         execution_id: str,
         message: Message,
         timeout: float | None = None,
-    ):
+    ) -> Any:
         """Create a durable promise and send a protocol message.
 
         TODO(correlation): Standardize promise id formats and correlation rules per

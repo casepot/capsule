@@ -7,7 +7,7 @@ bridge, and HITL input capability using the in-repo DI factory. This module
 REQUIRES the real Resonate SDK (no stub fallback).
 """
 
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from .resonate_functions import register_executor_functions
 from .resonate_bridge import ResonateProtocolBridge
@@ -28,7 +28,7 @@ def initialize_resonate_local(transport: Any, resonate: Optional[Any] = None) ->
         Resonate-like instance with functions and dependencies registered.
     """
     if resonate is None:
-        from resonate import Resonate  # type: ignore
+        from resonate import Resonate
 
         resonate = Resonate.local()
 

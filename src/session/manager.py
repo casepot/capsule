@@ -13,10 +13,12 @@ import structlog
 from ..protocol.messages import (
     CancelMessage,
     ExecuteMessage,
+    HeartbeatMessage,
     InputResponseMessage,
     InterruptMessage,
     Message,
     MessageType,
+    ReadyMessage,
     ShutdownMessage,
 )
 from ..protocol.transport import PipeTransport
@@ -185,7 +187,8 @@ class Session:
 
                 # Handle different message types
                 if message.type == "ready":
-                    ready_msg = message  # type: ignore
+                    from typing import cast
+                    ready_msg = cast(ReadyMessage, message)
                     logger.debug(
                         "Received ready message",
                         session_id=self.session_id,
@@ -194,7 +197,8 @@ class Session:
                     self._ready_event.set()
 
                 elif message.type == "heartbeat":
-                    heartbeat = message  # type: ignore
+                    from typing import cast
+                    heartbeat = cast(HeartbeatMessage, message)
                     self._info.memory_usage = heartbeat.memory_usage
                     self._info.cpu_percent = heartbeat.cpu_percent
 
@@ -266,7 +270,7 @@ class Session:
                     if remaining <= 0:
                         raise asyncio.TimeoutError("Execution timeout")
 
-                    done, pending = await asyncio.wait(
+                    done, _pending = await asyncio.wait(
                         {queue_get, cancel_wait},
                         timeout=remaining,
                         return_when=asyncio.FIRST_COMPLETED,
