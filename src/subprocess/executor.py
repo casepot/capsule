@@ -592,14 +592,38 @@ class ThreadedExecutor:
                 # The subprocess isolation provides the primary security boundary.
                 compiled = compile(code, "<session>", "eval", dont_inherit=False, optimize=0)
                 self._result = eval(compiled, self._namespace, self._namespace)
+                # Record last expression result for REPL underscore semantics
+                if self._result is not None:
+                    try:
+                        self._namespace['_'] = self._result
+                    except Exception:
+                        pass
             else:
-                # Statements: execute without result capture
+                # Statements: execute; attempt to capture value of a trailing expression
                 logger.info(f"Executing statements for {self._execution_id}")
                 # CRITICAL: dont_inherit=False is REQUIRED for cooperative cancellation
                 # See comment above for eval() - same rationale applies for exec()
                 compiled = compile(code, "<session>", "exec", dont_inherit=False, optimize=0)
                 exec(compiled, self._namespace, self._namespace)
                 logger.info(f"Execution completed for {self._execution_id}")
+
+                # Best-effort result capture: if the last AST node is an expression,
+                # evaluate it in the same namespace to produce a result value for REPL UX.
+                try:
+                    tree = ast.parse(code, mode="exec")
+                    if tree.body and isinstance(tree.body[-1], ast.Expr):
+                        last_expr = tree.body[-1].value
+                        expr_code = ast.Expression(last_expr)
+                        compiled_expr = compile(expr_code, "<session>:$result", "eval", dont_inherit=False, optimize=0)
+                        self._result = eval(compiled_expr, self._namespace, self._namespace)
+                        if self._result is not None:
+                            try:
+                                self._namespace['_'] = self._result
+                            except Exception:
+                                pass
+                except Exception:
+                    # Ignore capture failures; keep None result
+                    pass
                 
         except KeyboardInterrupt as e:
             # Handle cancellation - store as error for async context
@@ -611,6 +635,13 @@ class ThreadedExecutor:
             self._error = e
             # Print traceback to stderr so it streams
             traceback.print_exc(file=sys.stderr)
+        except BaseException as e:
+            # Handle non-Exception base errors like SystemExit
+            self._error = e
+            try:
+                traceback.print_exc(file=sys.stderr)
+            except Exception:
+                print(f"{type(e).__name__}: {e}", file=original_stderr)
             
         finally:
             # Clear trace function

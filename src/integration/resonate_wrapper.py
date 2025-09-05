@@ -66,6 +66,10 @@ def async_executor_factory(
         if tla_timeout is not None
         else getattr(getattr(ctx, "config", None), "tla_timeout", 30.0)
     )
+    # TODO(loop-ownership): Ensure the executor receives the loop that owns the
+    # transport. The durable layer must not create or run event loops; if a sync
+    # submit() facade is needed for ctx.lfc, implement it by posting to this loop
+    # (e.g., run_coroutine_threadsafe) rather than creating a new one.
     return AsyncExecutor(
         namespace_manager=ns,
         transport=transport,

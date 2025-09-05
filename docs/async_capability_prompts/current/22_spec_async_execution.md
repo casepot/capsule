@@ -10,6 +10,8 @@
 
 This specification defines the AsyncExecutor implementation for PyREPL3, providing top-level await support without IPython dependencies. The system leverages the `PyCF_ALLOW_TOP_LEVEL_AWAIT` compile flag (0x2000) to enable native async/await syntax at the module level, with automatic execution mode detection and AST transformation fallback mechanisms.
 
+Promise‑first integration: The durable layer MUST prefer promise flows (`ctx.promise` + Protocol Bridge) for async work. Durable functions MUST NOT create or manage event loops; the executor/transport own a single loop per session.
+
 ## Technical Foundation
 
 ### Core Discovery: PyCF_ALLOW_TOP_LEVEL_AWAIT
@@ -119,13 +121,11 @@ class AsyncExecutor:
         self.execution_id = execution_id
         
         # Event loop management
-        try:
-            self.loop = asyncio.get_running_loop()
-            self.owns_loop = False
-        except RuntimeError:
-            self.loop = asyncio.new_event_loop()
-            self.owns_loop = True
-            asyncio.set_event_loop(self.loop)
+        # SINGLE LOOP RULE: The session owns exactly one event loop used by
+        # executor + transport. Upper layers MUST NOT create or run loops.
+        # The loop is provided by the session/transport binding.
+        self.loop = asyncio.get_running_loop()
+        self.owns_loop = False
             
         # Coroutine tracking for cleanup
         self._pending_coroutines: Set[weakref.ref] = set()

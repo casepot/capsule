@@ -313,7 +313,8 @@ class Session:
         Yields:
             Messages from execution (output, result, error)
         """
-        if self._state not in [SessionState.READY, SessionState.IDLE, SessionState.WARMING]:
+        # Allow calls while BUSY; calls will serialize on the internal lock.
+        if self._state in [SessionState.TERMINATED, SessionState.SHUTTING_DOWN, SessionState.ERROR, SessionState.CREATING]:
             raise RuntimeError(f"Cannot execute in state {self._state}")
         
         if not self._transport:
@@ -384,7 +385,9 @@ class Session:
                 del self._message_handlers[queue_key]
             
             async with self._lock:
-                self._state = SessionState.IDLE
+                # After an execution completes, return to READY state
+                # READY represents an available, initialized session in this test suite
+                self._state = SessionState.READY
     
     async def send_message(self, message: Message) -> None:
         """Send a message to the subprocess.
