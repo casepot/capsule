@@ -219,3 +219,5 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Resonate SDK documentation (reference only)
+resonate-sdk-docs.md
