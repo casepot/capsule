@@ -10,7 +10,7 @@
 
 Next steps (Phase 2 preview):
 - Address integration failures (worker last‑expression result delivery, large output handling, checkpoint create/restore, concurrent executions, transport backpressure/drain ordering).
-- Audit event loop lifecycle in session/worker components.
+- Enforce single‑loop ownership (executor/transport); remove any loop‑spinning in durable functions.
 - Add configurability + telemetry for blocking I/O detection.
 - Add perf guardrails (TLA latency micro‑benchmarks) and documentation polish for DI usage.
 
@@ -54,22 +54,22 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 ### PR: resonate-integration (Phase 2)
 
 - Deliverables:
-  - Durable function `durable_execute(ctx, args)` that routes to AsyncExecutor, with pre/post checkpoints and DI-driven configuration.
-  - `ResonateProtocolBridge` that maps protocol request/response to durable promises.
+  - Promise‑first durable function `durable_execute(ctx, args)`: create promise → send Execute over `ResonateProtocolBridge` → `yield` promise → return result. Checkpoints optional until SDK exposes Context API.
+  - `ResonateProtocolBridge` that maps protocol request/response to durable promises with deterministic correlation.
   - Minimal HITL `InputCapability` using durable promises (create, wait, resolve) with transport message correlation.
-  - Local/remote init adapters (local stub acceptable for tests) with DI graph registration.
+  - Local/remote init adapters (real SDK required) with DI graph registration and explicit single‑loop ownership notes.
 - Integration Stabilization Tasks:
   - Worker/session last-expression result delivery (ensure `ResultMessage.value` semantics are consistent for multi-line cells).
   - Large output/message chunking and drain ordering under backpressure.
   - Checkpoint create/restore validation and state consistency.
   - Event loop lifecycle audit (bind asyncio primitives to correct loop; avoid cross-loop usage).
 - Acceptance Criteria:
-  - Local-mode durable execution works end-to-end (no server) with promises and HITL flows in tests.
-  - Integration tests covering result delivery, checkpointing, and large message handling pass.
+  - Local‑mode durable execution works end‑to‑end (no server) using promise‑first flows; HITL round‑trips work via bridge + promise.
+  - Output ordering preserved (outputs precede Result resolution for same execution).
   - Configurable timeouts propagate through durable functions and promises.
 - Test Plan:
-  - Unit: DI graph, durable function wrapper, protocol bridge promise roundtrips, HITL capability request/response, error/timeout propagation with `add_note` context.
-  - Integration (local): durable execute run/rpc, promise resolution, input flow; checkpoint flow smoke tests.
+  - Unit: DI graph, durable function (promise‑first template), protocol bridge promise roundtrips and pending cleanup, HITL capability request/response including invalid JSON handling, error/timeout propagation with `add_note` context, checkpoint/restore minimal fields validation.
+  - Integration (local): durable execute promise resolution, input flow; output‑before‑result ordering; single‑loop invariant checks.
   - Remote: mocked interface parity (no real network required for Phase 2).
 - Dependencies:
   - AsyncExecutor core (Phase 1) merged.
@@ -241,6 +241,32 @@ Worker → Async Adapter → ThreadedExecutor (for blocking I/O)
   - Line 83: `self._cancel_event = asyncio.Event()`
 - **Spec Guidance**: `docs/async_capability_prompts/current/22_spec_async_execution.md:123-128`
   - "DO NOT create new event loop - use existing"
+
+## Resonate SDK Alignment & Key Learnings (2025‑09‑05)
+
+- Environment: Python 3.13 (uv), `resonate-sdk==0.6.3` (latest as of this date).
+- Context API:
+  - `ctx.lfc` is synchronous and expects a regular (sync) function. Do not pass async callables.
+  - `ctx.lfi` returns a promise for async invocation; `yield` the promise to resume.
+  - `ctx.promise` is the preferred pattern for async/HITL durable flows.
+  - `checkpoint` is not exposed on Context in 0.6.x; use promises/dependencies to persist state until available.
+- Registration: `@resonate.register(name=..., version=int)` — version is an integer.
+- Architectural Implication: Promise‑first is required to avoid loop‑crossing hazards and to align with resilient, recoverable execution. The executor/transport own the loop; durable functions do not.
+
+### Migration Decisions
+
+1) Short term (local mode):
+   - If a sync facade is unavoidable, submit coroutines to the executor's loop via `asyncio.run_coroutine_threadsafe` and block on `.result()`; never create a new event loop in the durable layer.
+2) Long term (spec‑aligned):
+   - Move `durable_execute` to promise‑first using `ctx.promise` + `ResonateProtocolBridge` to send Execute and yield the promise for Result.
+   - Extend the bridge with deterministic correlation for Execute/Result/Error and Inputs.
+   - Enforce the single‑loop invariant across session/executor/transport.
+
+### Anti‑Patterns (Do Not Do)
+
+- Creating event loops inside durable functions (`new_event_loop`, `run_until_complete`).
+- Passing `async def` callables to `ctx.lfc`.
+- Rebinding transport/executor to multiple loops.
 
 ## Prioritized Fix Plan
 

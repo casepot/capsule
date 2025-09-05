@@ -59,39 +59,30 @@ resonate = Resonate.remote(host="resonate-server")
 
 ## Core Components Integration
 
+### Promise‑First Durable Flow (Required)
+
+Durable functions SHOULD create a promise, send a protocol request via the bridge, then yield the promise. Do not spin up event loops or pass async callables to `ctx.lfc`.
+
 ### 1. AsyncExecutor with Resonate
 
 **Current Challenge**: Need durability for long-running executions with top-level await
 
-**Resonate Solution**:
+**Resonate Solution (Promise‑First)**:
 ```python
 @resonate.register
 def durable_execute(ctx, args):
-    """Execute code with automatic recovery."""
     code = args['code']
     execution_id = args['execution_id']
-    namespace = args.get('namespace', {})
-    
-    # Analyze code to determine execution mode
-    analysis = analyze_code(code)
-    
-    if analysis.has_top_level_await:
-        # Resonate handles async context
-        result = yield ctx.lfc(execute_async_with_await, {
-            'code': code,
-            'namespace': namespace,
-            'flags': PyCF_ALLOW_TOP_LEVEL_AWAIT
-        })
-    elif analysis.needs_blocking_io:
-        # Resonate automatically uses thread pool
-        result = yield ctx.lfc(execute_in_thread, {
-            'code': code,
-            'namespace': namespace
-        })
-    else:
-        # Simple sync execution
-        result = execute_sync(code, namespace)
-    
+    bridge = ctx.get_dependency('protocol_bridge')
+
+    # Create durable promise
+    promise = yield ctx.promise(id=f"exec:{execution_id}")
+
+    # Send execute request; bridge resolves the promise on response
+    yield bridge.send_request('execute', execution_id, ExecuteMessage(...), timeout=30.0)
+
+    # Wait for durable result
+    result = yield promise
     return result
 
 # Usage with automatic recovery
@@ -205,7 +196,7 @@ def execute_with_input(ctx, args):
     return user_input['data']
 ```
 
-### 4. HITL (Human-In-The-Loop) Workflows
+### 4. HITL (Human-In-The-Loop) Workflows (Promise‑Driven)
 
 **Current Challenge**: Blocking for user input without freezing execution
 
@@ -297,15 +288,7 @@ def initialize_resonate_remote(
 ## Migration Path
 
 ### Step 1: Wrap Existing Code
-```python
-# Start by wrapping existing executor
-@resonate.register
-def wrapped_executor(ctx, args):
-    # Call existing ThreadedExecutor or AsyncExecutor
-    executor = AsyncExecutor(namespace, transport, args['execution_id'])
-    result = asyncio.run(executor.execute(args['code']))
-    return result
-```
+Prefer a temporary sync facade that posts work to the executor’s loop via `run_coroutine_threadsafe` if a sync `lfc` path is unavoidable. Do NOT create new event loops inside durable functions.
 
 ### Step 2: Gradually Adopt Features
 ```python
@@ -327,6 +310,12 @@ def durable_file_operation(ctx, args):
 - Use Resonate dependencies for all capabilities
 - Leverage HITL for all user interactions
 - Enable distributed execution across workers
+
+## Anti‑Patterns (Do Not Do)
+
+- Spinning up event loops inside durable functions (`asyncio.new_event_loop()`, `run_until_complete`)
+- Passing `async def` callables to `ctx.lfc` (use `ctx.lfi` or promise‑first)
+- Rebinding transport/executor to multiple loops
 
 ## Benefits Summary
 

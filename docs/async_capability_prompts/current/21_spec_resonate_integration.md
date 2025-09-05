@@ -149,8 +149,8 @@ def _register_durable_functions(resonate: Resonate):
         Context provides:
         - ctx.resonate: Resonate instance
         - ctx.get_dependency(): Access registered dependencies
-        - ctx.lfc(): Call other durable functions
-        - ctx.promise(): Create/wait for promises
+        - ctx.promise(): Create/wait for promises (preferred for async)
+        - ctx.lfc(): Call other durable functions (sync callables only)
         """
         code = args['code']
         execution_id = args['execution_id']
@@ -160,25 +160,21 @@ def _register_durable_functions(resonate: Resonate):
         executor = ctx.get_dependency("async_executor")
         namespace_manager = ctx.get_dependency("namespace_manager")
         
-        # Checkpoint before execution
-        yield ctx.checkpoint("pre_execution", {
-            "code": code,
-            "namespace_snapshot": namespace
-        })
+        # Promise-first execution (avoids loop-spinning in durable layer)
+        bridge = ctx.get_dependency("protocol_bridge")
+        promise_id = f"exec:{execution_id}:{uuid.uuid4()}"
+        promise = yield ctx.promise(id=promise_id)
         
-        # Execute with automatic recovery
-        result = yield ctx.lfc(executor.execute, {
-            "code": code,
-            "namespace": namespace,
-            "execution_id": execution_id
-        })
+        # Send execute request via protocol bridge
+        yield bridge.send_request(
+            capability_id="execute",
+            execution_id=execution_id,
+            message=ExecuteMessage(...),  # include code, ids per protocol
+            timeout=ctx.config.get("tla_timeout", 30.0) if hasattr(ctx, "config") else 30.0,
+        )
         
-        # Persist namespace state
-        yield ctx.lfc(namespace_manager.persist, {
-            "execution_id": execution_id,
-            "namespace": result.get("namespace", {})
-        })
-        
+        # Wait for durable result
+        result = yield promise
         return result
 
     @resonate.register(
