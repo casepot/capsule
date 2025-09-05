@@ -1,190 +1,47 @@
-# AGENTS.md
+# Repository Guidelines
 
-This file provides guidance to AI agents and coding assistants when working with code in this repository.
+Capsule is a Python execution environment implementing a Subprocess‑Isolated Execution Service (SIES). This guide summarizes how to work effectively in this repo during the transition from ThreadedExecutor to AsyncExecutor.
 
-## Project Overview
+## Project Structure & Module Organization
+- `src/`: library code
+  - `src/subprocess/`: executors (`ThreadedExecutor`, `AsyncExecutor` skeleton), `worker.py`
+  - `src/session/`: `Session`, `SessionPool`, manager utilities
+  - `src/protocol/`: message models, framing, transports
+- `tests/`: `unit/`, `integration/`, `e2e/`, `fixtures/`
+- `docs/async_capability_prompts/current/`: key specs and implementation notes
 
-Capsule is a Python execution environment implementing a **Subprocess-Isolated Execution Service (SIES)** pattern. It provides async-first code execution with automatic recovery and distributed orchestration through Resonate SDK integration.
-
-**Current State**: Transitioning from ThreadedExecutor to AsyncExecutor architecture (v0.4.0-alpha). Both patterns are acceptable during this transition.
-
-## Development Commands
-
+## Build, Test, and Development Commands
+Note: The project `.venv/` already exists; `uv sync` and `uv run` use it automatically. Activation is optional for editor tooling: `source .venv/bin/activate`.
 ```bash
-# Install for development
-pip install -e .[dev]
-
-# Run all tests
-pytest
-
-# Run specific test file
-pytest tests/unit/test_executor.py
-
-# Run specific test
-pytest tests/unit/test_executor.py::TestThreadedExecutor::test_simple_execution
-
-# Run test categories
-pytest -m unit          # Fast unit tests  
-pytest -m integration   # Integration tests
-pytest -m e2e          # End-to-end tests
-
-# Run tests with coverage
-pytest --cov=src --cov-report=term-missing
-
-# Type checking
-mypy src/
-basedpyright src/
-
-# Linting and formatting
-ruff check src/
-black src/
-ruff format src/
-
-# Run tests with timeout protection
-pytest --timeout=30
+uv sync                                   # install/sync dependencies
+uv run pytest                             # run all tests
+uv run pytest -m unit|integration|e2e     # run by marker
+uv run pytest --cov=src --cov-report=term-missing  # coverage (term)
+uv run pytest -n auto                     # parallel tests
+uv run mypy src/ && uv run basedpyright src/       # type checks
+uv run ruff check src/ && uv run black src/ && uv run ruff format src/  # lint/format
+uv run pytest --timeout=30                # guard long tests
 ```
 
-## Architecture Overview
+## Coding Style & Naming Conventions
+- Python 3.11+, 4‑space indent, type hints for public APIs.
+- Names: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE`.
+- Formatting: `black`; Lint: `ruff` (follow its import and style rules).
+- Namespace rule: never replace dicts; always merge: `self._namespace.update(new)`; preserve `ENGINE_INTERNALS`.
+- Event loop: set/get the loop before creating asyncio objects; coordinate threads via `call_soon_threadsafe`.
 
-### Three-Layer Architecture
+## Testing Guidelines
+- Framework: `pytest` with markers (`unit`, `integration`, `e2e`).
+- File naming: `tests/.../test_*.py`; focus tests near the code they validate.
+- During transition, expose an async interface (async wrapper over `ThreadedExecutor` as needed).
+- Protocol fields must be present (e.g., `ResultMessage.execution_time`; heartbeat metrics).
 
-```
-Application Layer (Future: Resonate SDK)
-├── Durable Functions (planned)
-├── Promise Management (transitioning)
-└── Dependency Injection (planned)
+## Commit & Pull Request Guidelines
+- Use Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`; scope optional (e.g., `feat(executor): add async wrapper`).
+- Subject in imperative mood, ≤72 chars; include context in body and breaking changes under `BREAKING CHANGE:`.
+- PRs: clear description, linked issues, tests/fixtures updated, docs touched when behavior changes; ensure lint, type checks, and tests pass.
 
-Execution Layer 
-├── ThreadedExecutor (current, for blocking I/O)
-├── AsyncExecutor (implementing, for async/await)
-└── NamespaceManager (merge-only policy)
-
-Protocol Layer
-├── MessageTransport (PipeTransport implementation)
-├── Framing (4-byte length prefix + payload)
-└── Messages (Pydantic models with MessagePack/JSON)
-```
-
-### Core Components
-
-**Session Management** (`src/session/`):
-- `Session`: Individual subprocess with persistent namespace
-- `SessionPool`: Pre-warmed sessions for <100ms acquisition
-- State transitions: CREATED → STARTING → IDLE/READY → BUSY → TERMINATED
-
-**Execution** (`src/subprocess/`):
-- `ThreadedExecutor`: Current implementation, runs user code in threads
-- `AsyncExecutor`: Future implementation with execution mode routing
-- `worker.py`: Main subprocess entry point
-
-**Protocol** (`src/protocol/`):
-- Binary framing with 4-byte length prefix
-- Message types: Execute, Output, Input, Result, Error, Heartbeat
-- Correlation via execution_id and message-specific IDs
-
-### Critical Architectural Rules
-
-1. **Namespace Management - NEVER REPLACE, ALWAYS MERGE**
-   ```python
-   # ❌ WRONG - Causes KeyError
-   self._namespace = new_namespace
-   
-   # ✅ CORRECT - Preserves engine internals
-   self._namespace.update(new_namespace)
-   ```
-
-2. **Event Loop Management**
-   - Get/set loop BEFORE creating asyncio objects
-   - All asyncio objects in a session must use same loop
-   - ThreadedExecutor coordinates with main loop via `call_soon_threadsafe`
-
-3. **Execution Mode Detection (Future)**
-   - TOP_LEVEL_AWAIT: Use PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000
-   - ASYNC_DEF: AsyncExecutor
-   - BLOCKING_SYNC: ThreadedExecutor  
-   - SIMPLE_SYNC: Direct execution
-
-## Current Transition Work
-
-The codebase is transitioning from ThreadedExecutor to AsyncExecutor. Key files being modified:
-
-### Phase 0 (Immediate Fixes)
-- `src/subprocess/executor.py`: Add async wrapper to ThreadedExecutor
-- `src/subprocess/worker.py`: Fix ResultMessage to include execution_time
-- `src/subprocess/namespace.py`: Implement merge-only policy
-- `src/session/manager.py`: Fix event loop management
-
-### Phase 1 (Foundation)
-- Create `src/subprocess/async_executor.py`: AsyncExecutor skeleton
-- Update namespace management with ENGINE_INTERNALS protection
-- Fix asyncio object creation order
-
-### Phase 2 (Bridge Architecture)
-- Add execution mode routing
-- Create promise abstraction layer (pre-Resonate)
-- Implement capability base classes
-
-## Message Protocol Requirements
-
-All messages must include required fields:
-- `ResultMessage`: Must include `execution_time`
-- `HeartbeatMessage`: Must include `memory_usage`, `cpu_percent`, `namespace_size`
-- `CheckpointMessage`: Must include all data fields when present
-
-Correlation patterns:
-- `ExecuteMessage.id` → `execution_id` for all related messages
-- `InputMessage.id` → `InputResponseMessage.input_id`
-
-## Testing Patterns
-
-Tests expect AsyncExecutor interface. During transition:
-- Provide async wrappers for ThreadedExecutor
-- Fix Pydantic validation by providing all required fields
-- Handle event loop binding issues in fixtures
-- Session reuse is mandatory (new Session() needs justification)
-
-Test organization:
-- `tests/unit/`: Component tests
-- `tests/integration/`: Cross-component tests
-- `tests/features/`: Feature-specific tests
-- `tests/e2e/`: Full system tests
-- `tests/fixtures/`: Shared test fixtures
-
-## Key Specifications
-
-Important specification documents in `docs/async_capability_prompts/current/`:
-- `00_foundation_resonate.md`: Resonate SDK integration vision
-- `10_prompt_async_executor.md`: AsyncExecutor implementation guide
-- `22_spec_async_execution.md`: Execution mode detection and routing
-- `24_spec_namespace_management.md`: Namespace merge-only policy
-
-## Performance Targets
-
-- Simple expression: <5ms
-- Session acquisition (warm): <100ms  
-- Output streaming latency: <10ms
-- Local mode Resonate overhead: <5%
-- Concurrent sessions: 100+ per manager
-
-## Security Considerations
-
-- Subprocess isolation for each session
-- Capability-based security (future)
-- Resource limits: 512MB memory, 30s timeout, 100 FDs per session
-- Never use `dont_inherit=True` in compile() - breaks cancellation
-
-## Common Pitfalls
-
-1. **Replacing namespace dict**: Always merge, never replace
-2. **Creating asyncio objects before setting loop**: Set loop first
-3. **Missing message fields**: Check Pydantic model requirements
-4. **Not handling InputMessage in tests**: Must respond with correct correlation ID
-5. **Session state assumptions**: Check state before operations
-
-## Debugging Tips
-
-- Enable structlog debug output for protocol messages
-- Use `pytest -vv` for verbose test output
-- Check event loop binding with `asyncio.get_running_loop()`
-- Monitor subprocess lifecycle via HeartbeatMessage
-- Verify namespace preservation with ENGINE_INTERNALS keys
+## Security & Configuration Tips
+- Each `Session` runs isolated; respect limits (≈512MB memory, 30s timeout, ~100 FDs).
+- Do not use `dont_inherit=True` in `compile()` (cancellation breaks).
+- Maintain message correlation IDs and merge‑only namespace policy.

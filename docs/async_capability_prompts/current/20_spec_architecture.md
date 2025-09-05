@@ -255,7 +255,7 @@ self._namespace.update(new_namespace)
 ```
 
 ### 2. PyCF_ALLOW_TOP_LEVEL_AWAIT Flag Usage
-**Decision:** Use compile flag 0x1000000 for top-level await support.
+**Decision:** Use compile flag 0x2000 for top-level await support.
 
 **Rationale:**
 - Avoids IPython dependency complexity

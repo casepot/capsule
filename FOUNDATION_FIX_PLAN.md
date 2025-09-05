@@ -1,7 +1,242 @@
 # Foundation Fix Plan: Building Solid Ground Before Full Spec Implementation
 
+> Status Update (2025-09-05)
+
+- Phase 0: COMPLETE — Emergency fixes
+- Phase 1: COMPLETE — AsyncExecutor core with TLA, AST fallback, routing, blocking I/O detection, DI factory
+- Phase 1b: IN PROGRESS — AsyncExecutor refinements (namespace binding fixed, enhanced detection, configurability, telemetry, compile flags)
+- Phase 2a: COMPLETE — Resonate vertical slice (experimental proof-of-concept)
+- Phase 2b: TODO — Promise-first refinement
+- Phase 2c: TODO — Integration stabilization
+- Phase 3-6: TODO — Full implementation (~3-4 weeks to production)
+
+**Current PR #11 Status**: Phase 1 + Phase 2a vertical slice
+- Unit tests: 124/129 passing (XPASS resolved for namespace binding; 2 skipped)
+- Integration tests: 28/30 passing (2 failing in checkpoint/worker lifecycle)
+- Notable: Using ctx.lfc workaround (not promise-first), minimal capabilities, local-only
+
+Next steps (Phase 2 preview):
+- Address integration failures (worker last‑expression result delivery, large output handling, checkpoint create/restore, concurrent executions, transport backpressure/drain ordering).
+- Enforce single‑loop ownership (executor/transport); remove any loop‑spinning in durable functions.
+- Add configurability + telemetry for blocking I/O detection.
+- Add perf guardrails (TLA latency micro‑benchmarks) and documentation polish for DI usage.
+
+— The legacy status block below reflects the original plan context prior to this update.
+
 **STATUS**: Day 4+ Complete (Phase 0 Emergency Fixes + All PR Review ✅) | Test Pass Rate: 97.9% (94/96 unit tests)
 **BRANCH**: `fix/foundation-phase0-emergency-fixes` (Days 1-4 work, PR #10 ready to merge)
+
+## Updated Roadmap & PR Split (2025-09-05)
+
+This section supersedes older mixed notes below. It defines a clear split between the AsyncExecutor core and the Resonate integration.
+
+### Roadmap Summary (Updated)
+
+| Phase | Scope | Status | Timeline |
+| - | - | - | - |
+| Phase 0 | Emergency fixes: ThreadedExecutor async wrapper, protocol fixes, namespace merge-only | COMPLETE | ✅ |
+| Phase 1 | AsyncExecutor core: TLA + AST fallback, routing, blocking I/O detection, DI factory | COMPLETE | ✅ |
+| Phase 1b | AsyncExecutor refinements: namespace binding fixes, enhanced blocking I/O, caching | TODO | 2-3 days |
+| Phase 2a | Resonate vertical slice: basic durable_execute, minimal bridge, InputCapability | COMPLETE | ✅ |
+| Phase 2b | Promise-first refinement: ctx.promise pattern, complete protocol bridge | TODO | 2-3 days |
+| Phase 2c | Integration stabilization: worker/session fixes, checkpoint/restore | TODO | 2-3 days |
+| Phase 3 | Full AsyncExecutor: EventLoopCoordinator, CoroutineManager, Cancellation, true async | TODO | 3-4 days |
+| Phase 4 | Full capability system: File, Network, complete HITL, security policies | TODO | 3-4 days |
+| Phase 5 | Remote & production: server support, retry logic, MigrationAdapter | TODO | 3-4 days |
+| Phase 6 | Performance & observability: benchmarks, OpenTelemetry, metrics | TODO | 2-3 days |
+
+### PR: async-executor-core (Phase 1)
+
+- Deliverables:
+  - AsyncExecutor with top-level await (eval-first using `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000`), `CO_COROUTINE` detection, `asyncio.timeout(tla_timeout)`.
+  - AST fallback (def→async def, zero-arg lambda transform, conservative global hoisting) with locals-first merge and global-diff application.
+  - Routing and enhanced blocking I/O detection (alias-aware for time/requests/socket/os/pathlib, etc.).
+  - DI factory (`async_executor_factory`) and awaitable promise adapter.
+  - Unit CI workflow (`.github/workflows/unit-tests.yml`).
+- Non-goals (explicitly out of this PR): Resonate durable functions, protocol bridge, HITL workflows, remote orchestration, session/worker lifecycle fixes.
+- Acceptance Criteria:
+  - All unit tests for AsyncExecutor and related components pass; TLA semantics verified on direct and fallback paths; namespace merge-only policy preserved; configurable TLA timeout works.
+  - No namespace dict replacement anywhere; `ENGINE_INTERNALS` protected.
+  - CI runs unit tests on PRs (Python 3.11).
+- Test Plan:
+  - Unit: TLA expression and statements, AST fallback transformations, globals binding, result history, blocking I/O detection, timeout override.
+  - Integration: Not required for this PR (tracked for Phase 2).
+- Dependencies:
+  - None on Resonate SDK. Uses local DI only.
+- Status: COMPLETE. Core functionality implemented.
+
+### Phase 1b: AsyncExecutor Refinements (IN PROGRESS)
+
+- Deliverables:
+  - Namespace binding fixes COMPLETE (locals-first merge, then global diffs; live __globals__ under both paths)
+  - AST transform preserves module-level globals (simple global hoist) COMPLETE
+  - Enhanced blocking I/O detection (aliases + attribute chains including `time.sleep`, `requests.get/post`, `urllib.request.urlopen`, `socket.socket().recv/send/accept/connect`, `os.system`, `subprocess.run/Popen`, `pathlib.Path.read*/write*`, `open`) COMPLETE
+  - Configurable AST cache size via constructor/factory and env override (`ASYNC_EXECUTOR_AST_CACHE_SIZE`) COMPLETE
+  - Telemetry counters/logging knobs for detection COMPLETE
+  - Consider ThreadedExecutor pooling for performance (DOCUMENTED ONLY)
+  - Convert 3 XPASS tests to asserts COMPLETE
+- Acceptance Criteria:
+  - All namespace binding tests pass without XPASS (DONE)
+  - Blocking I/O detection catches common patterns (DONE)
+  - Configuration options exposed for cache size and detection modules (DONE)
+- Dependencies:
+  - Phase 1 completion
+- Status: IN PROGRESS. Unit suite green; integration unchanged (Phase 2 scope only).
+
+### Phase 2a: Resonate Vertical Slice (COMPLETE - Current PR #11)
+
+- Deliverables:
+  - Basic `durable_execute` function (using ctx.lfc workaround, NOT promise-first yet)
+  - Minimal `ResonateProtocolBridge` (only handles InputResponseMessage correlation)
+  - Single `InputCapability` implementation using promises
+  - Local-only initialization with DI wiring
+- Known Limitations:
+  - Using ctx.lfc synchronous wrapper instead of promise-first pattern
+  - Protocol bridge incomplete (no Execute/Result/Error correlation)
+  - Only one capability implemented (InputCapability)
+  - No remote mode support
+  - 2 integration tests failing (checkpoint/worker lifecycle)
+- Status: COMPLETE as experimental proof-of-concept. Production implementation in Phase 2b/2c.
+
+### Phase 2b: Promise-First Refinement (TODO)
+
+- Deliverables:
+  - Replace ctx.lfc with ctx.promise pattern (avoiding event loop hazards)
+  - Complete ResonateProtocolBridge with Execute/Result/Error correlation
+  - Fix event loop ownership issues (single-loop invariant)
+  - Resolve failing integration tests
+- Acceptance Criteria:
+  - No event loop creation in durable functions
+  - All protocol messages properly correlated via promises
+  - Integration tests passing
+- Dependencies:
+  - Phase 2a completion
+- Status: TODO. Critical for production Resonate integration.
+
+### Phase 2c: Integration Stabilization (TODO)
+
+- Deliverables:
+  - Worker/session last-expression result delivery 
+  - Large output/message chunking and drain ordering
+  - Checkpoint create/restore implementation
+  - Event loop lifecycle audit and fixes
+  - Concurrent execution safety
+- Acceptance Criteria:
+  - Local‑mode durable execution works end‑to‑end (no server) using promise‑first flows; HITL round‑trips work via bridge + promise.
+  - Output ordering preserved (outputs precede Result resolution for same execution).
+  - Configurable timeouts propagate through durable functions and promises.
+- Test Plan:
+  - Unit: DI graph, durable function (promise‑first template), protocol bridge promise roundtrips and pending cleanup, HITL capability request/response including invalid JSON handling, error/timeout propagation with `add_note` context, checkpoint/restore minimal fields validation.
+  - Integration (local): durable execute promise resolution, input flow; output‑before‑result ordering; single‑loop invariant checks.
+  - Remote: mocked interface parity (no real network required for Phase 2).
+- Dependencies:
+  - Phase 2b completion
+  - Stable transport framing
+- Status: TODO. Required for reliable execution.
+
+### Phase 3: Full AsyncExecutor Implementation (TODO)
+
+- Deliverables:
+  - EventLoopCoordinator class for proper event loop management
+  - Enhanced CoroutineManager with lifecycle tracking
+  - ExecutionCancellation support for interrupting executions
+  - ASTOptimizer for performance improvements
+  - True async execution (not delegation to ThreadedExecutor)
+  - Message queue for non-async contexts
+- Acceptance Criteria:
+  - AsyncExecutor handles all execution modes natively
+  - Proper coroutine cleanup and cancellation
+  - Event loop coordination without conflicts
+- Dependencies:
+  - Phase 1b completion
+- Status: TODO. Required for full async capabilities.
+
+### Phase 4: Full Capability System (TODO)
+
+- Deliverables:
+  - Complete capability implementations (File, Network, System, etc.)
+  - Security policy enforcement at capability level
+  - Complete HITL workflows with all interaction types
+  - Capability injection framework per spec
+- Acceptance Criteria:
+  - All capabilities from spec implemented
+  - Security boundaries enforced
+  - HITL workflows fully functional
+- Dependencies:
+  - Phase 2c and Phase 3 completion
+- Status: TODO. Required for complete functionality.
+
+### Phase 5: Remote Mode & Production (TODO)
+
+- Deliverables:
+  - Remote Resonate server support
+  - Connection management and retry logic
+  - MigrationAdapter for incremental adoption
+  - Production hardening (graceful degradation, circuit breakers)
+  - Resource limits enforcement
+- Acceptance Criteria:
+  - Works with remote Resonate server
+  - Handles network failures gracefully
+  - Production-ready reliability
+- Dependencies:
+  - Phase 4 completion
+- Status: TODO. Required for distributed deployment.
+
+### Phase 6: Performance & Observability (TODO)
+
+- Deliverables:
+  - Performance benchmarks and CI guards
+  - OpenTelemetry integration
+  - Metrics collection and reporting
+  - Structured logging throughout
+  - Configurable detection policies
+- Acceptance Criteria:
+  - Meets performance targets (<1ms local, <10ms remote)
+  - Full observability stack integrated
+  - CI enforces performance regression prevention
+- Dependencies:
+  - Phase 5 completion
+- Status: TODO. Required for production operations.
+
+### Work Breakdown & Order (Updated)
+
+**Current Status**: PR #11 ready to merge (Phase 1 + Phase 2a vertical slice)
+
+**Immediate Next Steps (Phase 1b - 2-3 days):**
+1) Fix namespace binding issues (global diffs after locals)
+2) Enhance blocking I/O detection (attribute chains)
+3) Make AST cache configurable
+4) Fix 3 XPASS tests
+
+**Promise-First Refinement (Phase 2b - 2-3 days):**
+5) Replace ctx.lfc with ctx.promise pattern
+6) Complete protocol bridge correlation
+7) Fix event loop ownership issues
+8) Resolve integration test failures
+
+**Integration Stabilization (Phase 2c - 2-3 days):**
+9) Worker/session robustness improvements
+10) Checkpoint/restore implementation
+11) Large output handling
+
+**Full Implementation (Phases 3-6 - 3-4 weeks):**
+12) Complete AsyncExecutor implementation
+13) Full capability system
+14) Remote mode support
+15) Performance and observability
+
+### Interfaces & Dependencies
+
+- AsyncExecutor Core → Resonate: No direct dependency. Exposed via DI factory; durable functions consume factory to instantiate per-execution executors.
+- Resonate Durable Functions → Worker/Transport: Durable functions call into AsyncExecutor; protocol messages still sent via transport; promises correlate responses to waiting code.
+- HITL → Transport: Input requests sent as protocol messages; results provided by promise resolution.
+
+### Risks & Mitigations (Phase 2)
+
+- Race conditions in session/worker under high output: add orderly drain and backpressure policies; validate with large message tests.
+- Event loop misbinding: audit initialization order; ensure all asyncio objects are bound to the active loop.
+- Promise timeouts and error context: adopt `asyncio.timeout()` consistently; ensure `add_note` context includes execution id/mode.
+
 
 ## Executive Summary
 
@@ -147,6 +382,32 @@ Worker → Async Adapter → ThreadedExecutor (for blocking I/O)
 - **Spec Guidance**: `docs/async_capability_prompts/current/22_spec_async_execution.md:123-128`
   - "DO NOT create new event loop - use existing"
 
+## Resonate SDK Alignment & Key Learnings (2025‑09‑05)
+
+- Environment: Python 3.13 (uv), `resonate-sdk==0.6.3` (latest as of this date).
+- Context API:
+  - `ctx.lfc` is synchronous and expects a regular (sync) function. Do not pass async callables.
+  - `ctx.lfi` returns a promise for async invocation; `yield` the promise to resume.
+  - `ctx.promise` is the preferred pattern for async/HITL durable flows.
+  - `checkpoint` is not exposed on Context in 0.6.x; use promises/dependencies to persist state until available.
+- Registration: `@resonate.register(name=..., version=int)` — version is an integer.
+- Architectural Implication: Promise‑first is required to avoid loop‑crossing hazards and to align with resilient, recoverable execution. The executor/transport own the loop; durable functions do not.
+
+### Migration Decisions
+
+1) Short term (local mode):
+   - If a sync facade is unavoidable, submit coroutines to the executor's loop via `asyncio.run_coroutine_threadsafe` and block on `.result()`; never create a new event loop in the durable layer.
+2) Long term (spec‑aligned):
+   - Move `durable_execute` to promise‑first using `ctx.promise` + `ResonateProtocolBridge` to send Execute and yield the promise for Result.
+   - Extend the bridge with deterministic correlation for Execute/Result/Error and Inputs.
+   - Enforce the single‑loop invariant across session/executor/transport.
+
+### Anti‑Patterns (Do Not Do)
+
+- Creating event loops inside durable functions (`new_event_loop`, `run_until_complete`).
+- Passing `async def` callables to `ctx.lfc`.
+- Rebinding transport/executor to multiple loops.
+
 ## Prioritized Fix Plan
 
 ### Phase 0: Emergency Fixes ✅ COMPLETED (Days 1-3)
@@ -232,7 +493,7 @@ msg = HeartbeatMessage(
 
 **Completed Implementation**:
 - ExecutionMode enum with 5 modes (TOP_LEVEL_AWAIT, ASYNC_DEF, BLOCKING_SYNC, SIMPLE_SYNC, UNKNOWN)
-- PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000 constant defined
+- PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000 constant defined
 - AST-based code analysis with recursive await detection
 - Blocking I/O detection (requests, urllib, socket, open, etc.)
 - Event loop management with ownership tracking
@@ -699,8 +960,85 @@ The foundation fixes are **essential** before implementing the full specs. We're
 
 The key is to **fix the basics first**, then **build the bridge**, and finally **implement the vision**.
 
+## PR #11 Triage (Immediate vs Phase 1)
+
+Context: Reviews for PR #11 (branch: `fix/foundation-phase1-resonate-wrapper`) surfaced one high‑severity correctness bug in `AsyncExecutor` plus a few medium/low items. Below is the disposition and how it maps to work now vs Phase 1.
+
+### Fix Now (Day 5 scope)
+- Correct globals binding for top‑level await (direct path): Use the live session namespace dict for `globals` when executing compiled code so any functions created bind their `__globals__` to the real, persistent mapping. Keep a separate `local_ns` to capture top‑level assignments for merge‑only updates.
+  - Code: `src/subprocess/async_executor.py` (replaced `self.namespace.namespace.copy()` with the live mapping and added explanatory comments)
+  - Rationale: Prevents functions from capturing a stale globals mapping and ensures `global` assignments persist across executions.
+- Correct globals binding for AST fallback path: Execute the transformed module with the real session namespace as `globals` so `__async_exec__` binds to the live mapping. Continue merging `locals()` back into the namespace.
+  - Code: `src/subprocess/async_executor.py` (same correction as above; added comments)
+  - Rationale: Aligns both paths with the merge‑only policy and prevents divergence between function `__globals__` and the session namespace.
+- Remove redundant `weakref` import inside method: Use the module‑level import to avoid redeclaration.
+  - Code: `src/subprocess/async_executor.py` (`_track_coroutine`)
+  - Rationale: Minor cleanliness; avoids confusion flagged in review.
+
+Notes
+- Tests: Add targeted tests in Phase 1 to validate that functions defined under both paths retain `__globals__` pointing at the live mapping and that subsequent executions see updated globals. Current suite lacks this coverage (as reviews noted).
+- Spec alignment: Changes are consistent with `24_spec_namespace_management.md` (merge‑only policy) and the PyCF top‑level await behavior noted in the PDF and `22_spec_async_execution.md`.
+
+### Phase 1 (Plan and implement)
+- Dependency Injection factory pattern: Replace error‑prone “get + initialize()” with a factory that yields fully initialized instances per execution context.
+  - Docs: Update `docs/async_capability_prompts/current/21_spec_resonate_integration.md` to show factory registration and access. Ensure AsyncExecutor, NamespaceManager, and transport instances have clear lifecycles.
+  - Code: Introduce DI hooks around the Resonate wrapper; remove any implicit singleton assumptions.
+- Resonate wrapper + promise adapter: Implement the wrapper pattern where Resonate drives durability while AsyncExecutor handles async/await natively. Provide an awaitable adapter over Resonate promises.
+  - Docs: `00_foundation_resonate.md`, `22_spec_async_execution.md`
+  - Code: Wrapper function(s) and `AwaitableResonatePromise` abstraction per spec.
+- Execution mode routing hardening: Finish routing logic and expand blocking‑I/O detection (attribute chains like `time.sleep`, `requests.get`, `socket.recv`). Add tests first to constrain false positives.
+  - Docs: `22_spec_async_execution.md`
+  - Code: Extend AST analysis to resolve `ast.Attribute` and imported name aliases.
+- Top‑level await AST fallback correctness:
+  - Add pre‑exec globals snapshot and apply post‑exec global diffs AFTER locals merge so global writes take precedence (fixes cases like `global g; g=...` being overwritten by wrapper locals).
+  - Adjust AST transform to preserve module‑level semantics for assigned names (emit `ast.Global` where safe) to avoid closure capture of names like `g` inside functions defined in the wrapper.
+  - Tests: New xfails in `tests/unit/test_async_executor_namespace_binding.py` capture these gaps; flip to passing once implemented.
+- Test/CI hygiene:
+  - Relax/mark flaky perf assertion in `tests/unit/test_top_level_await.py` (threshold <100ms). Prefer monotonic timers and a higher ceiling or mark as flaky for CI.
+  - Ensure CI runs unit tests on PRs (e.g., `pytest -m unit`).
+- Config hygiene: Remove or document `.reviewrc.json` “yolo” flag; default to safe behavior and document any local‑only toggles.
+- Compatibility note (AST args): The `ast.arguments` constructor differences for Python <3.8 were flagged in review. Our target is Python 3.11+; add an explicit note in code and docs. If we choose to support older versions later, add version‑guarded construction in Phase 1.
+
+### Key TODOs in Current Implementation
+
+**AsyncExecutor (`src/subprocess/async_executor.py`):**
+- Line 109-110: Make AST cache size configurable via constructor parameter
+- Line 248-252: Extend blocking I/O detection to handle attribute chains (`time.sleep()`, `requests.get()`)
+- Line 261-262: Make blocking I/O detection configurable, add telemetry
+- Line 394-395: Consider pooling ThreadedExecutor instances for performance
+- Line 575-576: Python <3.8 compatibility notes (current target is 3.11+)
+- Namespace binding fixes for AST fallback path (global diffs after locals)
+
+**Resonate Integration:**
+- `src/integration/resonate_functions.py:34-38`: Replace ctx.lfc with promise-first flow
+- `src/integration/resonate_bridge.py:42-46`: Standardize promise ID formats and correlation rules
+- `src/integration/resonate_bridge.py:90-93`: Add Execute/Result/Error correlation
+- `src/integration/resonate_functions.py:73-78`: Handle event loop ownership properly
+
+### Acceptance criteria updates
+- Immediate: Both top‑level await execution paths bind function `__globals__` to the live namespace mapping; namespace updates continue to use merge‑only policy; no namespace replacement anywhere.
+- Phase 1: DI refactor to factory pattern, Resonate wrapper + awaitable promises, expanded routing/detection, improved test/CI hygiene, and config cleanup.
+  - AST fallback: Global diffs applied after locals, no closure capture of would‑be globals for functions defined in fallback; new tests pass without xfail.
+
 ## Deferred Refinements (Phase 1 Planning)
 
 - Output drain-timeout suppression policy: Keep current suppression in tests, but in Phase 1 define a configurable policy (flag/env), warn once per execution, and track a small metric so production regressions are visible without destabilizing tests.
 - Blocking I/O detection breadth: Extend `AsyncExecutor._contains_blocking_io` to detect common attribute calls (e.g., `time.sleep`, `requests.get`, `socket.recv`). Add tests first to capture expected patterns and limit false positives.
 - FrameBuffer wakeups: Replace the fixed 10ms sleep in `FrameBuffer.get_frame()` with event/condition wakeups (consistent with `transport.FrameReader`) to reduce latency and CPU wakeups under load.
+
+## Phase 1 Test & CI Summary (2025-09-05)
+
+- Unit tests (uv): 111 passed, 2 skipped, 3 xpassed (expected transitions now passing).
+- New unit tests: TLA timeout override, globals binding under both TLA paths, AST fallback correctness, blocking I/O detection patterns.
+- CI: Added `.github/workflows/unit-tests.yml` to run unit tests on PRs/pushes with Python 3.11.
+
+## Outstanding Work for Phase 2
+
+- Session/Worker integration fixes (source of current integration failures):
+  - Last-expression result delivery for multi-line cells (ensure `ResultMessage.value` carries the last value consistently).
+  - Large output/message handling (chunking and drain ordering) under backpressure.
+  - Checkpoint create/restore pathways and state validation.
+  - Concurrency and lifecycle: robust cancellation, loop binding, and race conditions in session/worker.
+- Event loop lifecycle audit in session/worker: bind asyncio primitives to the correct loop and avoid cross-loop usage.
+- Blocking I/O detection: expose modules/methods via config; add counters/telemetry and structured logs around detections.
+- Performance: add micro-benchmarks and CI perf guardrails for TLA latency and output streaming.

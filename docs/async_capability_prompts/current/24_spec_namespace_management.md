@@ -10,6 +10,12 @@
 
 This specification defines the thread-safe, durable namespace management system for PyREPL3. The system ensures namespace persistence across async/sync execution contexts, maintains critical engine internals, and provides crash recovery through Resonate's promise-based storage. The most critical design principle is **NEVER replace the namespace dictionary** - always merge updates to prevent KeyError failures discovered during IPython integration attempts.
 
+### Python 3.11+ Features Utilized
+- **asyncio.timeout()** for cleaner timeout handling in async operations
+- **Exception.add_note()** for enriched error context
+- **TaskGroup** for structured concurrent namespace operations
+- **asyncio.to_thread()** for efficient sync-to-async adaptation
+
 ## Critical Design Principle
 
 ### The Golden Rule: Never Replace, Always Merge
@@ -68,6 +74,7 @@ import json
 import threading
 import weakref
 import time
+import asyncio
 from typing import Any, Dict, Set, Optional, List, Tuple
 from collections import deque
 from contextlib import contextmanager
@@ -285,6 +292,32 @@ class DurableNamespaceManager:
             yield self._namespace
         finally:
             self._namespace_lock.release()
+    
+    async def async_update_with_timeout(
+        self,
+        updates: Dict[str, Any],
+        timeout: float = 5.0
+    ) -> None:
+        """
+        Update namespace with timeout protection (Python 3.11+).
+        
+        Uses asyncio.timeout() for cleaner timeout handling.
+        """
+        import asyncio
+        
+        try:
+            async with asyncio.timeout(timeout):
+                # Perform update in async context
+                await asyncio.to_thread(
+                    self.update_namespace,
+                    updates,
+                    source_context='async'
+                )
+        except asyncio.TimeoutError as e:
+            # Add context using exception notes (Python 3.11+)
+            e.add_note(f"Namespace update timed out after {timeout} seconds")
+            e.add_note(f"Update size: {len(updates)} keys")
+            raise
 ```
 
 ### Namespace Updates (Critical Section)
@@ -760,6 +793,7 @@ class SynchronizedNamespaceManager(DurableNamespaceManager):
     Extended namespace manager with cross-context synchronization.
     
     Handles coordination between async event loop and thread pool.
+    Uses Python 3.11+ features for robust concurrent operations.
     """
     
     def __init__(self, *args, **kwargs):
@@ -1226,6 +1260,127 @@ class ConflictError(NamespaceError):
 class NamespaceFullError(NamespaceError):
     """Namespace size limit exceeded."""
     pass
+```
+
+## Modern Python 3.11+ Patterns
+
+### Structured Concurrency with TaskGroup
+
+```python
+class ConcurrentNamespaceManager(DurableNamespaceManager):
+    """Namespace manager with structured concurrent operations."""
+    
+    async def parallel_update_namespaces(
+        self,
+        namespace_updates: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply multiple namespace updates in parallel.
+        
+        Uses TaskGroup for structured concurrency (Python 3.11+).
+        All updates succeed or all fail together.
+        """
+        results = []
+        
+        async with asyncio.TaskGroup() as tg:
+            tasks = []
+            for updates in namespace_updates:
+                # Create task for each update
+                task = tg.create_task(
+                    asyncio.to_thread(
+                        self.update_namespace,
+                        updates,
+                        source_context='parallel'
+                    )
+                )
+                tasks.append(task)
+        
+        # All tasks completed successfully
+        return [task.result() for task in tasks]
+    
+    async def update_with_timeout(
+        self,
+        updates: Dict[str, Any],
+        timeout: float = 5.0
+    ) -> Dict[str, Any]:
+        """
+        Update namespace with timeout (Python 3.11+).
+        
+        Uses asyncio.timeout() for cleaner timeout handling.
+        """
+        try:
+            async with asyncio.timeout(timeout):
+                # Run update in thread to avoid blocking
+                result = await asyncio.to_thread(
+                    self.update_namespace,
+                    updates,
+                    source_context='async'
+                )
+                return result
+        except asyncio.TimeoutError as e:
+            # Enrich error with context (Python 3.11+)
+            e.add_note(f"Namespace update timed out after {timeout}s")
+            e.add_note(f"Update size: {len(updates)} keys")
+            e.add_note(f"Execution ID: {self.execution_id}")
+            raise
+```
+
+### Enhanced Error Context
+
+```python
+def handle_namespace_error(e: Exception, context: dict) -> None:
+    """
+    Add context to exceptions using Python 3.11+ notes.
+    
+    Provides better debugging information in error traces.
+    """
+    if hasattr(e, 'add_note'):
+        # Add execution context
+        e.add_note(f"Execution ID: {context.get('execution_id', 'unknown')}")
+        e.add_note(f"Operation: {context.get('operation', 'unknown')}")
+        e.add_note(f"Source context: {context.get('source_context', 'unknown')}")
+        
+        # Add namespace state
+        if 'namespace_size' in context:
+            e.add_note(f"Namespace size: {context['namespace_size']} keys")
+        
+        # Add timing information
+        if 'duration' in context:
+            e.add_note(f"Operation duration: {context['duration']:.3f}s")
+```
+
+### Exception Group Handling
+
+```python
+async def handle_parallel_errors(
+    operations: List[Callable],
+    namespace_manager: DurableNamespaceManager
+) -> None:
+    """
+    Handle errors from parallel namespace operations.
+    
+    Uses Python 3.11+ except* syntax for selective handling.
+    """
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for op in operations:
+                tg.create_task(op())
+    except* PersistenceError as persistence_group:
+        # Handle persistence errors
+        for e in persistence_group.exceptions:
+            logger.error(f"Persistence failed: {e}")
+            # Retry with exponential backoff
+            await retry_persistence(namespace_manager)
+    except* ConflictError as conflict_group:
+        # Handle conflict errors
+        for e in conflict_group.exceptions:
+            logger.warning(f"Conflict detected: {e}")
+            # Apply conflict resolution
+            await resolve_conflicts(namespace_manager)
+    except* Exception as other_group:
+        # Handle other errors
+        for e in other_group.exceptions:
+            logger.error(f"Unexpected error: {e}")
 ```
 
 ## Future Enhancements

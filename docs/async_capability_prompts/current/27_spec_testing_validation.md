@@ -57,7 +57,7 @@ class TestAsyncExecutor:
     def test_pcf_allow_top_level_await_flag(self):
         """Test that PyCF_ALLOW_TOP_LEVEL_AWAIT flag works."""
         # This is THE critical discovery - must work
-        assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x1000000
+        assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x2000
         
         # Test compilation with flag
         code = "await asyncio.sleep(0)"
@@ -117,6 +117,34 @@ class TestAsyncExecutor:
                 executor._execute_top_level_await(code)
                 
             mock_transform.assert_called_once()
+
+### Protocol Bridge & Promise Tests
+
+- Bridge creates a promise with deterministic ID, sends the message, and returns an awaitable.
+- route_response resolves the correct promise and returns True; unmatched returns False.
+- Ensure ID correlation rules for Input/InputResponse and Execute/Result/Error.
+
+### Durable Function (Promise‑First) Tests
+
+- Template: durable function creates `ctx.promise`, calls `bridge.send_request`, then yields the promise.
+- Assert no `asyncio.new_event_loop()` or `run_until_complete()` are invoked from the durable layer (patch/spy guards).
+- Validate timeouts propagate via ctx.config.
+
+### HITL Input Tests
+
+- Capability uses bridge → promise → resolution; return the input value.
+- Simulate delayed resolution and ensure no busy waiting; use awaitable promise.result().
+
+## Integration Tests
+
+- Verify output ordering: outputs emitted before resolving the Result promise for the same execution.
+- Verify single loop per session invariant: executor/transport operate on one loop; durable layer doesn’t create loops.
+- Validate recovery semantics with remote mode (optional, server-backed): promise survives process restart and can be resumed.
+
+## Anti‑Pattern Guards
+
+- Add test hooks that fail if durable functions call `asyncio.new_event_loop` or `run_until_complete`.
+- Add tests that fail if `ctx.lfc` is invoked with an async callable.
     
     def test_coroutine_tracking(self, executor):
         """Test coroutine lifecycle tracking."""

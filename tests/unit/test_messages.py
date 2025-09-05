@@ -15,6 +15,8 @@ from src.protocol.messages import (
     InputResponseMessage,
     MessageType,
     parse_message,
+    CheckpointMessage,
+    RestoreMessage,
 )
 
 
@@ -128,3 +130,17 @@ class TestMessageSerialization:
         json_str = msg.model_dump_json()
         assert "Hello, World!" in json_str
         assert "stdout" in json_str
+
+
+@pytest.mark.unit
+def test_checkpoint_restore_minimal_fields():
+    """Checkpoint/Restore should accept minimal fields (per spec)."""
+    # Minimal checkpoint: id, timestamp, checkpoint_id
+    cp = CheckpointMessage(id="cp1", timestamp=time.time(), checkpoint_id="abc")
+    assert cp.checkpoint_id == "abc"
+    # Minimal restore by id
+    r1 = RestoreMessage(id="rs1", timestamp=time.time(), checkpoint_id="abc")
+    assert r1.checkpoint_id == "abc"
+    # Minimal restore by data
+    r2 = RestoreMessage(id="rs2", timestamp=time.time(), data=b"blob")
+    assert r2.data == b"blob"

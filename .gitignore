@@ -196,7 +196,9 @@ notes/
 TODO.txt
 .todo
 *.todo
-resonate-sdk-docs.md
+
+# Completion logs (kept locally)
+completion-logs/
 
 # Test outputs
 test_output/
@@ -217,3 +219,5 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+# Resonate SDK documentation (reference only)
+

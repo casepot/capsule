@@ -96,16 +96,24 @@ class ErrorMessage(BaseMessage):
 
 class CheckpointMessage(BaseMessage):
     type: Literal[MessageType.CHECKPOINT] = Field(default=MessageType.CHECKPOINT)
-    data: bytes = Field(description="Serialized checkpoint data")
-    namespace_size: int = Field(description="Number of items in namespace")
-    function_count: int = Field(description="Number of tracked functions")
-    class_count: int = Field(description="Number of tracked classes")
-    checkpoint_size: int = Field(description="Size of checkpoint in bytes")
+    # Creation trigger fields (local-mode slice):
+    checkpoint_id: Optional[str] = Field(default=None, description="Checkpoint identifier")
+    name: Optional[str] = Field(default=None, description="Checkpoint human-readable name")
+    # Data fields (when sending a snapshot):
+    data: Optional[bytes] = Field(default=None, description="Serialized checkpoint data")
+    namespace_size: Optional[int] = Field(default=None, description="Number of items in namespace")
+    function_count: Optional[int] = Field(default=None, description="Number of tracked functions")
+    class_count: Optional[int] = Field(default=None, description="Number of tracked classes")
+    checkpoint_size: Optional[int] = Field(default=None, description="Size of checkpoint in bytes")
 
 
 class RestoreMessage(BaseMessage):
     type: Literal[MessageType.RESTORE] = Field(default=MessageType.RESTORE)
-    data: bytes = Field(description="Checkpoint data to restore")
+    # Reference by ID (local slice) or inline data
+    checkpoint_id: Optional[str] = Field(
+        default=None, description="Checkpoint identifier to restore"
+    )
+    data: Optional[bytes] = Field(default=None, description="Checkpoint data to restore")
     clear_existing: bool = Field(
         default=True, description="Whether to clear existing namespace before restore"
     )
@@ -129,7 +137,9 @@ class HeartbeatMessage(BaseMessage):
 class ShutdownMessage(BaseMessage):
     type: Literal[MessageType.SHUTDOWN] = Field(default=MessageType.SHUTDOWN)
     reason: str = Field(description="Shutdown reason")
-    checkpoint: bool = Field(default=True, description="Whether to create checkpoint before shutdown")
+    checkpoint: bool = Field(
+        default=True, description="Whether to create checkpoint before shutdown"
+    )
 
 
 class CancelMessage(BaseMessage):
@@ -143,9 +153,7 @@ class CancelMessage(BaseMessage):
 class InterruptMessage(BaseMessage):
     type: Literal[MessageType.INTERRUPT] = Field(default=MessageType.INTERRUPT)
     execution_id: str = Field(description="ID of the execution to interrupt")
-    force_restart: bool = Field(
-        default=False, description="Force worker restart after interrupt"
-    )
+    force_restart: bool = Field(default=False, description="Force worker restart after interrupt")
 
 
 Message = Union[
@@ -167,20 +175,20 @@ Message = Union[
 
 def parse_message(data: dict[str, Any]) -> Message:
     """Parse a message from a dictionary.
-    
+
     Args:
         data: Dictionary containing message data
-        
+
     Returns:
         Parsed message object
-        
+
     Raises:
         ValueError: If message type is unknown or data is invalid
     """
     message_type = data.get("type")
     if message_type is None:
         raise ValueError("Message type is missing")
-    
+
     message_classes: dict[str, type[Message]] = {
         MessageType.EXECUTE.value: ExecuteMessage,
         MessageType.OUTPUT.value: OutputMessage,
@@ -196,9 +204,9 @@ def parse_message(data: dict[str, Any]) -> Message:
         MessageType.CANCEL.value: CancelMessage,
         MessageType.INTERRUPT.value: InterruptMessage,
     }
-    
+
     message_class = message_classes.get(message_type)
     if not message_class:
         raise ValueError(f"Unknown message type: {message_type}")
-    
+
     return message_class(**data)

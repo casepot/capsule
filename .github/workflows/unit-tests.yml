@@ -14,10 +14,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
       - name: Install dependencies
         run: |
           pip install -e .[dev]
+          # Ensure latest resonate-sdk is installed for Python >=3.12 API surface
+          pip install -U "resonate-sdk>=0"
+      - name: Show Python and resonate-sdk version
+        run: |
+          python --version
+          python -c "import resonate; from resonate import Resonate; import sys; print('resonate-sdk:', getattr(resonate,'__version__','unknown'), 'has_local:', hasattr(Resonate,'local'))"
       - name: Run unit tests with coverage
         run: |
           pytest -m unit -v \
@@ -34,4 +40,3 @@ jobs:
             test-results.xml
             coverage.json
           retention-days: 7
-

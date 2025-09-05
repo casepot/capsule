@@ -28,8 +28,12 @@ class TestExecutionMode:
     
     def test_pycf_allow_top_level_await_constant(self):
         """Test that PyCF_ALLOW_TOP_LEVEL_AWAIT has correct value."""
-        # This is the critical compile flag discovered in research
-        assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x1000000
+        # Should match Python's ast module value
+        import ast
+        if hasattr(ast, 'PyCF_ALLOW_TOP_LEVEL_AWAIT'):
+            assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        else:
+            assert AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT == 0x2000
     
     def test_blocking_io_modules_defined(self):
         """Test that blocking I/O modules are defined."""
@@ -455,8 +459,8 @@ class TestAsyncExecutorExecution:
             assert result == 42
     
     @pytest.mark.asyncio
-    async def test_execute_top_level_await_raises_not_implemented(self):
-        """Test that top-level await raises NotImplementedError."""
+    async def test_execute_top_level_await_now_works(self):
+        """Test that top-level await now works (Phase 1 implementation)."""
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         
@@ -466,9 +470,10 @@ class TestAsyncExecutorExecution:
             execution_id="test-exec"
         )
         
-        # Top-level await should raise NotImplementedError
-        with pytest.raises(NotImplementedError, match="Async execution coming soon"):
-            await executor.execute("await asyncio.sleep(1)")
+        # Top-level await now works! 
+        # Simple expression that returns immediately
+        result = await executor.execute("await asyncio.sleep(0, 'success')")
+        assert result == 'success'
     
     @pytest.mark.asyncio
     async def test_execute_updates_stats(self):
