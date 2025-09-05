@@ -15,7 +15,6 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
-import inspect
 from typing import Any, Set
 import weakref
 
@@ -24,6 +23,7 @@ import structlog
 from .executor import ThreadedExecutor
 from .namespace import NamespaceManager
 from ..protocol.transport import MessageTransport
+from types import TracebackType
 
 logger = structlog.get_logger()
 
@@ -110,7 +110,7 @@ class AsyncExecutor:
     def __init__(
         self,
         namespace_manager: NamespaceManager,
-        transport: MessageTransport,
+        transport: MessageTransport | None,
         execution_id: str,
         *,
         tla_timeout: float = 30.0,
@@ -144,7 +144,7 @@ class AsyncExecutor:
         self.loop = None  # Will be set when needed in async context
 
         # Future: Coroutine tracking for cleanup
-        self._pending_coroutines: Set[weakref.ref] = set()
+        self._pending_coroutines: Set[weakref.ReferenceType[Any]] = set()
 
         # AST cache with LRU limit to prevent unbounded growth
         self._ast_cache: OrderedDict[str, ast.AST] = OrderedDict()
@@ -158,14 +158,11 @@ class AsyncExecutor:
 
                 env_val = _os.getenv("ASYNC_EXECUTOR_AST_CACHE_SIZE")
                 self._ast_cache_max_size = (
-                    int(env_val)
-                    if env_val and ast_cache_max_size == 100
-                    else int(ast_cache_max_size)
+                    int(env_val) if env_val and ast_cache_max_size == 100 else int(ast_cache_max_size)
                 )
             except Exception:
-                self._ast_cache_max_size = (
-                    int(ast_cache_max_size) if ast_cache_max_size is not None else None
-                )
+                # ast_cache_max_size is not None in this branch; coerce to int directly
+                self._ast_cache_max_size = int(ast_cache_max_size)
 
         # Execution statistics
         self.stats = {
@@ -240,8 +237,8 @@ class AsyncExecutor:
 
             # Check for async function definitions
             has_async_def = False
-            for node in ast.walk(tree):
-                if isinstance(node, ast.AsyncFunctionDef):
+            for any_node in ast.walk(tree):
+                if isinstance(any_node, ast.AsyncFunctionDef):
                     has_async_def = True
                     break
 
@@ -493,6 +490,10 @@ class AsyncExecutor:
                 "AsyncExecutor.execute() must be called from within an async context. "
                 "Use 'await executor.execute(code)' inside an async function."
             )
+        if self.transport is None:
+            raise RuntimeError(
+                "Cannot delegate to ThreadedExecutor without a MessageTransport"
+            )
         executor = ThreadedExecutor(
             transport=self.transport,
             execution_id=self.execution_id,
@@ -581,7 +582,7 @@ class AsyncExecutor:
 
             return result
 
-        except asyncio.TimeoutError as e:  # type: ignore[unreachable]
+        except asyncio.TimeoutError as e:
             if hasattr(e, "add_note"):
                 e.add_note("Code execution timed out after 30 seconds")
                 e.add_note(f"Execution ID: {self.execution_id}")
@@ -653,7 +654,10 @@ class AsyncExecutor:
 
         # Prepare wrapper body
         if is_expression:
-            body: list[ast.stmt] = [ast.Return(value=tree.body[0].value)]
+            from typing import cast
+
+            expr_node = cast(ast.Expr, tree.body[0])
+            body: list[ast.stmt] = [ast.Return(value=expr_node.value)]
         else:
             # Conservative global hoisting for simple assigned names
             assigned_names = self._collect_safe_assigned_names(tree.body)
@@ -765,19 +769,19 @@ class AsyncExecutor:
         return result
 
     # Helper utilities
-    def _compute_global_diff(self, before: dict, after: dict) -> dict:
+    def _compute_global_diff(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         """Compute globals diff, filtering system variables."""
         updates: dict[str, Any] = {}
         skip = {"__async_exec__", "asyncio", "__builtins__"}
 
         # ENGINE_INTERNALS is imported from constants via NamespaceManager module
         try:
-            from .constants import ENGINE_INTERNALS  # type: ignore
+            from .constants import ENGINE_INTERNALS as _engine_internals
         except Exception:
-            ENGINE_INTERNALS = set()
+            _engine_internals = set()
 
         for key, value in after.items():
-            if key in skip or key in ENGINE_INTERNALS:
+            if key in skip or key in _engine_internals:
                 continue
             if key.startswith("__") and key.endswith("__"):
                 continue
@@ -788,16 +792,16 @@ class AsyncExecutor:
     def _collect_safe_assigned_names(self, body: list[ast.stmt]) -> set[str]:
         """Collect simple identifiers safe for global declaration."""
         try:
-            from .constants import ENGINE_INTERNALS  # type: ignore
+            from .constants import ENGINE_INTERNALS as _engine_internals
         except Exception:
-            ENGINE_INTERNALS = set()
+            _engine_internals = set()
 
         names: set[str] = set()
         for node in body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name):
-                        if not target.id.startswith("__") and target.id not in ENGINE_INTERNALS:
+                        if not target.id.startswith("__") and target.id not in _engine_internals:
                             names.add(target.id)
             elif isinstance(node, ast.AnnAssign):
                 if isinstance(node.target, ast.Name):
@@ -889,7 +893,7 @@ class AsyncExecutor:
 
         return [async_def, new_assign]
 
-    def _track_coroutine(self, coro) -> None:
+    def _track_coroutine(self, coro: Any) -> None:
         """
         Track a coroutine for cleanup.
 
@@ -924,7 +928,9 @@ class AsyncExecutor:
                 dead_refs.append(coro_ref)
             else:
                 try:
-                    coro.close()
+                    close = getattr(coro, "close", None)
+                    if callable(close):
+                        close()
                     cleaned += 1
                 except Exception:
                     pass  # Already closed or running
@@ -935,7 +941,7 @@ class AsyncExecutor:
 
         return cleaned
 
-    async def close(self):
+    async def close(self) -> None:
         """Explicitly close the executor and clean up resources.
 
         This should be called when the executor is no longer needed.
@@ -945,11 +951,16 @@ class AsyncExecutor:
         if cleaned > 0:
             logger.debug(f"Cleaned up {cleaned} pending coroutines")
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AsyncExecutor":
         """Enter context manager."""
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool:
         """Exit context manager and clean up."""
         await self.close()
         return False

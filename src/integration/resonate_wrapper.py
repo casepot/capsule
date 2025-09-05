@@ -6,10 +6,11 @@ AsyncExecutor instances without temporal coupling.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Any
 import asyncio
 
 from ..subprocess.async_executor import AsyncExecutor
+from ..protocol.transport import MessageTransport
 from ..subprocess.namespace import NamespaceManager
 
 
@@ -17,15 +18,15 @@ class AwaitablePromise:
     """Adapter to make promises awaitable in async contexts."""
 
     def __init__(self) -> None:
-        self._future: Optional[asyncio.Future] = None
+        self._future: Optional[asyncio.Future[Any]] = None
 
-    def _ensure_future(self) -> asyncio.Future:
+    def _ensure_future(self) -> asyncio.Future[Any]:
         if self._future is None:
             loop = asyncio.get_running_loop()
             self._future = loop.create_future()
         return self._future
 
-    def set_result(self, value) -> None:
+    def set_result(self, value: Any) -> None:
         fut = self._ensure_future()
         if not fut.done():
             fut.set_result(value)
@@ -35,14 +36,14 @@ class AwaitablePromise:
         if not fut.done():
             fut.set_exception(exc)
 
-    def __await__(self):  # pragma: no cover - trivial delegation
+    def __await__(self) -> Any:  # pragma: no cover - trivial delegation
         return self._ensure_future().__await__()
 
 
 def async_executor_factory(
-    ctx=None,
+    ctx: Any | None = None,
     namespace_manager: Optional[NamespaceManager] = None,
-    transport=None,
+    transport: MessageTransport | None = None,
     execution_id: Optional[str] = None,
     *,
     tla_timeout: Optional[float] = None,
@@ -63,7 +64,8 @@ def async_executor_factory(
         )
     """
     ns = namespace_manager or NamespaceManager()
-    exec_id = execution_id or getattr(ctx, "execution_id", "local-exec")
+    eid = execution_id if execution_id is not None else getattr(ctx, "execution_id", "local-exec")
+    exec_id: str = eid if isinstance(eid, str) else "local-exec"
     # Allow ctx to carry default timeout if provided (e.g., ctx.config.tla_timeout)
     timeout = (
         tla_timeout

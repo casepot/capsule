@@ -476,7 +476,7 @@ class NamespaceManager:
             return False
 
         # Update if values differ
-        return old_value != new_value
+        return bool(old_value != new_value)
 
     def get_serializable_namespace(self) -> Dict[str, Any]:
         """Get a serializable version of the namespace.
