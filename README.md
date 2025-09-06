@@ -1,161 +1,234 @@
 # Capsule
 
-A Python execution environment providing durable, async-first code execution with automatic recovery and distributed orchestration capabilities.
+> **Development Status**: 🚧 Experimental (v0.1.0-dev) - Phase 2c Complete, Phase 3 In Progress
 
-## What is Capsule?
+A Python execution environment implementing subprocess isolation with persistent sessions and promise-based orchestration.
 
-Capsule is a **Subprocess-Isolated Execution Service (SIES)** that combines the isolation of separate processes with the persistence of stateful sessions. Built on an async-first architecture with Resonate SDK integration, Capsule provides:
+## Current State
 
-- **Intelligent Execution Routing**: Automatically detects and routes code to the optimal executor (top-level await, async, blocking I/O, or simple sync)
-- **Durable Sessions**: Crash recovery and distributed execution via Resonate promises
-- **Capability-Based Architecture**: Secure, injectable functions for I/O, networking, and system operations
-- **Native Top-Level Await**: Direct Python interpreter support using PyCF_ALLOW_TOP_LEVEL_AWAIT flag
-- **Protocol-Based IPC**: Structured message passing with promise-based correlation
-- **Language-Agnostic Core**: 70% of infrastructure is language-independent
+Capsule is an experimental **Subprocess-Isolated Execution Service (SIES)** in active development. The project has completed its foundation phases (0-2c) with working subprocess isolation, promise-based message correlation, and local-mode durability through Resonate SDK.
 
-## Key Features
+### ✅ What's Working
+- **Subprocess isolation** with persistent namespace across executions
+- **ThreadedExecutor** for synchronous and blocking I/O code
+- **Promise-based message correlation** via ResonateProtocolBridge
+- **Input capability** for interactive code execution
+- **Local-mode checkpoint/restore** for session state
+- **Session pooling** for subprocess reuse
+- **Single-loop invariant** with message interceptors
 
-### Execution Modes
-- **Top-Level Await**: Native support via `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x1000000`
-- **Async Functions**: Full async/await with proper coroutine lifecycle
-- **Blocking I/O**: Thread-based execution for requests, file operations
-- **Simple Sync**: Direct execution for basic Python code
+### 🚧 In Development (Phase 3)
+- Native AsyncExecutor implementation (currently skeletal, delegates to ThreadedExecutor)
+- Full top-level await support via PyCF_ALLOW_TOP_LEVEL_AWAIT
+- Coroutine lifecycle management
+- Execution cancellation
 
-### Durability & Recovery
-- **Automatic Crash Recovery**: Execution resumes from last checkpoint
-- **Distributed Promises**: Cross-process correlation via Resonate
-- **Transaction Support**: Rollback with configurable policies
-- **Namespace Persistence**: State preserved across executions
+### ❌ Not Yet Implemented
+- Full capability system (only Input capability exists)
+- Remote Resonate mode (distributed execution)
+- Performance optimizations beyond basic caching
+- Production monitoring and observability
+- Resource limits enforcement
+- Multi-language support
 
-### Performance
-- Simple expression: <5ms latency
-- Session acquisition: <100ms from warm pool
-- Output streaming: <10ms latency
-- Local mode overhead: <5% with Resonate
-- Concurrent sessions: 100+ per manager
+## Test Coverage
+- **Unit Tests**: 164/166 passing (98.8%)
+- **Integration Tests**: 36/40 passing (90%)
+- **Overall Coverage**: ~56%
 
 ## Architecture
 
-Capsule implements a three-layer architecture:
+Current implementation follows a three-layer architecture:
 
 ```
-Application Layer (Resonate)
-├── Durable Functions
-├── Promise Management
-└── Dependency Injection
+Protocol Layer (Working)
+├── Message framing (4-byte prefix)
+├── MessagePack/JSON serialization
+└── Promise correlation
 
-Execution Layer (AsyncExecutor)
-├── Execution Mode Analysis
-├── Code Routing
-└── Namespace Management
+Execution Layer (Partial)
+├── ThreadedExecutor (working)
+├── AsyncExecutor (skeleton only)
+└── NamespaceManager (working)
 
-Protocol Layer (Transport)
-├── Message Framing
-├── Serialization
-└── Correlation
+Integration Layer (Local Only)
+├── ResonateProtocolBridge
+├── Session interceptors
+└── InputCapability
 ```
 
 ## Installation
 
+Capsule is not yet published to PyPI. To use it in development:
+
 ```bash
-pip install capsule-exec
+# Clone the repository
+git clone https://github.com/your-org/capsule.git
+cd capsule
+
+# Install with uv (recommended)
+uv sync
+
+# Or with pip in development mode
+pip install -e .
 ```
 
-## Quick Start
+## Usage Examples
 
-### Basic Execution
+### Basic Code Execution
 
 ```python
 import asyncio
-from capsule import Session
+from src.session.manager import Session
+from src.protocol.messages import ExecuteMessage
 
 async def main():
-    async with Session() as session:
-        result = await session.execute("""
-            x = 2 + 2
-            print(f"The answer is {x}")
-            x
-        """)
-        print(result.value)  # 4
+    session = Session()
+    await session.start()
+    
+    # Execute simple Python code
+    exec_msg = ExecuteMessage(
+        id="exec-1",
+        timestamp=time.time(),
+        code="x = 2 + 2\nprint(f'Result: {x}')\nx"
+    )
+    
+    async for msg in session.execute(exec_msg):
+        if msg.type == "output":
+            print(msg.data, end="")
+        elif msg.type == "result":
+            print(f"Final value: {msg.value}")
+    
+    await session.shutdown()
 
 asyncio.run(main())
-```
-
-### Top-Level Await
-
-```python
-async with Session() as session:
-    await session.execute("""
-        import asyncio
-        await asyncio.sleep(1)
-        result = await fetch_data()
-        print(f"Got {len(result)} items")
-    """)
 ```
 
 ### Interactive Input
 
 ```python
-async with Session() as session:
-    async for msg in session.stream_execute("""
-        name = input("Your name: ")
-        age = input("Your age: ")
-        print(f"Hello {name}, age {age}")
-    """):
+async def interactive_example():
+    session = Session()
+    await session.start()
+    
+    exec_msg = ExecuteMessage(
+        id="exec-2",
+        timestamp=time.time(),
+        code="name = input('Enter your name: ')\nprint(f'Hello, {name}!')"
+    )
+    
+    async for msg in session.execute(exec_msg):
         if msg.type == "input":
-            response = "Alice" if "name" in msg.prompt else "25"
-            await session.respond_input(msg.id, response)
+            # Respond to input request
+            await session.input_response(msg.input_id, "Alice")
         elif msg.type == "output":
             print(msg.data, end="")
+    
+    await session.shutdown()
 ```
 
-### Durable Execution (Resonate Mode)
+### Local-Mode Promises (Experimental)
 
 ```python
-from capsule import DurableSession
+from src.integration.resonate_init import initialize_resonate_local
+from src.integration.resonate_bridge import ResonateProtocolBridge
 
-async with DurableSession(resonate_host="localhost:8001") as session:
-    # Execution survives crashes and can resume
-    result = await session.execute_durable(
-        execution_id="data-processing-123",
-        code="""
-            df = load_large_dataset()
-            processed = expensive_computation(df)
-            save_results(processed)
-        """,
-        checkpoint_interval=10  # Checkpoint every 10 seconds
-    )
+async def promise_example():
+    session = Session()
+    await session.start()
+    resonate = initialize_resonate_local(session)
+    
+    # Bridge handles promise correlation
+    bridge = resonate.dependencies["protocol_bridge"]
+    
+    # Execute with promise-based result
+    execution_id = "exec-3"
+    promise_id = f"exec:{execution_id}"
+    promise = resonate.promises.create(id=promise_id, timeout=30000, data="{}")
+    
+    # ... execution via bridge ...
+    
+    await session.shutdown()
 ```
 
 ## Development
 
 ```bash
-# Install dev dependencies
-pip install -e .[dev]
+# Install development dependencies
+uv sync
 
 # Run tests
-pytest
+uv run pytest
+
+# Run specific test categories
+uv run pytest -m unit          # Fast unit tests
+uv run pytest -m integration   # Integration tests
 
 # Type checking
-mypy src/
-basedpyright src/
+uv run mypy src/
+uv run basedpyright src/
 
-# Typing strategy and decisions
-# See docs/TYPING.md for details on strict settings, local stubs, and conventions
+# Formatting
+uv run black src/
+uv run ruff format src/
 
-# Format
-black src/
-ruff format src/
+# Test with coverage
+uv run pytest --cov=src --cov-report=term-missing
 ```
 
-## Language Support
+## Project Structure
 
-Capsule's architecture separates language-agnostic infrastructure from language-specific execution:
+```
+capsule/
+├── src/
+│   ├── subprocess/       # Executors and namespace management
+│   │   ├── executor.py   # ThreadedExecutor (working)
+│   │   ├── async_executor.py # AsyncExecutor (skeleton)
+│   │   └── namespace.py  # Namespace management
+│   ├── session/          # Session and pool management
+│   ├── protocol/         # Message protocol and transport
+│   └── integration/      # Resonate SDK integration
+├── tests/
+│   ├── unit/            # Component tests
+│   └── integration/     # Cross-component tests
+└── docs/
+    ├── planning/        # Phase documentation
+    └── development/     # Implementation notes
+```
 
-- **Language-Agnostic (70%)**: Protocol, transport, session management, promises
-- **Language-Specific (30%)**: Executor, AST analysis, serialization
+## Architectural Decisions
 
-This enables future support for JavaScript, Go, Rust, and other languages.
+### Completed Decisions
+- **Namespace Merge-Only Policy**: Never replace namespace dict, always merge
+- **Single-Loop Invariant**: Session owns the sole event loop for transport
+- **Promise-First Integration**: Durable functions use ctx.promise pattern
+- **Capability-Based Security**: Security enforced at injection, not code analysis
+
+### Pending Decisions (Phase 3+)
+- Native async execution strategy (EventLoopCoordinator design)
+- Capability registry architecture
+- Remote mode connection management
+- Performance optimization priorities
+
+## Known Limitations
+
+1. **AsyncExecutor is skeletal** - All code currently executes via ThreadedExecutor
+2. **Local mode only** - No distributed execution yet
+3. **Limited capabilities** - Only Input capability implemented
+4. **No production features** - Missing metrics, monitoring, resource limits
+5. **Test coverage gaps** - Some integration tests still failing
+
+## Contributing
+
+Capsule is in early development. Key areas needing contribution:
+
+- Phase 3: Native AsyncExecutor implementation
+- Phase 4: Capability system development
+- Test coverage improvement
+- Documentation
+- Performance optimization
+
+See [FOUNDATION_FIX_PLAN.md](FOUNDATION_FIX_PLAN.md) for detailed development status.
 
 ## License
 

@@ -1,273 +1,279 @@
 # Capsule Development Roadmap
 
-## Vision
+> Last Updated: 2025-09-06 | Version: 0.1.0-dev
 
-Capsule aims to become the standard execution infrastructure for interactive development environments, computational notebooks, and AI-assisted coding tools. By combining subprocess isolation with durable state management through Resonate SDK, Capsule provides production-grade code execution with enterprise features.
+## Current Status
 
-## Current State (v0.4.0-alpha)
+Capsule has completed Phases 0-2c of its foundation development, establishing core infrastructure for subprocess-isolated Python execution with local-mode promise orchestration.
 
-Capsule is transitioning from ThreadedExecutor to AsyncExecutor architecture with Resonate SDK integration for durability and orchestration.
+### Implementation Status by Component
 
-### Foundation Phase Status
-- ✅ Protocol layer with message framing
-- ✅ Session management with pooling
-- ✅ ThreadedExecutor for blocking operations
-- 🚧 AsyncExecutor implementation (in progress)
-- 🚧 Resonate SDK integration (planned)
-- ❌ Top-level await support (designed, not implemented)
-- ❌ Full capability system (specified, not built)
+| Component | Status | Coverage | Notes |
+|-----------|--------|----------|-------|
+| **Protocol Layer** | ✅ Complete | 75% | Message framing, serialization working |
+| **Session Management** | ✅ Complete | 66% | Single-loop invariant, interceptors working |
+| **ThreadedExecutor** | ✅ Complete | 59% | Async wrapper, blocking I/O support |
+| **AsyncExecutor** | 🚧 Skeleton | 89% | Delegates to ThreadedExecutor, no native async |
+| **Namespace Manager** | ✅ Complete | 62% | Merge-only policy, ENGINE_INTERNALS protected |
+| **ResonateProtocolBridge** | ✅ Complete | 76% | Execute/Result/Error and Input correlation |
+| **Capabilities** | 🔶 Minimal | 100% | Only InputCapability implemented |
+| **Worker** | ✅ Complete | 68% | Checkpoint/restore, output ordering, busy guard |
+| **Remote Mode** | ❌ Not Started | 0% | Design complete, no implementation |
 
-## Phase 1: Core Foundation (Q1 2025)
+### Test Metrics
+- **Unit Tests**: 164/166 passing (98.8%)
+- **Integration Tests**: 36/40 passing (90%)
+- **Overall Coverage**: ~56%
+- **Performance**: Not benchmarked
 
-### 1.1 AsyncExecutor Implementation
-**Goal**: Complete async-first execution with intelligent routing
+## Completed Work (Phases 0-2c)
 
-**Deliverables**:
+### Phase 0: Emergency Fixes ✅
+- ThreadedExecutor async wrapper for test compatibility
+- Namespace merge-only policy implementation
+- Event loop management fixes
+- Message protocol completeness
+
+### Phase 1: AsyncExecutor Foundation ✅
 - Execution mode detection (AST analysis)
-- PyCF_ALLOW_TOP_LEVEL_AWAIT integration
-- Coroutine lifecycle management
-- Thread pool for blocking I/O
+- PyCF_ALLOW_TOP_LEVEL_AWAIT constant (0x2000)
+- Blocking I/O detection with attribute chains
+- DI factory pattern (async_executor_factory)
+- Configurable timeouts and cache sizes
 
-**Success Metrics**:
-- All execution modes working
-- <5ms overhead for routing
-- 95% test coverage
+### Phase 2: Promise-First Integration ✅
+- Durable functions using ctx.promise pattern
+- Complete protocol correlation (Execute/Result/Error, Input/InputResponse)
+- Session interceptors for message routing
+- Worker stabilization (output ordering, checkpoint/restore)
+- Single-loop invariant enforcement
 
-### 1.2 Resonate SDK Integration
-**Goal**: Enable durability and distributed execution
+## Immediate Priorities (Phase 3: Native Async)
 
-**Deliverables**:
-- Local mode (zero dependencies)
-- Remote mode (with server)
-- Promise-based correlation
-- Automatic crash recovery
+**Goal**: Complete AsyncExecutor to handle async code natively without ThreadedExecutor delegation.
 
-**Success Metrics**:
-- <5% overhead in local mode
-- Recovery time <1 second
-- Promise resolution <10ms
+### Deliverables (3-4 days estimated)
 
-### 1.3 Namespace Management
-**Goal**: Thread-safe, durable namespace with merge-only policy
+#### 3.1 EventLoopCoordinator
+```python
+# Target implementation
+- ensure_event_loop() - Detect/create loops safely
+- queue_for_async() - Queue coroutines when not in async context
+- flush_queue() - Execute queued operations
+```
 
-**Deliverables**:
-- Engine internals preservation
-- Merge strategies (user vs engine)
-- Durable persistence via promises
-- Thread-safe operations
+#### 3.2 CoroutineManager
+```python
+# Target implementation
+- track_coroutine() with weak references
+- track_task() for asyncio.Task lifecycle
+- cleanup() with proper stats
+```
 
-**Success Metrics**:
-- Zero KeyError failures
-- Namespace operations <100μs
-- State recovery working
+#### 3.3 ExecutionCancellation
+```python
+# Target implementation
+- cancel_execution() for running code
+- check_cancelled() periodic checks
+- cancellable_execution() context manager
+```
 
-## Phase 2: Capability System (Q2 2025)
+#### 3.4 Native Execution Paths
+- Implement `_execute_top_level_await()` using PyCF_ALLOW_TOP_LEVEL_AWAIT
+- Complete AST transformation fallback
+- Remove ThreadedExecutor delegation for async code
 
-### 2.1 Core Capabilities
-**Goal**: Injectable functions for common operations
+### Success Criteria
+- [ ] AsyncExecutor handles all execution modes natively
+- [ ] Proper coroutine cleanup and cancellation
+- [ ] Event loop coordination without conflicts
+- [ ] All unit tests passing with native implementation
 
-**Built-in Capabilities**:
-- Input/Output operations
-- File system access
-- Network requests (HTTP/WebSocket)
-- Database queries
-- Display/visualization
+## Near-Term Goals (Phase 4: Capability System)
 
-**Architecture**:
-- Dependency injection via Resonate
-- Security policy enforcement
-- Promise-based responses
-- HITL (Human-In-The-Loop) support
+**Goal**: Build comprehensive capability system for controlled I/O and system access.
 
-### 2.2 Security Framework
-**Goal**: Capability-based security model
+### Core Capabilities (3-4 days estimated)
 
-**Features**:
-- Security levels (SANDBOX to UNRESTRICTED)
-- Runtime capability injection
+#### 4.1 File Capabilities
+- FileReadCapability
+- FileWriteCapability
+- FileListCapability
+
+#### 4.2 Network Capabilities
+- FetchCapability (HTTP/HTTPS)
+- WebSocketCapability
+- DatabaseCapability
+
+#### 4.3 System Capabilities
+- EnvironmentCapability
+- TimeCapability
+- ProcessCapability
+
+#### 4.4 Security Framework
+- SecurityPolicy enforcement
+- Capability registry
+- Runtime validation hooks
 - Audit logging
-- Resource limits per capability
 
-### 2.3 Custom Capabilities
-**Goal**: SDK for extending functionality
+### Success Criteria
+- [ ] All capabilities from spec implemented
+- [ ] Security boundaries enforced at injection
+- [ ] HITL workflows functional
+- [ ] Comprehensive test coverage
 
-**Deliverables**:
-- Capability base classes
-- Registration system
-- Documentation and examples
-- Testing framework
+## Medium-Term Vision (Phase 5: Remote & Production)
 
-## Phase 3: Production Features (Q3 2025)
+**Goal**: Enable distributed execution and production-ready features.
 
-### 3.1 Performance Optimization
-**Target Metrics**:
-- Simple execution: 2ms (5ms max)
-- Top-level await: 5ms (10ms max)
-- Session acquisition: 10ms (100ms max)
-- Throughput: 1000 ops/sec per session
+### 5.1 Remote Resonate Mode (3-4 days estimated)
+- Server connection management
+- Authentication/authorization
+- Distributed promise resolution
+- Retry logic with exponential backoff
+- Circuit breakers
 
-**Optimization Areas**:
-- AST caching
-- Promise batching
+### 5.2 Production Hardening
+- Resource limits enforcement (memory, CPU, FDs)
+- Graceful degradation strategies
 - Connection pooling
-- Output streaming
+- MigrationAdapter for incremental adoption
 
-### 3.2 Monitoring & Observability
-**Features**:
+### Success Criteria
+- [ ] Works with remote Resonate server
+- [ ] Handles network failures gracefully
+- [ ] Production-ready reliability
+- [ ] Performance targets met
+
+## Long-Term Vision (Phase 6: Performance & Observability)
+
+**Goal**: Enterprise-grade monitoring and performance.
+
+### 6.1 Performance Optimization (2-3 days estimated)
+- AST cache optimization
+- Promise batching
+- Connection pooling improvements
+- Output streaming optimization
+
+### 6.2 Observability
+- OpenTelemetry integration
 - Prometheus metrics
-- OpenTelemetry tracing
-- Health check endpoints
-- Performance profiling
+- Structured logging throughout
+- Performance profiling hooks
 
-### 3.3 Resource Management
-**Limits & Controls**:
-- Memory: 512MB per session (configurable)
-- CPU: Core affinity options
-- Execution timeout: 30s default
-- File descriptors: 100 per session
+### 6.3 Benchmarks
+- Establish performance baselines
+- CI performance gates
+- Memory leak detection
+- Concurrency stress tests
 
-## Phase 4: Advanced Features (Q4 2025)
+### Target Metrics
+- Simple execution: <5ms
+- Top-level await: <10ms  
+- Promise resolution: <1ms (local)
+- Session acquisition: <100ms
+- Throughput: 1000+ ops/sec
 
-### 4.1 Distributed Execution
-**Goal**: Multi-node execution via Resonate
+## Future Exploration (6+ months)
 
-**Features**:
-- Session migration
-- Distributed promises
-- Cross-node capabilities
-- Load balancing
+### Multi-Language Support
+- JavaScript/TypeScript worker
+- Go worker
+- Rust worker
+- Common protocol sharing
 
-### 4.2 Checkpoint & Time Travel
-**Goal**: Advanced state management
-
-**Features**:
-- Automatic checkpointing
-- State snapshots
+### Advanced Features
+- GPU execution support
+- Distributed data structures
 - Time-travel debugging
-- Checkpoint sharing
+- Notebook kernel implementation
 
-### 4.3 Notebook Integration
-**Goal**: Jupyter-compatible kernel
-
-**Features**:
-- Kernel protocol support
-- Rich output types
-- Cell execution model
-- Magic commands
-
-## Phase 5: Ecosystem (Q1 2026)
-
-### 5.1 Language Plugins
-**Target Languages**:
-- JavaScript/TypeScript (Node.js)
-- Go
-- Rust
-- SQL
-
-**Architecture**:
-- Language-specific workers
-- Common protocol
-- Shared session management
-- Cross-language calls
-
-### 5.2 Client Libraries
-**SDKs**:
-- Python (async/sync)
-- JavaScript/TypeScript
-- Go
-- REST API client
-- CLI tool
-
-### 5.3 Deployment Patterns
-**Infrastructure**:
-- Kubernetes operator
-- Docker images
-- Helm charts
-- Terraform modules
-- Cloud-native integrations
-
-## Phase 6: AI Integration (Q2 2026)
-
-### 6.1 LLM-Optimized Features
-**Goal**: First-class support for AI coding assistants
-
-**Features**:
-- Streaming execution for real-time feedback
-- Partial code execution
+### AI Integration
+- LLM-optimized execution patterns
+- Streaming for real-time feedback
 - Semantic checkpoints
-- Error recovery suggestions
+- Agent framework support
 
-### 6.2 Agent Framework
-**Goal**: Autonomous code execution agents
+## Technical Debt & Improvements
 
-**Features**:
-- Multi-step execution plans
-- Tool use via capabilities
-- Memory management
-- Safety constraints
+### Immediate (During Phase 3)
+- [ ] Fix failing integration tests (4 remaining)
+- [ ] Increase test coverage to >70%
+- [ ] Document internal APIs
+- [ ] Clean up TODO comments in code
 
-## Technical Priorities
+### Ongoing
+- [ ] Performance benchmarking framework
+- [ ] Integration test reliability
+- [ ] Error message improvements
+- [ ] Developer documentation
 
-### Immediate (This Sprint)
-1. Add async wrapper to ThreadedExecutor
-2. Fix message protocol completeness
-3. Implement namespace merge-only policy
-4. Create AsyncExecutor skeleton
+## Risk Assessment
 
-### Short-term (Next Month)
-1. Complete AsyncExecutor with routing
-2. Add execution mode detection
-3. Implement promise abstraction
-4. Basic Resonate integration
+### Technical Risks
+| Risk | Impact | Mitigation | Status |
+|------|--------|------------|--------|
+| Event loop complexity | High | Careful coordination, extensive testing | 🟡 Mitigating |
+| Promise memory leaks | Medium | Cleanup hooks, monitoring | 🟢 Addressed |
+| Namespace corruption | High | Merge-only policy | ✅ Resolved |
+| Performance regression | Medium | Benchmarking needed | 🔴 Not started |
 
-### Medium-term (Next Quarter)
-1. Full capability system
-2. Production monitoring
-3. Performance optimization
-4. Client SDKs
+### Adoption Risks
+| Risk | Impact | Mitigation | Status |
+|------|--------|------------|--------|
+| Complex API | High | Clear documentation, examples | 🟡 In progress |
+| No production users | High | Focus on stability first | 🟡 Foundation laid |
+| Limited capabilities | Medium | Phase 4 priority | 🔴 Planned |
 
 ## Success Metrics
 
-### Technical Metrics
-- Code coverage >90%
+### Phase 3 Completion
+- Native async execution working
+- No ThreadedExecutor delegation for async code
+- All execution modes properly routed
+- Cancellation support functional
+
+### Phase 4 Completion
+- 5+ capabilities implemented
+- Security policy enforcement working
+- HITL workflows tested
+- Integration tests >95% passing
+
+### Phase 5 Completion
+- Remote mode functional
+- Production deployment possible
 - Performance targets met
-- Zero critical security issues
-- Recovery success rate >99%
+- Recovery mechanisms tested
 
-### Adoption Metrics
-- 100+ GitHub stars
-- 10+ production deployments
-- 5+ language plugins
-- Active contributor community
+### Phase 6 Completion
+- Full observability stack
+- Performance benchmarks established
+- <1% performance regression tolerance
+- Production-ready certification
 
-### Quality Metrics
-- <24 hour critical bug fix
-- <1 week feature turnaround
-- API stability (no breaking changes)
-- Documentation completeness
+## Development Philosophy
 
-## Risk Mitigation
+1. **Correctness over features** - Get the foundation right
+2. **Test everything** - Maintain high test coverage
+3. **Document as you go** - Keep documentation current
+4. **Incremental progress** - Small, reviewable changes
+5. **Honest communication** - Be clear about limitations
 
-### Technical Risks
-- **Complexity**: Modular architecture, comprehensive testing
-- **Performance**: Continuous benchmarking, optimization sprints
-- **Compatibility**: Version negotiation, graceful degradation
+## How to Contribute
 
-### Adoption Risks
-- **Learning Curve**: Examples, tutorials, documentation
-- **Migration Path**: Compatibility layers, migration tools
-- **Competition**: Unique features, better performance
+### Current Needs
+- Phase 3: Native AsyncExecutor implementation
+- Test coverage improvements
+- Documentation updates
+- Bug fixes for failing integration tests
 
-## Conclusion
+### Getting Started
+1. Read [FOUNDATION_FIX_PLAN.md](FOUNDATION_FIX_PLAN.md)
+2. Check current test status: `uv run pytest`
+3. Pick an issue from Phase 3 deliverables
+4. Submit small, focused PRs
 
-Capsule is positioned to become critical infrastructure for the next generation of development tools. By combining subprocess isolation with durable execution via Resonate SDK, Capsule provides unique value that existing solutions cannot match.
+## Revision History
 
-The roadmap prioritizes:
-1. **Foundation**: Solid async architecture
-2. **Durability**: Resonate integration
-3. **Capabilities**: Extensible functionality
-4. **Production**: Enterprise features
-5. **Ecosystem**: Multi-language support
-6. **Innovation**: AI-first features
-
-This roadmap will be reviewed monthly and updated quarterly based on user feedback, technical discoveries, and ecosystem evolution.
+- **2025-09-06**: Complete rewrite to reflect actual implementation status
+- **Previous**: Original aspirational roadmap (archived)
