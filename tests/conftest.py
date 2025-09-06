@@ -50,7 +50,8 @@ async def pool() -> AsyncGenerator[SessionPool, None]:
     ))
     await pool.start()
     yield pool
-    await pool.shutdown()
+    # Phase 2 hygiene: use stop() until pool lifecycle is finalized in Phase 3
+    await pool.stop()
 
 
 @pytest.fixture

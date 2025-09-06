@@ -329,8 +329,15 @@ class SubprocessWorker:
                 # Use a reasonable timeout (default is 2 seconds from executor)
                 await executor.drain_outputs(timeout=5.0)
             except OutputDrainTimeout as e:
-                # Log the timeout but don't fail the execution
-                logger.warning("Output drain timeout", execution_id=execution_id, error=str(e))
+                # Drain policy: worker enforces output-before-result. If we fail to
+                # drain within the timeout, we emit an ErrorMessage and do NOT send
+                # a ResultMessage to preserve ordering guarantees.
+                logger.warning(
+                    "Output drain timeout",
+                    execution_id=execution_id,
+                    error=str(e),
+                    drain_policy="error_on_timeout",
+                )
                 # Send error about the timeout
                 error_msg = ErrorMessage(
                     id=str(uuid.uuid4()),

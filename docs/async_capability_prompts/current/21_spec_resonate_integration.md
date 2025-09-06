@@ -65,6 +65,29 @@ resonate = initialize_resonate_local(session)
 # messages arrive.
 ```
 
+Quickstart: Local‑mode durable execute
+
+```python
+from types import SimpleNamespace
+from src.session.manager import Session
+from src.integration.resonate_init import initialize_resonate_local
+from src.integration.resonate_bridge import ResonateProtocolBridge
+from src.protocol.messages import ExecuteMessage
+import time
+
+session = Session()
+await session.start()
+resonate = initialize_resonate_local(session)
+bridge: ResonateProtocolBridge = resonate.dependencies["protocol_bridge"]
+
+execution_id = "exec-123"
+promise_id = f"exec:{execution_id}"
+prom = resonate.promises.create(id=promise_id, timeout=30000, data="{}")
+msg = ExecuteMessage(id=execution_id, timestamp=time.time(), code="2+2")
+await bridge.send_request("execute", execution_id, msg, timeout=30.0, promise_id=promise_id)
+payload = await prom.await_result()  # JSON payload for ResultMessage/ErrorMessage
+```
+
 ### Remote Mode Initialization (Planned)
 
 ```python

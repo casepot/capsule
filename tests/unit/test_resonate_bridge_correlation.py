@@ -3,6 +3,7 @@ import pytest
 
 from types import SimpleNamespace
 from src.integration.resonate_bridge import ResonateProtocolBridge
+from src.integration.constants import input_promise_id
 from src.protocol.messages import ExecuteMessage, ResultMessage, ErrorMessage, InputMessage, InputResponseMessage
 import time
 
@@ -59,5 +60,5 @@ async def test_bridge_execute_result_error_correlation():
     # Route InputResponse and ensure it resolves the same promise
     resp = InputResponseMessage(id="IR-1", timestamp=time.time(), data="abc", input_id="I-1")
     assert await bridge.route_response(resp) is True
-    payload = json.loads(store.resolved[f"{exec_id}:input:I-1"])
+    payload = json.loads(store.resolved[input_promise_id(exec_id, "I-1")])
     assert payload.get("type") == "input_response"

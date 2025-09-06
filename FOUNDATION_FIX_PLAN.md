@@ -6,8 +6,8 @@
 - Phase 1: COMPLETE — AsyncExecutor core with TLA, AST fallback, routing, blocking I/O detection, DI factory
 - Phase 1b: IN PROGRESS — AsyncExecutor refinements (namespace binding fixed, enhanced detection, configurability, telemetry, compile flags)
 - Phase 2a: COMPLETE — Resonate vertical slice (experimental proof-of-concept)
-- Phase 2b: IN PROGRESS — Promise-first durable flow + bridge correlation + session interceptors (details below)
-- Phase 2c: IN PROGRESS — Minimal checkpoint/restore handlers in worker; lifecycle stabilization underway
+- Phase 2b: COMPLETE — Promise-first durable flow + bridge correlation + session interceptors
+- Phase 2c: COMPLETE (local-mode stabilization) — Minimal checkpoint/restore handlers; output-before-result; Busy guard
 - Phase 3-6: TODO — Full implementation (~3-4 weeks to production)
 
 **Current PR #11 Status**: Phase 1 + Phase 2a delivered; Phase 2b/2c updates landed
@@ -1128,3 +1128,26 @@ Notes
 - Event loop lifecycle audit in session/worker: bind asyncio primitives to the correct loop and avoid cross-loop usage.
 - Blocking I/O detection: expose modules/methods via config; add counters/telemetry and structured logs around detections.
 - Performance: add micro-benchmarks and CI perf guardrails for TLA latency and output streaming.
+
+## Phase 2 Sign-off
+
+- Behavior
+  - Durable promise-first with deterministic ids; no asyncio in durable functions
+  - Bridge resolves/rejects with structured payloads; `_pending` cleaned; timeout enrichment present
+  - Single-loop invariant enforced: Session is sole transport reader; tests use interceptors/observer
+  - Worker: output-before-result enforced; Busy guard under concurrency; checkpoint/restore merge-only semantics
+- Tests
+  - Unit: bridge mapping, rejections, timeouts, interceptor robustness, checkpoint bytes/invalidation, drain-timeout error shape
+  - Integration: durable execute ordering (long/CR outputs), Busy guard, checkpoint round-trip
+  - Stress: `_pending` stability under concurrency; Busy acceptance (Phase 3 extended)
+- Docs
+  - Specs (21/22/25) updated for deterministic correlation, rejection semantics, timeouts, drain policy, single-loop testing guidance
+  - Plan updated to mark Phase 2b/2c as Done; Phase 3 items ticketed
+
+## Phase 3 Roadmap (Selected)
+
+- Native async path in AsyncExecutor; coroutine lifecycle/cancellation owner abstraction
+- SessionPool reuse policy, fairness, concurrency semantics; health-check/warmup tuning
+- Remote mode wiring; extended correlation for additional capabilities; retries/backoff; optional `_pending` HWM metric
+- Cancellation hardening for blocking I/O; input EOF/timeout shutdown behavior
+- Performance gates and CI profiling hooks; maxfail tuning on critical paths

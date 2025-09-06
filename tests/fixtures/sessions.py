@@ -59,7 +59,8 @@ async def create_pool(
         await pool.start()
         yield pool
     finally:
-        await pool.shutdown()
+        # Phase 2 hygiene: SessionPool exposes stop(); shutdown is Phase 3 scope
+        await pool.stop()
 
 
 class SessionHelper:

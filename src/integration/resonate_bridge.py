@@ -17,6 +17,7 @@ from ..protocol.messages import (
     ResultMessage,
     Message,
 )
+from .constants import execution_promise_id, input_promise_id
 
 
 class ResonateProtocolBridge:
@@ -44,6 +45,10 @@ class ResonateProtocolBridge:
         #   - Input:   InputMessage.id
         #   - Others as extended
         self._pending: dict[str, str] = {}
+        # TODO(Phase 3): expose a lightweight metric for the high-water mark
+        # of pending correlations to observe load/backpressure trends without
+        # adding runtime overhead. For now, track the value locally.
+        self._pending_hwm: int = 0
 
     async def send_request(
         self,
@@ -68,12 +73,17 @@ class ResonateProtocolBridge:
             # Promise should already be created by durable function via ctx.promise
             # Use provided promise_id; correlate by ExecuteMessage.id (== execution_id in worker)
             if not promise_id:
-                # Fallback to deterministic id if not provided
-                promise_id = f"exec:{execution_id}"
+                # Deterministic id per spec via centralized constant
+                promise_id = execution_promise_id(execution_id)
             corr_key = getattr(message, "id", None)
         else:
             # Create a new durable promise for other capabilities (e.g., input)
-            pid = promise_id or f"{execution_id}:{capability_id}:{getattr(message, 'id', 'req')}"
+            if capability_id == "input":
+                # Deterministic input promise id using centralized constants
+                pid = promise_id or input_promise_id(execution_id, getattr(message, "id", "req"))
+            else:
+                # Generic, but still deterministic fallback for future caps
+                pid = promise_id or f"{execution_id}:{capability_id}:{getattr(message, 'id', 'req')}"
             timeout_ms = int((timeout or 30.0) * 1000)
             created_promise = self._resonate.promises.create(
                 id=pid,
@@ -86,6 +96,9 @@ class ResonateProtocolBridge:
         if corr_key:
             key = str(corr_key)
             self._pending[key] = str(promise_id)
+            # Update high-water mark for observability breadcrumbs (local only)
+            if len(self._pending) > self._pending_hwm:
+                self._pending_hwm = len(self._pending)
 
             # Schedule timeout rejection enrichment if requested
             if timeout and timeout > 0:

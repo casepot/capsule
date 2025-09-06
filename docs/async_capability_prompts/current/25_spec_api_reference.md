@@ -114,14 +114,14 @@ Single‑loop invariant: do not read the transport directly in tests or componen
 
 Correlation rules:
 - Execute → Result/Error: `ExecuteMessage.id` (worker execution_id) ↔ durable id `exec:{execution_id}`
-- Input → InputResponse: `InputMessage.id` ↔ durable id `{execution_id}:input:{message.id}`
+- Input → InputResponse: `InputMessage.id` ↔ durable id `exec:{execution_id}:input:{message.id}`
 
 The bridge never calls `receive_message`.
 
 #### Correlation & Promise IDs (Phase 2)
 
 - Execute: durable promise id `exec:{execution_id}` created by durable function; correlation key is `ExecuteMessage.id` and responses correlate on `{Result,Error}.execution_id`.
-- Input: durable promise id `{execution_id}:input:{input_message.id}` created by the bridge; correlation key is `InputMessage.id` and response correlates on `InputResponseMessage.input_id`.
+- Input: durable promise id `exec:{execution_id}:input:{input_message.id}` created by the bridge; correlation key is `InputMessage.id` and response correlates on `InputResponseMessage.input_id`.
 
 The bridge resolves on `ResultMessage` and rejects on `ErrorMessage`. On timeouts passed to `send_request`, a background task rejects with structured JSON containing `capability`, `execution_id`, `request_id`, and `timeout` seconds.
 
@@ -173,6 +173,41 @@ def durable_execute(ctx, args):
     # Parse JSON payload for ResultMessage shape...
     # return parsed
 ```
+
+#### Example: Parse durable rejection payload in a durable function
+
+```python
+try:
+    raw = yield promise_handle
+except Exception as e:
+    # Expect JSON error payload from bridge timeout or ErrorMessage
+    import json
+    try:
+        err = json.loads(str(e))
+        if isinstance(err, dict) and err.get("type") == "error":
+            details = {
+                "capability": err.get("capability"),
+                "execution_id": err.get("execution_id"),
+                "request_id": err.get("request_id"),
+                "timeout": err.get("timeout"),
+                "exception_type": err.get("exception_type"),
+            }
+            raise RuntimeError(f"Durable rejection: {details}")
+    except Exception:
+        # Fallback: add note and re-raise
+        if hasattr(e, "add_note"):
+            e.add_note("Durable rejection (unparsed)")
+        raise
+```
+
+#### Drain Timeout Policy (Local Mode)
+
+- Worker drains all outputs before sending `ResultMessage`.
+- If draining exceeds the timeout, worker emits a single `ErrorMessage` with:
+  - `exception_type`: `OutputDrainTimeout`
+  - `exception_message`: `Failed to drain all outputs before timeout`
+  - `execution_id`: the execution id
+- Ordering is preserved: all outputs precede the error.
 
 ### Durable Functions (Promise‑First) (Ready)
 

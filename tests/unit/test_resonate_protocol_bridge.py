@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, Mock
 import asyncio
 
 from src.integration.resonate_bridge import ResonateProtocolBridge
+from src.integration.constants import input_promise_id
 from src.protocol.messages import InputMessage, InputResponseMessage, ExecuteMessage, ResultMessage, ErrorMessage
 
 
@@ -26,7 +27,7 @@ async def test_bridge_send_request_creates_promise_and_sends_message():
     assert ret is promise
     resonate.promises.create.assert_called_once()
     args, kwargs = resonate.promises.create.call_args
-    assert kwargs["id"] == "e1:input:m1"
+    assert kwargs["id"] == input_promise_id("e1", "m1")
     # 0.5s -> 500ms
     assert kwargs["timeout"] == 500
     transport.send_message.assert_awaited_once_with(msg)
@@ -51,7 +52,7 @@ async def test_bridge_route_response_resolves_promise():
     assert ok is True
     resonate.promises.resolve.assert_called_once()
     rid = resonate.promises.resolve.call_args.kwargs["id"]
-    assert rid == "e9:input:abc" or rid == "e9:input:abc"  # deterministic id
+    assert rid == input_promise_id("e9", "abc")  # deterministic id
 
     # Unmatched returns False and does not raise
     resp2 = InputResponseMessage(id="y", timestamp=time.time(), data="hi", input_id="zzz")

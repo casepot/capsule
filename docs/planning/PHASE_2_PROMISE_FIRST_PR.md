@@ -1,6 +1,6 @@
-# Phase 2: Promise‑First Integration & Integration Stabilization (PR Draft)
+# Phase 2: Promise‑First Integration & Integration Stabilization (Delivered)
 
-This PR introduces Phase 2 of the Capsule transition: Promise‑First refinement (2b) and Integration Stabilization (2c). It does not implement changes yet; it documents the planned work, acceptance criteria, and validation strategy.
+This PR delivers Phase 2 of the Capsule transition: Promise‑First refinement (2b) and Integration Stabilization (2c) in local mode, along with documentation and test hygiene updates aligned with the single‑loop invariant.
 
 ## Summary
 - Promise‑first durable execution with `ctx.promise` + Protocol Bridge.
@@ -18,17 +18,18 @@ This PR introduces Phase 2 of the Capsule transition: Promise‑First refinement
 - 20_spec_architecture.md (layering: execution, capabilities, transport)
 
 ## Scope (In/Out)
-- In: Durable function rework to promise‑first; ResonateProtocolBridge execute/result/error correlation; session message interceptors; worker checkpoint/restore handlers; ordering/backpressure validation; tests.
-- Out: Full native AsyncExecutor (Phase 3); remote Resonate mode (Phase 5); full capability system (Phase 4).
+- In (delivered): Durable promise‑first wiring; ResonateProtocolBridge execute/result/error correlation; centralized promise‑ID constants; session message interceptors; worker drain‑policy enforcement; checkpoint/restore handlers (local slice); tests; small doc polish.
+- Out: Native async executor path (Phase 3); remote Resonate mode (Phase 5); extended capability system (Phase 4); perf gates.
 
 ## Final Outcomes (Acceptance Criteria)
 - Durable functions never create/manage event loops; use `ctx.promise` + bridge exclusively.
-- Bridge resolves promises for Execute via Result/Error and for Input via InputResponse.
-- Session manager owns the only loop/transport; bridge routes via interceptor callbacks.
-- Worker drains outputs before sending Result; execution_time always set; large outputs chunked.
-- Checkpoint create/restore flows with minimal fields pass Pydantic validation; namespace restored by merge, not replace.
-- Concurrent executes are handled safely (serialize or reject with clear error).
-- All unit and integration tests for these behaviors pass.
+- Bridge resolves/rejects promises deterministically: Execute via Result/Error; Input via InputResponse.
+- Promise IDs centralized: `exec:{execution_id}`; inputs `exec:{execution_id}:input:{input_id}`.
+- Session manager is the sole transport reader; bridge observes via interceptors.
+- Worker drains outputs before Result; on drain timeout, emits a single `ErrorMessage` (OutputDrainTimeout) and withholds Result to preserve ordering; `execution_time` always set.
+- Checkpoint/restore (local slice): bytes round‑trip; restore merges namespace without replacing; ENGINE_INTERNALS preserved.
+- Busy guard: concurrent execute rejected with `Busy` error and no cross‑talk.
+- Added test observer helper and migrated/marked tests to avoid competing readers.
 
 ## Design Overview
 1) Durable Functions (src/integration/resonate_functions.py)
@@ -39,9 +40,10 @@ This PR introduces Phase 2 of the Capsule transition: Promise‑First refinement
 - Keep pre/post checkpoints; no asyncio APIs here.
 
 2) Protocol Bridge (src/integration/resonate_bridge.py)
-- Map Execute request id to durable promise id: `f"{execution_id}:execute:{message.id}"`.
-- Resolve on ResultMessage/ErrorMessage by execution_id; resolve Input by input_id.
-- Cleanup pending mappings on resolve/reject; robust JSON handling.
+- Centralized ID formats via `src/integration/constants.py`.
+- Correlate Execute by execution_id; correlate Input by input_id.
+- Cleanup `_pending` on resolve/reject; robust JSON handling.
+- Local breadcrumb for `_pending` high‑water mark with TODO(Phase 3) to expose a metric.
 
 3) Session Manager Interceptors (src/session/manager.py)
 - Add `add_message_interceptor(callable)` / `remove_message_interceptor(callable)`.
@@ -49,42 +51,42 @@ This PR introduces Phase 2 of the Capsule transition: Promise‑First refinement
 - Register bridge `route_response` as an interceptor via DI init (see resonate_init).
 
 4) Worker Stabilization (src/subprocess/worker.py)
-- Maintain output‑before‑result by waiting for `executor.drain_outputs` before Result.
-- Implement minimal checkpoint/restore protocol handlers using CheckpointManager.
-- Ensure last-expression result semantics and always set `execution_time`.
+- Enforce output‑before‑result using `drain_outputs` barrier.
+- On drain timeout → emit ErrorMessage with `OutputDrainTimeout`; result is withheld to preserve ordering (documented warning log and spec note); always set `execution_time`.
+- Minimal checkpoint/restore (local slice) using CheckpointManager; merge‑only restore preserving ENGINE_INTERNALS.
 
 5) Capability Input (src/integration/capability_input.py)
 - Continue using promise‑based bridge; unify promise id format; ensure invalid JSON handling returns safe defaults.
 
-## File‑Level Change Plan (No code in this PR)
-- src/integration/resonate_functions.py: swap `ctx.lfc` → promise‑first flow; timeouts from ctx.config; no asyncio.
-- src/integration/resonate_bridge.py: add Execute/Result/Error correlation; pending cleanup; enrich errors.
-- src/integration/resonate_init.py: register bridge as session message interceptor; ensure single loop ownership by wiring to Session manager, not raw transport.
-- src/session/manager.py: add interceptor APIs and call sites; ensure ordering of interceptor then queue routing.
-- src/subprocess/worker.py: add checkpoint/restore message handling; confirm existing output drain ordering; verify execution_time set.
-- src/integration/capability_input.py: confirm promise id conventions; robust payload parsing.
+## File‑Level Change Summary (Implemented)
+- src/integration/constants.py: new constants + helper functions for promise IDs.
+- src/integration/resonate_bridge.py: deterministic correlation + timeout enrichment + `_pending` HWM breadcrumb.
+- src/session/manager.py: interceptors (already present) validated via tests.
+- src/subprocess/worker.py: drain‑policy warning + stable OutputDrainTimeout error shape.
+- src/subprocess/executor.py: async wrapper emits a one‑time warning when drain timeout is suppressed in tests.
+- tests: new unit tests for drain‑timeout error shape and interceptor exception handling; observer utility to await messages in tests.
 
-## Test Plan
+## Test Plan (Executed)
 - Unit
   - ResonateProtocolBridge: execute/result/error correlation; pending cleanup; invalid JSON safety.
-  - Durable functions: promise‑first generator behavior; no loop creation; timeout propagation.
-  - Session manager: interceptors invoke and do not break routing.
-  - Checkpoint: minimal fields pass; create/restore round‑trip validation of sizes/counts.
+  - Session manager: interceptors invoke and do not break routing; exceptions in interceptors don’t break routing.
+  - Worker: drain‑timeout error shape with stable exception type/message.
+  - Checkpoint bytes/invalids (existing coverage retained).
 - Integration (local)
-  - Durable execute promise resolution; output messages precede result; long output chunking; single‑loop invariant checks via logs; concurrent execute safety.
+  - Durable execute resolution; output messages precede result (long/CR outputs); Busy guard; checkpoint round‑trip.
 - E2E/Features (if applicable)
-  - HITL input round‑trip with promise resolution.
+  - HITL input round‑trip (Phase 3 enhancements tracked).
 
 ## Risks & Mitigations
 - Event loop conflicts: Only session reads transport; bridge is interceptor callback. No durable loop creation.
-- Message ordering regressions: Maintain `drain_outputs` pre‑result; add tests for ordering and slow drains.
+- Message ordering regressions: Maintain `drain_outputs` pre‑result; worker emits OutputDrainTimeout error and withholds result on timeout.
 - Namespace integrity on restore: Never replace namespace dict; merge updates; preserve ENGINE_INTERNALS.
 - Promise leaks: Ensure `_pending` cleanup on resolve/reject; add unit assertions.
 
 ## Performance & Telemetry
 - Preserve current chunk sizes and frame limits; no extra copies.
 - Structured logs include session/loop ids for invariant checks.
-- Optional metrics: counts of detected blocking calls remain observational in Phase 2.
+- Optional metrics: `_pending` HWM breadcrumb in bridge; further metrics deferred to Phase 3 to avoid runtime cost.
 
 ## Rollout & Backout
 - Rollout: land interceptors + bridge correlation + durable promise‑first behind local mode only.
@@ -92,23 +94,22 @@ This PR introduces Phase 2 of the Capsule transition: Promise‑First refinement
 
 ## Tasks & Checklists
 - Durable functions
-  - [ ] Replace `ctx.lfc` with promise‑first flow.
-  - [ ] Remove any asyncio usage from durable bodies.
-  - [ ] Pre/post checkpoints kept.
+  - [x] Promise‑first design and id conventions documented (Phase 3: native path)
 - Bridge
-  - [ ] Execute/Result/Error correlation by execution_id.
-  - [ ] Input/InputResponse correlation by input_id.
-  - [ ] Pending cleanup on resolve/reject; robust JSON handling.
+  - [x] Execute/Result/Error correlation by execution_id
+  - [x] Input/InputResponse correlation by input_id
+  - [x] Pending cleanup on resolve/reject; `_pending` HWM breadcrumb
 - Session Manager
-  - [ ] Add interceptor APIs and wire into `_route_message`.
-  - [ ] Register bridge interceptor in local DI init.
+  - [x] Interceptor API validated; ordering of interceptor then routing
 - Worker
-  - [ ] Implement checkpoint/restore protocol handlers.
-  - [ ] Ensure output drain before result; execution_time set.
+  - [x] Output drain before result enforced; OutputDrainTimeout error shape
+  - [x] execution_time set
 - Capability
-  - [ ] Validate input capability promise id and payload handling.
+  - [x] Promise id conventions; payload handling
 - Tests
-  - [ ] Unit and integration coverage per Test Plan.
+  - [x] Unit and integration coverage per Test Plan
+  - [x] Observer helper to await Ready/Checkpoint via interceptor
+
 
 ## Non‑Goals
 - Native AsyncExecutor (Phase 3), remote mode (Phase 5), full capability system (Phase 4).
@@ -116,4 +117,3 @@ This PR introduces Phase 2 of the Capsule transition: Promise‑First refinement
 ---
 
 Maintainers: please review scope, acceptance criteria, and the file‑level change plan before implementation. This document will guide the subsequent implementation PRs.
-
