@@ -300,6 +300,8 @@ class ThreadedExecutor:
         self._outputs_sent = 0
         self._outputs_dropped = 0
         self._max_queue_depth = 0
+        # Warn once per executor instance if async-wrapper drain suppression triggers
+        self._warned_drain_timeout: bool = False
 
     def create_protocol_input(self) -> Callable[[str], str]:
         """Create input function that works in thread context."""
@@ -789,13 +791,19 @@ class ThreadedExecutor:
             try:
                 await self.drain_outputs(timeout=self._drain_timeout)
             except (OutputDrainTimeout, asyncio.TimeoutError) as e:
-                # Log timeout but don't fail - OK in tests with mock transport
-                logger.debug(
-                    "Output drain timeout in async wrapper",
-                    error=str(e),
-                    timeout=self._drain_timeout,
-                    execution_id=self.execution_id,
-                )
+                # Drain policy note: In the async wrapper (test path), we do not fail
+                # the execution on drain timeout. The real worker enforces ordering
+                # and emits an ErrorMessage instead. This suppression is intentional
+                # and should not be used in production paths.
+                if not self._warned_drain_timeout:
+                    logger.warning(
+                        "drain_timeout_suppressed_in_async_wrapper",
+                        error=str(e),
+                        timeout=self._drain_timeout,
+                        execution_id=self.execution_id,
+                        drain_policy="suppress_in_wrapper:error_in_worker",
+                    )
+                    self._warned_drain_timeout = True
 
             # Check for errors first
             if self._error:

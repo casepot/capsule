@@ -50,43 +50,45 @@ This specification defines the integration patterns, configurations, and impleme
 
 ## Initialization Patterns
 
-### Local Mode Initialization
+### Local Mode Initialization (Current Code Wiring)
 
 ```python
-from resonate_sdk import Resonate
-from typing import Optional
-import os
+from src.session.manager import Session
+from src.integration.resonate_init import initialize_resonate_local
 
-def initialize_resonate_local() -> Resonate:
-    """
-    Initialize Resonate in local mode for development.
-    Zero external dependencies - uses in-memory storage.
-    """
-    # Create local instance
-    resonate = Resonate.local(
-        # Configuration for local mode
-        config={
-            "storage": "memory",
-            "promise_timeout_default": 300,  # 5 minutes
-            "max_retries": 3,
-            "retry_backoff": "exponential",
-            "log_level": os.getenv("LOG_LEVEL", "INFO")
-        }
-    )
-    
-    # Register core functions
-    _register_durable_functions(resonate)
-    
-    # Initialize dependencies
-    _initialize_dependencies(resonate)
-    
-    # Set up promise handlers
-    _configure_promise_handlers(resonate)
-    
-    return resonate
+session = Session()
+await session.start()
+resonate = initialize_resonate_local(session)
+
+# Session is the sole transport reader; the bridge is wired via a message
+# interceptor so durable promises are resolved when Result/Error/InputResponse
+# messages arrive.
 ```
 
-### Remote Mode Initialization
+Quickstart: Local‑mode durable execute
+
+```python
+from types import SimpleNamespace
+from src.session.manager import Session
+from src.integration.resonate_init import initialize_resonate_local
+from src.integration.resonate_bridge import ResonateProtocolBridge
+from src.protocol.messages import ExecuteMessage
+import time
+
+session = Session()
+await session.start()
+resonate = initialize_resonate_local(session)
+bridge: ResonateProtocolBridge = resonate.dependencies["protocol_bridge"]
+
+execution_id = "exec-123"
+promise_id = f"exec:{execution_id}"
+prom = resonate.promises.create(id=promise_id, timeout=30000, data="{}")
+msg = ExecuteMessage(id=execution_id, timestamp=time.time(), code="2+2")
+await bridge.send_request("execute", execution_id, msg, timeout=30.0, promise_id=promise_id)
+payload = await prom.await_result()  # JSON payload for ResultMessage/ErrorMessage
+```
+
+### Remote Mode Initialization (Planned)
 
 ```python
 def initialize_resonate_remote(
@@ -162,7 +164,8 @@ def _register_durable_functions(resonate: Resonate):
         
         # Promise-first execution (avoids loop-spinning in durable layer)
         bridge = ctx.get_dependency("protocol_bridge")
-        promise_id = f"exec:{execution_id}:{uuid.uuid4()}"
+        # Phase 2: Promise‑first with deterministic id
+        promise_id = f"exec:{execution_id}"
         promise = yield ctx.promise(id=promise_id)
         
         # Send execute request via protocol bridge
@@ -171,6 +174,7 @@ def _register_durable_functions(resonate: Resonate):
             execution_id=execution_id,
             message=ExecuteMessage(...),  # include code, ids per protocol
             timeout=ctx.config.get("tla_timeout", 30.0) if hasattr(ctx, "config") else 30.0,
+            promise_id=promise_id,
         )
         
         # Wait for durable result
@@ -261,6 +265,24 @@ def _initialize_dependencies(resonate: Resonate):
         lambda: NamespaceManager(resonate),
         singleton=True
     )
+
+## Correlation & Rejection Semantics (Phase 2)
+
+- Single‑loop invariant: `Session` is the sole transport reader. The Resonate protocol bridge is wired via `Session` message interceptors and never reads the transport directly.
+- Deterministic promise IDs:
+  - Execute: `exec:{execution_id}` (created by `durable_execute` via `ctx.promise`).
+  - Input: `{execution_id}:input:{message.id}` (created by the bridge).
+- Correlation mapping:
+  - Execute → Result/Error: request key is `ExecuteMessage.id`; response correlates on `ResultMessage.execution_id` or `ErrorMessage.execution_id` and resolves/rejects the durable promise `exec:{execution_id}`.
+  - Input → InputResponse: request key is `InputMessage.id`; response correlates on `InputResponseMessage.input_id` and resolves the durable promise `{execution_id}:input:{message.id}`.
+- Rejection policy:
+  - On `ErrorMessage`, the bridge rejects (does not resolve) the durable promise with a structured JSON payload.
+  - `durable_execute` expects rejection and raises a structured exception with `add_note` context (execution id, traceback excerpt if present).
+- Timeout enrichment:
+  - If `send_request(..., timeout=...)` expires before a response, the bridge rejects with a structured payload including `capability`, `execution_id`, `request_id`, and `timeout` seconds.
+- Memory semantics:
+  - Msgpack serialization uses Pydantic `model_dump(mode="python")` to preserve raw bytes for checkpoint payloads; JSON uses `mode="json"`.
+
     
     # Capability dependencies
     resonate.set_dependency(

@@ -214,12 +214,13 @@ class MessageTransport:
             raise ProtocolError("Transport closed")
 
         # Serialize message
-        data_dict = message.model_dump(mode="json")
-
-        data: bytes
+        # For msgpack, preserve Python-native types (including bytes) to ensure
+        # fields like CheckpointMessage.data round-trip correctly.
         if self._use_msgpack:
+            data_dict = message.model_dump(mode="python")
             data = msgpack.packb(data_dict, use_bin_type=True)
         else:
+            data_dict = message.model_dump(mode="json")
             data = json.dumps(data_dict).encode("utf-8")
 
         # Send frame

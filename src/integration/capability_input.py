@@ -15,9 +15,8 @@ class InputCapability:
     Uses Resonate promises for HITL input request/response.
     """
 
-    def __init__(self, resonate: Any, transport: Any, bridge: Any):
+    def __init__(self, resonate: Any, bridge: Any):
         self._resonate = resonate
-        self._transport = transport
         self._bridge = bridge
 
     async def request_input(self, prompt: str, execution_id: str) -> str:
@@ -36,4 +35,9 @@ class InputCapability:
             data = json.loads(result)
         except Exception:
             return ""
-        return str(data.get("input", ""))
+        # Protocol uses InputResponseMessage with field 'data'; 
+        # support legacy key 'input' for compatibility in tests.
+        value = data.get("data") if isinstance(data, dict) else None
+        if value is None and isinstance(data, dict):
+            value = data.get("input")
+        return str(value) if value is not None else ""

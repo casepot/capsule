@@ -8,6 +8,9 @@ durable function semantics expected by the Resonate SDK.
 """
 
 from typing import Any, Callable, Generator
+import time
+import json
+from ..protocol.messages import ExecuteMessage
 from .types import DurableResult
 
 
@@ -21,22 +24,14 @@ def register_executor_functions(resonate: Any) -> Any:
     @resonate.register(name="durable_execute", version=1)  # type: ignore[misc]
     def durable_execute(ctx: Any, args: dict[str, Any]) -> Generator[Any, Any, DurableResult]:
         """
-        Executes code durably via AsyncExecutor. Uses DI:
-          - async_executor: created via factory (singleton=False)
-          - namespace_manager: singleton
-          - transport: provided in DI graph
-        Applies pre/post checkpoints and proper timeouts per ctx.config.
+        Promise-first durable execution using the protocol bridge.
 
-        NOTE: ctx.lfc is synchronous in resonate-sdk 0.6.x and does not accept
-        async callables. We therefore wrap AsyncExecutor.execute in a temporary
-        synchronous shim that submits the coroutine to an event loop and
-        blocks for the result. This is a transitional strategy ONLY.
+        Flow:
+          - Create stable promise id (exec:{execution_id}) via ctx.promise
+          - Send ExecuteMessage via bridge (mapped to that promise)
+          - Await resolution via the promise; parse result payload safely
 
-        TODO(promise-first): Replace lfc usage with a promise-first flow:
-          - promise = yield ctx.promise(id=...)
-          - yield protocol_bridge.send_request(...)
-          - result = yield promise
-        This avoids loop-crossing hazards and aligns with the durable model.
+        No event loop creation or management occurs here.
         """
         code = args["code"]
         execution_id = args["execution_id"]
@@ -48,61 +43,91 @@ def register_executor_functions(resonate: Any) -> Any:
                 {"execution_id": execution_id, "code_len": len(code)},
             )
 
-        # Resolve executor via factory from DI
-        exec_factory: Callable[[Any], Any] = ctx.get_dependency("async_executor")
-        executor = exec_factory(ctx)
+        # Prepare durable promise and bridge
+        bridge = ctx.get_dependency("protocol_bridge")
+        timeout = float(getattr(getattr(ctx, "config", None), "tla_timeout", 30.0))
+        promise_id = f"exec:{execution_id}"
 
+        # Register/create promise in durable layer
+        promise = yield ctx.promise(id=promise_id)
+
+        # Build and send Execute request; correlate request-id to promise-id
+        exec_msg = ExecuteMessage(
+            id=execution_id,
+            timestamp=time.time(),
+            code=code,
+            capture_source=True,
+        )
+        # Bridge returns a promise for some capabilities; not needed for execute
+        yield bridge.send_request(
+            "execute", execution_id, exec_msg, timeout=timeout, promise_id=promise_id
+        )
+
+        # Await durable resolution (may raise on rejection)
         try:
-            # Local run via a synchronous wrapper (ctx.lfc expects sync callable)
-            # IMPORTANT: Do NOT create a new loop if the executor/transport already
-            # owns a loop. In a full bridge-first design, this durable function will
-            # not manage loops at all.
-            def _run_executor_sync(_ctx: Any, a: dict[str, Any]) -> Any:
-                import asyncio
-
-                async def _inner() -> Any:
-                    return await executor.execute(a["code"])
-
-                # If a loop is running in this thread, we cannot run_until_complete.
-                # In that case, submit to the executor's loop via run_coroutine_threadsafe.
+            raw = yield promise
+        except Exception as e:
+            # Promise rejected -> surface structured error with context
+            err = RuntimeError("durable_execute rejected")
+            if hasattr(err, "add_note"):
                 try:
-                    running = asyncio.get_running_loop()
-                except RuntimeError:
-                    running = None
+                    err.add_note(f"Execution ID: {execution_id}")
+                    err.add_note(str(e))
+                except Exception:
+                    pass
+            raise err
 
-                if running is not None:
-                    # TODO(loop-ownership): DI should expose the loop that owns the
-                    # executor/transport; use it here to submit safely.
-                    raise RuntimeError(
-                        "lfc wrapper cannot run inside an active event loop; "
-                        "switch to promise-first (ctx.promise + bridge) or provide a "
-                        "threadsafe submit() facade bound to the executor's loop."
-                    )
+        result_value: Any = None
+        # Normalize raw into a Python object if JSON-like; otherwise leave as-is
+        payload: Any
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                payload = json.loads(raw.decode("utf-8", errors="replace"))
+            except Exception:
+                payload = raw.decode("utf-8", errors="replace")
+        elif isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload = raw
+        else:
+            payload = raw
 
-                loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(loop)
-                    return loop.run_until_complete(_inner())
-                finally:
-                    asyncio.set_event_loop(None)
-                    loop.close()
+        # Expect ResultMessage/ErrorMessage shapes but be tolerant of other types
+        if isinstance(payload, dict):
+            typ = payload.get("type")
+            if typ == "result":
+                result_value = payload.get("value")
+                if result_value is None:
+                    result_value = payload.get("repr")
+            elif typ == "error" or "exception_message" in payload:
+                msg = payload.get("exception_message", "Execution error")
+                exc = RuntimeError(msg)
+                if hasattr(exc, "add_note"):
+                    try:
+                        exc.add_note(f"Execution ID: {execution_id}")
+                        tb = payload.get("traceback", "")
+                        if tb:
+                            exc.add_note(tb)
+                    except Exception:
+                        pass
+                raise exc
+            else:
+                # Unknown dict; return as-is for diagnostics
+                result_value = payload
+        else:
+            # Non-dict payload (e.g., plain string/int); return as-is
+            result_value = payload
 
-            result: Any = yield ctx.lfc(_run_executor_sync, {"code": code})
-        except Exception as e:  # pragma: no cover - error path validated via notes
-            # Add diagnostic context where supported
-            if hasattr(e, "add_note"):
-                e.add_note(f"Execution ID: {execution_id}")
-                e.add_note(f"Code length: {len(code)}")
-            raise
-        finally:
-            # Placeholder for optional namespace snapshot persistence
-            pass
+        # Fallback: ensure result_value is at least the raw payload when unset
+        if result_value is None:
+            result_value = payload
 
         # Post-execution checkpoint (if available)
         if hasattr(ctx, "checkpoint"):
             yield ctx.checkpoint("post_execution", {"execution_id": execution_id})
 
-        return {"result": result, "execution_id": execution_id}
+        return {"result": result_value, "execution_id": execution_id}
 
     # Expose handle for tests and local callers
     try:

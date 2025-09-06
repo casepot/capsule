@@ -6,7 +6,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import Any, AsyncIterator, Dict, Optional, Callable, List
 
 import structlog
 
@@ -83,6 +83,10 @@ class Session:
         self._cancel_event = asyncio.Event()  # Event for cancellation
         self._message_handlers: Dict[str, asyncio.Queue[Message]] = {}
         self._receive_task: Optional[asyncio.Task[None]] = None
+        # Interceptors invoked on every received message before routing
+        self._interceptors: List[Callable[[Message], Optional[bool]]] = []
+        # Track routing tasks for observability and cleanup
+        self._routing_tasks: set[asyncio.Task[None]] = set()
 
         # Metrics collection
         self._metrics = {
@@ -121,6 +125,8 @@ class Session:
                 raise RuntimeError(f"Cannot start session in state {self._state}")
 
             try:
+                # Reset cancellation event for new lifecycle
+                self._cancel_event = asyncio.Event()
                 # Start subprocess
                 self._process = await asyncio.create_subprocess_exec(
                     self._python_path,
@@ -150,7 +156,12 @@ class Session:
                     raise RuntimeError("Session failed to become ready")
 
                 self._state = SessionState.READY
-                logger.info("Session started", session_id=self.session_id)
+                loop = asyncio.get_running_loop()
+                logger.info(
+                    "Session started",
+                    session_id=self.session_id,
+                    event_loop_id=id(loop),
+                )
 
             except Exception as e:
                 self._state = SessionState.ERROR
@@ -185,6 +196,28 @@ class Session:
             try:
                 message = await self._transport.receive_message(timeout=0.1)
 
+                # Invoke passive interceptors for all messages (including ready/heartbeat)
+                if self._interceptors:
+                    loop = asyncio.get_running_loop()
+                    for interceptor in list(self._interceptors):
+                        try:
+                            logger.debug(
+                                "message_interceptor_invoke",
+                                session_id=self.session_id,
+                                event_loop_id=id(loop),
+                                message_type=getattr(message, "type", None),
+                                execution_id=getattr(message, "execution_id", None),
+                                interceptor=getattr(interceptor, "__name__", str(interceptor)),
+                            )
+                            _ = interceptor(message)
+                        except Exception as e:
+                            # Interceptors must never break routing; log and continue
+                            logger.warning(
+                                "message_interceptor_error",
+                                error=str(e),
+                                interceptor=getattr(interceptor, "__name__", str(interceptor)),
+                            )
+
                 # Handle different message types
                 if message.type == "ready":
                     from typing import cast
@@ -203,8 +236,21 @@ class Session:
                     self._info.cpu_percent = heartbeat.cpu_percent
 
                 else:
-                    # Route to appropriate handler
-                    await self._route_message(message)
+                    # Route to appropriate handler without blocking receive loop
+                    t = asyncio.create_task(self._route_message(message))
+                    self._routing_tasks.add(t)
+                    def _done(task: asyncio.Task[None]) -> None:
+                        self._routing_tasks.discard(task)
+                        if task.cancelled():
+                            return
+                        exc = task.exception()
+                        if exc:
+                            logger.warning(
+                                "route_message_task_error",
+                                session_id=self.session_id,
+                                error=str(exc),
+                            )
+                    t.add_done_callback(_done)
 
             except asyncio.TimeoutError:
                 continue
@@ -223,6 +269,8 @@ class Session:
         Args:
             message: Message to route
         """
+        # Interceptors are invoked in _receive_loop only to avoid double-calls
+
         # Check if message has execution_id and route to that execution's queue
         execution_id = getattr(message, "execution_id", None)
         if execution_id:
@@ -235,6 +283,24 @@ class Session:
         if "general" not in self._message_handlers:
             self._message_handlers["general"] = asyncio.Queue()
         await self._message_handlers["general"].put(message)
+
+    # --- Message interceptor API -------------------------------------------------
+    def add_message_interceptor(self, fn: Callable[[Message], Optional[bool]]) -> None:
+        """Register a passive message interceptor.
+
+        Interceptors are called for every received message on the session's event
+        loop, before routing to internal queues. They must be non-blocking and
+        must not consume messages. The return value is ignored.
+        """
+        if fn not in self._interceptors:
+            self._interceptors.append(fn)
+
+    def remove_message_interceptor(self, fn: Callable[[Message], Optional[bool]]) -> None:
+        """Unregister a previously added interceptor."""
+        try:
+            self._interceptors.remove(fn)
+        except ValueError:
+            pass
 
     async def _wait_for_message_cancellable(
         self,
@@ -598,6 +664,17 @@ class Session:
                 await self._receive_task
             except asyncio.CancelledError:
                 pass
+
+        # Cancel any outstanding routing tasks
+        if self._routing_tasks:
+            for t in list(self._routing_tasks):
+                t.cancel()
+            for t in list(self._routing_tasks):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+            self._routing_tasks.clear()
 
         # Close transport
         if self._transport:
