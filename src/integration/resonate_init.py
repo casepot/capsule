@@ -15,6 +15,9 @@ from .capability_input import InputCapability
 from .resonate_wrapper import async_executor_factory
 from ..subprocess.namespace import NamespaceManager
 from ..protocol.messages import InputResponseMessage, ResultMessage, ErrorMessage
+import structlog
+
+logger = structlog.get_logger()
 
 
 def initialize_resonate_local(session: Any, resonate: Optional[Any] = None) -> Any:
@@ -73,7 +76,18 @@ def initialize_resonate_local(session: Any, resonate: Optional[Any] = None) -> A
             try:
                 # Schedule async route to remain non-blocking
                 import asyncio as _asyncio
-                _asyncio.create_task(bridge.route_response(message))  # type: ignore[arg-type]
+                task = _asyncio.create_task(bridge.route_response(message))  # type: ignore[arg-type]
+                def _done(t: _asyncio.Task):
+                    if t.cancelled():
+                        return
+                    exc = t.exception()
+                    if exc:
+                        logger.debug(
+                            "bridge_route_response_task_error",
+                            error=str(exc),
+                            message_type=getattr(message, "type", None),
+                        )
+                task.add_done_callback(_done)
             except Exception:
                 # Never raise from interceptor
                 return

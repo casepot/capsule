@@ -106,14 +106,15 @@ class ResonateProtocolBridge:
                     self._pending_hwm = len(self._pending)
 
                 # Schedule timeout rejection enrichment if requested
-                if timeout and timeout > 0:
+                effective_timeout = timeout if (timeout and timeout > 0) else 60.0
+                if effective_timeout and effective_timeout > 0:
                     t = asyncio.create_task(
                         self._reject_on_timeout(
                             key,
                             str(promise_id),
                             capability_id=capability_id,
                             execution_id=execution_id,
-                            timeout=timeout,
+                            timeout=effective_timeout,
                         )
                     )
                     # Track so we can cancel on resolve
@@ -167,7 +168,15 @@ class ResonateProtocolBridge:
                     # Defensive: ignore benign already-settled errors
                     return True
             return True
-        except Exception:
+        except Exception as e:
+            # Swallow to avoid breaking receive loop, but log for diagnostics
+            try:
+                import structlog
+                structlog.get_logger().debug(
+                    "bridge_route_response_exception", error=str(e)
+                )
+            except Exception:
+                pass
             return False
 
     def _extract_correlation_key(self, message: Message) -> Optional[str]:
@@ -234,3 +243,7 @@ class ResonateProtocolBridge:
         except Exception:
             # Best-effort timeout handling; no raising
             return
+
+    # Phase 3: Optional lightweight diagnostic getter
+    def pending_high_water_mark(self) -> int:
+        return self._pending_hwm

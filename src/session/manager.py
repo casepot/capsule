@@ -85,6 +85,8 @@ class Session:
         self._receive_task: Optional[asyncio.Task[None]] = None
         # Interceptors invoked on every received message before routing
         self._interceptors: List[Callable[[Message], Optional[bool]]] = []
+        # Track routing tasks for observability and cleanup
+        self._routing_tasks: set[asyncio.Task[None]] = set()
 
         # Metrics collection
         self._metrics = {
@@ -235,7 +237,20 @@ class Session:
 
                 else:
                     # Route to appropriate handler without blocking receive loop
-                    asyncio.create_task(self._route_message(message))
+                    t = asyncio.create_task(self._route_message(message))
+                    self._routing_tasks.add(t)
+                    def _done(task: asyncio.Task[None]) -> None:
+                        self._routing_tasks.discard(task)
+                        if task.cancelled():
+                            return
+                        exc = task.exception()
+                        if exc:
+                            logger.warning(
+                                "route_message_task_error",
+                                session_id=self.session_id,
+                                error=str(exc),
+                            )
+                    t.add_done_callback(_done)
 
             except asyncio.TimeoutError:
                 continue
@@ -649,6 +664,17 @@ class Session:
                 await self._receive_task
             except asyncio.CancelledError:
                 pass
+
+        # Cancel any outstanding routing tasks
+        if self._routing_tasks:
+            for t in list(self._routing_tasks):
+                t.cancel()
+            for t in list(self._routing_tasks):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+            self._routing_tasks.clear()
 
         # Close transport
         if self._transport:

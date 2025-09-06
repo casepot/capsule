@@ -14,7 +14,8 @@ async def test_input_capability_request_roundtrip():
     # Promise mock with .result returning JSON string
     class Promise:
         async def result(self):
-            return '{"input": "hello"}'
+            # Match protocol shape: InputResponseMessage serialized
+            return '{"type":"input_response","data":"hello","input_id":"rid"}'
 
     bridge.send_request.return_value = Promise()
 

@@ -35,4 +35,9 @@ class InputCapability:
             data = json.loads(result)
         except Exception:
             return ""
-        return str(data.get("input", ""))
+        # Protocol uses InputResponseMessage with field 'data'; 
+        # support legacy key 'input' for compatibility in tests.
+        value = data.get("data") if isinstance(data, dict) else None
+        if value is None and isinstance(data, dict):
+            value = data.get("input")
+        return str(value) if value is not None else ""
