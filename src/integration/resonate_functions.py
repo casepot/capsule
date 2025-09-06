@@ -78,34 +78,50 @@ def register_executor_functions(resonate: Any) -> Any:
             raise err
 
         result_value: Any = None
-        try:
-            payload = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw
-            # Expect ResultMessage/ErrorMessage shape
-            typ = payload.get("type") if isinstance(payload, dict) else None
-            if typ == "result" and isinstance(payload, dict):
+        # Normalize raw into a Python object if JSON-like; otherwise leave as-is
+        payload: Any
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                payload = json.loads(raw.decode("utf-8", errors="replace"))
+            except Exception:
+                payload = raw.decode("utf-8", errors="replace")
+        elif isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                payload = raw
+        else:
+            payload = raw
+
+        # Expect ResultMessage/ErrorMessage shapes but be tolerant of other types
+        if isinstance(payload, dict):
+            typ = payload.get("type")
+            if typ == "result":
                 result_value = payload.get("value")
-                # Fallback to repr if value not serializable
                 if result_value is None:
                     result_value = payload.get("repr")
-            elif typ == "error" or (isinstance(payload, dict) and "exception_message" in payload):
-                # Attach structured context where supported and raise
+            elif typ == "error" or "exception_message" in payload:
                 msg = payload.get("exception_message", "Execution error")
                 exc = RuntimeError(msg)
                 if hasattr(exc, "add_note"):
                     try:
                         exc.add_note(f"Execution ID: {execution_id}")
-                        exc.add_note(payload.get("traceback", ""))
+                        tb = payload.get("traceback", "")
+                        if tb:
+                            exc.add_note(tb)
                     except Exception:
                         pass
                 raise exc
             else:
-                # Unknown payload type; return as-is for diagnostics
+                # Unknown dict; return as-is for diagnostics
                 result_value = payload
-        except Exception as e:  # pragma: no cover - defensive path
-            if hasattr(e, "add_note"):
-                e.add_note(f"Execution ID: {execution_id}")
-                e.add_note(f"Failed to parse promise payload of type {type(raw)}")
-            raise
+        else:
+            # Non-dict payload (e.g., plain string/int); return as-is
+            result_value = payload
+
+        # Fallback: ensure result_value is at least the raw payload when unset
+        if result_value is None:
+            result_value = payload
 
         # Post-execution checkpoint (if available)
         if hasattr(ctx, "checkpoint"):

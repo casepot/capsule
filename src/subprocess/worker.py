@@ -509,10 +509,7 @@ class SubprocessWorker:
                 if msg_type == "execute" or message.type == MessageType.EXECUTE:
                     logger.info("Processing execute message", id=message.id)
                     # Concurrency guard: only one execution at a time in local mode
-                    if self._active_executor is not None and (
-                        (self._active_thread and self._active_thread.is_alive())
-                        or True  # executor presence implies busy until cleared
-                    ):
+                    if self._active_executor is not None:
                         logger.warning(
                             "Busy: rejecting concurrent execute",
                             active_exec_id=self._active_executor.execution_id,
@@ -610,17 +607,31 @@ class SubprocessWorker:
                     if data is not None:
                         try:
                             cp = Checkpoint.from_bytes(data)
-                            # Clear and restore namespace while preserving engine internals
-                            self._namespace.clear()
-                            self._setup_namespace()
-                            # Merge checkpoint namespace values in place
-                            for k, v in cp.namespace.items():
-                                if k not in ENGINE_INTERNALS:
-                                    self._namespace[k] = v
-                            # Restore tracked sources and imports
-                            self._function_sources = dict(cp.function_sources)
-                            self._class_sources = dict(cp.class_sources)
-                            self._imports = list(cp.imports)
+                            if rs_msg.clear_existing:
+                                # Clear and restore namespace while preserving engine internals
+                                self._namespace.clear()
+                                self._setup_namespace()
+                                # Merge checkpoint namespace values in place
+                                for k, v in cp.namespace.items():
+                                    if k not in ENGINE_INTERNALS:
+                                        self._namespace[k] = v
+                                # Replace tracked sources and imports with checkpoint versions
+                                self._function_sources = dict(cp.function_sources)
+                                self._class_sources = dict(cp.class_sources)
+                                self._imports = list(cp.imports)
+                            else:
+                                # Merge-only semantics: update existing namespace without clearing
+                                for k, v in cp.namespace.items():
+                                    if k not in ENGINE_INTERNALS:
+                                        self._namespace[k] = v
+                                # Merge tracked sources and imports (preserve existing extras)
+                                self._function_sources.update(cp.function_sources)
+                                self._class_sources.update(cp.class_sources)
+                                # Deduplicate imports while preserving order (existing first)
+                                existing = set(self._imports)
+                                for imp in cp.imports:
+                                    if imp not in existing:
+                                        self._imports.append(imp)
                         except Exception as e:
                             logger.warning("Restore failed", error=str(e))
 

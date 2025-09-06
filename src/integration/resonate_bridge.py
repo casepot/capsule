@@ -45,6 +45,10 @@ class ResonateProtocolBridge:
         #   - Input:   InputMessage.id
         #   - Others as extended
         self._pending: dict[str, str] = {}
+        # Background timeout tasks keyed by correlation key
+        self._timeouts: dict[str, asyncio.Task[None]] = {}
+        # Protects access to _pending and _timeouts
+        self._lock = asyncio.Lock()
         # TODO(Phase 3): expose a lightweight metric for the high-water mark
         # of pending correlations to observe load/backpressure trends without
         # adding runtime overhead. For now, track the value locally.
@@ -95,22 +99,25 @@ class ResonateProtocolBridge:
 
         if corr_key:
             key = str(corr_key)
-            self._pending[key] = str(promise_id)
-            # Update high-water mark for observability breadcrumbs (local only)
-            if len(self._pending) > self._pending_hwm:
-                self._pending_hwm = len(self._pending)
+            async with self._lock:
+                self._pending[key] = str(promise_id)
+                # Update high-water mark for observability breadcrumbs (local only)
+                if len(self._pending) > self._pending_hwm:
+                    self._pending_hwm = len(self._pending)
 
-            # Schedule timeout rejection enrichment if requested
-            if timeout and timeout > 0:
-                asyncio.create_task(
-                    self._reject_on_timeout(
-                        key,
-                        str(promise_id),
-                        capability_id=capability_id,
-                        execution_id=execution_id,
-                        timeout=timeout,
+                # Schedule timeout rejection enrichment if requested
+                if timeout and timeout > 0:
+                    t = asyncio.create_task(
+                        self._reject_on_timeout(
+                            key,
+                            str(promise_id),
+                            capability_id=capability_id,
+                            execution_id=execution_id,
+                            timeout=timeout,
+                        )
                     )
-                )
+                    # Track so we can cancel on resolve
+                    self._timeouts[key] = t
 
         # Send message via session/sender
         await self._sender.send_message(message)
@@ -122,7 +129,18 @@ class ResonateProtocolBridge:
         corr = self._extract_correlation_key(message)
         if not corr:
             return False
-        promise_id = self._pending.pop(corr, None)
+        promise_id: Optional[str]
+        timeout_task: Optional[asyncio.Task[None]] = None
+        async with self._lock:
+            promise_id = self._pending.pop(corr, None)
+            # Cancel and forget any timeout task for this correlation
+            timeout_task = self._timeouts.pop(corr, None)
+        if timeout_task is not None:
+            timeout_task.cancel()
+            try:
+                await timeout_task
+            except asyncio.CancelledError:
+                pass
         if not promise_id:
             return False
         try:
@@ -137,9 +155,17 @@ class ResonateProtocolBridge:
                 payload = json.dumps(getattr(message, "__dict__", {}))
             # Determine resolve vs reject semantics
             if isinstance(message, ErrorMessage):
-                self._resonate.promises.reject(id=promise_id, error=payload)
+                try:
+                    self._resonate.promises.reject(id=promise_id, error=payload)
+                except Exception:
+                    # Defensive: ignore benign already-settled errors
+                    return True
             else:
-                self._resonate.promises.resolve(id=promise_id, data=payload)
+                try:
+                    self._resonate.promises.resolve(id=promise_id, data=payload)
+                except Exception:
+                    # Defensive: ignore benign already-settled errors
+                    return True
             return True
         except Exception:
             return False
@@ -180,11 +206,17 @@ class ResonateProtocolBridge:
         """
         try:
             await asyncio.sleep(timeout)
-            # Only reject if still pending
-            if self._pending.get(corr_key) != promise_id:
+            # Atomically verify and remove pending entry
+            should_reject = False
+            async with self._lock:
+                current = self._pending.get(corr_key)
+                if current == promise_id:
+                    # Remove mapping and timeout task entries
+                    self._pending.pop(corr_key, None)
+                    self._timeouts.pop(corr_key, None)
+                    should_reject = True
+            if not should_reject:
                 return
-            # Clean up mapping before rejection to avoid leaks
-            self._pending.pop(corr_key, None)
             err = {
                 "type": "error",
                 "exception_type": "TimeoutError",
@@ -194,7 +226,11 @@ class ResonateProtocolBridge:
                 "timeout": timeout,
                 "request_id": corr_key,
             }
-            self._resonate.promises.reject(id=promise_id, error=json.dumps(err))
+            try:
+                self._resonate.promises.reject(id=promise_id, error=json.dumps(err))
+            except Exception:
+                # Ignore benign already-settled errors
+                return
         except Exception:
             # Best-effort timeout handling; no raising
             return

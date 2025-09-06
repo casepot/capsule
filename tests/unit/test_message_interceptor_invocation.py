@@ -1,41 +1,38 @@
 import pytest
+import time
+import uuid
 
 from src.session.manager import Session
 from src.protocol.messages import ResultMessage
-import time
-import uuid
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_session_message_interceptor_runs_before_routing(monkeypatch):
+async def test_route_message_does_not_invoke_interceptors():
+    """Interceptors must be invoked in the receive loop only, not in _route_message."""
     session = Session()
     await session.start()
-
     try:
-        called = {"count": 0, "last": None}
+        calls = {"count": 0}
 
-        def interceptor(msg):
-            called["count"] += 1
-            called["last"] = msg
+        def interceptor(_msg):
+            calls["count"] += 1
 
         session.add_message_interceptor(interceptor)
 
-        # Create a message with execution_id so it would normally be routed to a per-exec queue
+        # Manually route a message; interceptor should NOT be called here
+        exec_id = str(uuid.uuid4())
         msg = ResultMessage(
             id=str(uuid.uuid4()),
             timestamp=time.time(),
             value=1,
             repr="1",
-            execution_id="exec-xyz",
+            execution_id=exec_id,
             execution_time=0.01,
         )
-
-        # Route the message directly (bypass transport loop). Interceptors are
-        # invoked in the receive loop only to avoid double invocation.
         await session._route_message(msg)  # type: ignore[attr-defined]
 
-        assert called["count"] == 0
-
+        assert calls["count"] == 0
     finally:
         await session.terminate()
+

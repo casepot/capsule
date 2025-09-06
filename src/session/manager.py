@@ -254,18 +254,7 @@ class Session:
         Args:
             message: Message to route
         """
-        # Run passive interceptors first (single-loop invariant)
-        if self._interceptors:
-            for interceptor in list(self._interceptors):
-                try:
-                    _ = interceptor(message)
-                except Exception as e:
-                    # Interceptors must never break routing; log and continue
-                    logger.warning(
-                        "message_interceptor_error",
-                        error=str(e),
-                        interceptor=getattr(interceptor, "__name__", str(interceptor)),
-                    )
+        # Interceptors are invoked in _receive_loop only to avoid double-calls
 
         # Check if message has execution_id and route to that execution's queue
         execution_id = getattr(message, "execution_id", None)

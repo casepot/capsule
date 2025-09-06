@@ -47,13 +47,13 @@ This PR delivers Phase 2 of the Capsule transition: Promise‑First refinement (
 
 3) Session Manager Interceptors (src/session/manager.py)
 - Add `add_message_interceptor(callable)` / `remove_message_interceptor(callable)`.
-- Call interceptors inside `_route_message` for Result/Error/InputResponse; they do not consume messages.
+- Invoke interceptors in the `_receive_loop` only (before routing) to avoid duplicate invocation; they do not consume messages.
 - Register bridge `route_response` as an interceptor via DI init (see resonate_init).
 
 4) Worker Stabilization (src/subprocess/worker.py)
 - Enforce output‑before‑result using `drain_outputs` barrier.
 - On drain timeout → emit ErrorMessage with `OutputDrainTimeout`; result is withheld to preserve ordering (documented warning log and spec note); always set `execution_time`.
-- Minimal checkpoint/restore (local slice) using CheckpointManager; merge‑only restore preserving ENGINE_INTERNALS.
+- Minimal checkpoint/restore (local slice) using CheckpointManager; default merge‑only restore preserving ENGINE_INTERNALS with `clear_existing=False`; full replacement when `clear_existing=True`.
 
 5) Capability Input (src/integration/capability_input.py)
 - Continue using promise‑based bridge; unify promise id format; ensure invalid JSON handling returns safe defaults.

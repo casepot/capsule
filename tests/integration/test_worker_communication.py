@@ -266,6 +266,100 @@ def compute(n):
         finally:
             await session.shutdown()
 
+    @pytest.mark.asyncio
+    async def test_restore_merge_only_preserves_extras_when_clear_false(self):
+        session = Session()
+        await session.start()
+        try:
+            # Initialize some state and checkpoint
+            exec_init = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code="a=1; b=2; 'ok'")
+            async for _ in session.execute(exec_init):
+                pass
+
+            cp_msg = CheckpointMessage(id=str(uuid.uuid4()), timestamp=time.time(), checkpoint_id="cp_merge")
+            ready_ev = asyncio.Event()
+            def on_ready(msg):
+                if isinstance(msg, ReadyMessage) and not ready_ev.is_set():
+                    ready_ev.set()
+                return None
+            session.add_message_interceptor(on_ready)
+            await session._transport.send_message(cp_msg)
+            await asyncio.wait_for(ready_ev.wait(), timeout=2.0)
+            session.remove_message_interceptor(on_ready)
+
+            # Add extra live state not in checkpoint
+            exec_mut = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code="c=3; 'mut'")
+            async for _ in session.execute(exec_mut):
+                pass
+
+            # Restore with clear_existing=False (merge-only)
+            rs_msg = RestoreMessage(id=str(uuid.uuid4()), timestamp=time.time(), checkpoint_id="cp_merge", clear_existing=False)
+            ready2 = asyncio.Event()
+            def on_ready2(msg):
+                if isinstance(msg, ReadyMessage) and not ready2.is_set():
+                    ready2.set()
+                return None
+            session.add_message_interceptor(on_ready2)
+            await session._transport.send_message(rs_msg)
+            await asyncio.wait_for(ready2.wait(), timeout=2.0)
+            session.remove_message_interceptor(on_ready2)
+
+            # Verify extras preserved and checkpointed values restored
+            verify = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code="(a,b,c)")
+            msgs = [m async for m in session.execute(verify)]
+            res = [m for m in msgs if isinstance(m, ResultMessage)][0]
+            val = res.value if not isinstance(res.value, list) else tuple(res.value)
+            assert val == (1,2,3)
+        finally:
+            await session.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_restore_clear_existing_replaces_extras(self):
+        session = Session()
+        await session.start()
+        try:
+            # Initialize state and checkpoint
+            m1 = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code="x=10; y=20; 'ok'")
+            async for _ in session.execute(m1):
+                pass
+            cp = CheckpointMessage(id=str(uuid.uuid4()), timestamp=time.time(), checkpoint_id="cp_clear")
+            rd = asyncio.Event()
+            def on_ready(msg):
+                if isinstance(msg, ReadyMessage) and not rd.is_set():
+                    rd.set()
+                return None
+            session.add_message_interceptor(on_ready)
+            await session._transport.send_message(cp)
+            await asyncio.wait_for(rd.wait(), timeout=2.0)
+            session.remove_message_interceptor(on_ready)
+
+            # Add extra state and mutate checkpointed state
+            m2 = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code="x=999; z='extra'; 'mut' ")
+            async for _ in session.execute(m2):
+                pass
+
+            # Restore with clear_existing=True
+            rs = RestoreMessage(id=str(uuid.uuid4()), timestamp=time.time(), checkpoint_id="cp_clear", clear_existing=True)
+            rd2 = asyncio.Event()
+            def on_ready2(msg):
+                if isinstance(msg, ReadyMessage) and not rd2.is_set():
+                    rd2.set()
+                return None
+            session.add_message_interceptor(on_ready2)
+            await session._transport.send_message(rs)
+            await asyncio.wait_for(rd2.wait(), timeout=2.0)
+            session.remove_message_interceptor(on_ready2)
+
+            # Verify extras removed, checkpointed values restored
+            v = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code="('x' in globals(), 'y' in globals(), 'z' in globals(), x, y)")
+            msgs = [m async for m in session.execute(v)]
+            res = [m for m in msgs if isinstance(m, ResultMessage)][0]
+            okx, oky, okz, xv, yv = res.value if not isinstance(res.value, list) else tuple(res.value)
+            assert okx and oky and not okz
+            assert xv == 10 and yv == 20
+        finally:
+            await session.shutdown()
+
 
 @pytest.mark.integration
 class TestInputProtocol:
