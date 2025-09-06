@@ -198,12 +198,22 @@ def compute(n):
                 checkpoint_id="test_checkpoint_1"
             )
             
-            # Send checkpoint message directly via transport
+            # Send checkpoint message directly via transport, then observe via interceptor
+            checkpoint_ready = asyncio.Event()
+
+            def on_ready_checkpoint(msg):
+                # Treat either an explicit CheckpointMessage or a ReadyMessage as confirmation
+                if (isinstance(msg, ReadyMessage) or isinstance(msg, CheckpointMessage)) and not checkpoint_ready.is_set():
+                    checkpoint_ready.set()
+                return None
+
+            session.add_message_interceptor(on_ready_checkpoint)
+
             await session._transport.send_message(checkpoint_msg)
-            
-            # Wait for checkpoint created response
-            response = await session._transport.receive_message(timeout=2.0)
-            assert isinstance(response, ReadyMessage) or response is None  # Adjust based on actual protocol
+
+            # Wait for checkpoint confirmation without reading the transport directly
+            await asyncio.wait_for(checkpoint_ready.wait(), timeout=2.0)
+            session.remove_message_interceptor(on_ready_checkpoint)
             
             # Modify state
             execute_msg2 = ExecuteMessage(
@@ -222,11 +232,20 @@ def compute(n):
                 checkpoint_id="test_checkpoint_1"
             )
             
+            restore_ready = asyncio.Event()
+
+            def on_ready_restore(msg):
+                if isinstance(msg, ReadyMessage) and not restore_ready.is_set():
+                    restore_ready.set()
+                return None
+
+            session.add_message_interceptor(on_ready_restore)
+
             await session._transport.send_message(restore_msg)
-            
-            # Wait for restore confirmation
-            response = await session._transport.receive_message(timeout=2.0)
-            assert isinstance(response, ReadyMessage) or response is None  # Adjust based on actual protocol
+
+            # Wait for restore confirmation via interceptor
+            await asyncio.wait_for(restore_ready.wait(), timeout=2.0)
+            session.remove_message_interceptor(on_ready_restore)
             
             # Verify state was restored
             verify_msg = ExecuteMessage(
@@ -241,7 +260,8 @@ def compute(n):
             
             results = [m for m in messages if isinstance(m, ResultMessage)]
             assert len(results) == 1
-            assert results[0].value == (100, [1, 2, 3])
+            # Allow msgpack to normalize tuples to lists
+            assert results[0].value == (100, [1, 2, 3]) or results[0].value == [100, [1, 2, 3]]
             
         finally:
             await session.shutdown()

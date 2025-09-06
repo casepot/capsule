@@ -118,6 +118,62 @@ Correlation rules:
 
 The bridge never calls `receive_message`.
 
+#### Correlation & Promise IDs (Phase 2)
+
+- Execute: durable promise id `exec:{execution_id}` created by durable function; correlation key is `ExecuteMessage.id` and responses correlate on `{Result,Error}.execution_id`.
+- Input: durable promise id `{execution_id}:input:{input_message.id}` created by the bridge; correlation key is `InputMessage.id` and response correlates on `InputResponseMessage.input_id`.
+
+The bridge resolves on `ResultMessage` and rejects on `ErrorMessage`. On timeouts passed to `send_request`, a background task rejects with structured JSON containing `capability`, `execution_id`, `request_id`, and `timeout` seconds.
+
+#### Error/Timeout Rejections (Phase 2)
+
+- `ErrorMessage` → bridge calls `promises.reject(id=..., error=payload_json)`.
+- Timeouts → bridge calls `promises.reject(...)` with JSON payload including context fields for reliability and diagnostics.
+- Durable functions should expect promise rejections and raise structured exceptions with `add_note` context (at minimum, execution id, traceback excerpt if present).
+
+#### Example: Execute request with deterministic promise id
+
+```python
+import time
+from src.integration.resonate_bridge import ResonateProtocolBridge
+from src.protocol.messages import ExecuteMessage
+
+# Durable function (generator style)
+def durable_execute(ctx, args):
+    code = args["code"]
+    execution_id = args["execution_id"]
+    bridge: ResonateProtocolBridge = ctx.get_dependency("protocol_bridge")
+
+    # Create deterministic promise id and yield it
+    promise_id = f"exec:{execution_id}"
+    promise_handle = yield ctx.promise(id=promise_id)
+
+    # Build request; correlate request (ExecuteMessage.id) to the same promise id
+    exec_msg = ExecuteMessage(
+        id=execution_id,
+        timestamp=time.time(),
+        code=code,
+        capture_source=True,
+    )
+    yield bridge.send_request(
+        "execute", execution_id, exec_msg, timeout=30.0, promise_id=promise_id
+    )
+
+    # Await result or rejection
+    try:
+        raw = yield promise_handle
+    except Exception as e:
+        # Promise rejected (ErrorMessage or timeout). Add structured notes and re-raise.
+        err = RuntimeError("durable_execute rejected")
+        if hasattr(err, "add_note"):
+            err.add_note(f"Execution ID: {execution_id}")
+            err.add_note(str(e))
+        raise err
+
+    # Parse JSON payload for ResultMessage shape...
+    # return parsed
+```
+
 ### Durable Functions (Promise‑First) (Ready)
 
 Generator pattern for durable execute:

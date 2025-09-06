@@ -8,6 +8,7 @@ for unit testing and single-process development.
 """
 
 from typing import Any, Optional
+import asyncio
 import json
 
 from ..protocol.messages import (
@@ -83,7 +84,20 @@ class ResonateProtocolBridge:
             corr_key = getattr(message, "id", None)
 
         if corr_key:
-            self._pending[str(corr_key)] = str(promise_id)
+            key = str(corr_key)
+            self._pending[key] = str(promise_id)
+
+            # Schedule timeout rejection enrichment if requested
+            if timeout and timeout > 0:
+                asyncio.create_task(
+                    self._reject_on_timeout(
+                        key,
+                        str(promise_id),
+                        capability_id=capability_id,
+                        execution_id=execution_id,
+                        timeout=timeout,
+                    )
+                )
 
         # Send message via session/sender
         await self._sender.send_message(message)
@@ -108,7 +122,11 @@ class ResonateProtocolBridge:
             else:
                 # Fallback: best-effort generic conversion
                 payload = json.dumps(getattr(message, "__dict__", {}))
-            self._resonate.promises.resolve(id=promise_id, data=payload)
+            # Determine resolve vs reject semantics
+            if isinstance(message, ErrorMessage):
+                self._resonate.promises.reject(id=promise_id, error=payload)
+            else:
+                self._resonate.promises.resolve(id=promise_id, data=payload)
             return True
         except Exception:
             return False
@@ -133,3 +151,37 @@ class ResonateProtocolBridge:
             # Error may include execution_id when tied to an execution
             return message.execution_id or None
         return None
+
+    async def _reject_on_timeout(
+        self,
+        corr_key: str,
+        promise_id: str,
+        *,
+        capability_id: str,
+        execution_id: str,
+        timeout: float,
+    ) -> None:
+        """Reject a promise if it remains pending after timeout seconds.
+
+        Adds structured context to the rejection payload.
+        """
+        try:
+            await asyncio.sleep(timeout)
+            # Only reject if still pending
+            if self._pending.get(corr_key) != promise_id:
+                return
+            # Clean up mapping before rejection to avoid leaks
+            self._pending.pop(corr_key, None)
+            err = {
+                "type": "error",
+                "exception_type": "TimeoutError",
+                "exception_message": "Request timed out",
+                "execution_id": execution_id,
+                "capability": capability_id,
+                "timeout": timeout,
+                "request_id": corr_key,
+            }
+            self._resonate.promises.reject(id=promise_id, error=json.dumps(err))
+        except Exception:
+            # Best-effort timeout handling; no raising
+            return

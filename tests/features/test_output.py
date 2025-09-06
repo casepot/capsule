@@ -12,6 +12,8 @@ from typing import Any, Dict
 from src.protocol.messages import OutputMessage, StreamType
 from src.protocol.transport import MessageTransport
 from src.subprocess.executor import ThreadedExecutor, ThreadSafeOutput
+from src.session.manager import Session
+from src.protocol.messages import ExecuteMessage, ResultMessage, ErrorMessage
 
 
 class TestThreadSafeOutputAttributes:
@@ -389,3 +391,69 @@ print(f"stdout.writable(): {sys.stdout.writable()}")
     executor.shutdown_pump()
     if executor._pump_task:
         await asyncio.wait_for(executor._pump_task, timeout=1.0)
+
+
+@pytest.mark.asyncio
+async def test_output_before_result_long_lines():
+    """End-to-end: very long line output is emitted fully before the result."""
+    session = Session()
+    await session.start()
+    try:
+        long_line_len = 100_000
+        code = f"""
+data = 'x' * {long_line_len}
+print(data)
+"done"
+"""
+        msg = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code=code)
+        messages: list = []
+        async for m in session.execute(msg):
+            messages.append(m)
+
+        # Indices for first result and last output
+        out_indices = [i for i, m in enumerate(messages) if isinstance(m, OutputMessage)]
+        res_indices = [i for i, m in enumerate(messages) if isinstance(m, ResultMessage)]
+        assert out_indices, "Expected output messages"
+        assert res_indices, "Expected a result message"
+        assert max(out_indices) < min(res_indices), "Result must come after all outputs"
+    finally:
+        await session.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_output_before_result_with_carriage_returns():
+    """End-to-end: CR progress updates precede the result; last output has final progress string."""
+    session = Session()
+    await session.start()
+    try:
+        N = 50
+        code = (
+            "import sys, time\n"
+            f"N = {N}\n"
+            "for i in range(0, N):\n"
+            "    print(\"\\rProgress \" + str(i) + \"/\" + str(N), end='', flush=True)\n"
+            "    time.sleep(0.01)\n"
+            "print(\"\\n\", end='')\n"
+            "\"done\"\n"
+        )
+        msg = ExecuteMessage(id=str(uuid.uuid4()), timestamp=time.time(), code=code)
+        messages: list = []
+        async for m in session.execute(msg):
+            messages.append(m)
+
+        out_msgs = [m for m in messages if isinstance(m, OutputMessage)]
+        res_msgs = [m for m in messages if isinstance(m, ResultMessage)]
+        err_msgs = [m for m in messages if isinstance(m, ErrorMessage)]
+        assert out_msgs, "Expected CR outputs"
+        # If a result was produced, it must come after outputs; otherwise an error is acceptable per drain-timeout policy
+        if res_msgs:
+            assert messages.index(res_msgs[0]) > messages.index(out_msgs[-1])
+        elif err_msgs:
+            # Error must also appear after outputs (result withheld if drain fails)
+            assert messages.index(err_msgs[0]) > messages.index(out_msgs[-1])
+        else:
+            pytest.fail("Expected either a result or error after outputs")
+        # One of the output chunks should contain the final progress string (N-1)
+        assert any(f"Progress {N-1}/{N}" in m.data for m in out_msgs)
+    finally:
+        await session.shutdown()

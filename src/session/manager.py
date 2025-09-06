@@ -154,7 +154,12 @@ class Session:
                     raise RuntimeError("Session failed to become ready")
 
                 self._state = SessionState.READY
-                logger.info("Session started", session_id=self.session_id)
+                loop = asyncio.get_running_loop()
+                logger.info(
+                    "Session started",
+                    session_id=self.session_id,
+                    event_loop_id=id(loop),
+                )
 
             except Exception as e:
                 self._state = SessionState.ERROR
@@ -189,6 +194,28 @@ class Session:
             try:
                 message = await self._transport.receive_message(timeout=0.1)
 
+                # Invoke passive interceptors for all messages (including ready/heartbeat)
+                if self._interceptors:
+                    loop = asyncio.get_running_loop()
+                    for interceptor in list(self._interceptors):
+                        try:
+                            logger.debug(
+                                "message_interceptor_invoke",
+                                session_id=self.session_id,
+                                event_loop_id=id(loop),
+                                message_type=getattr(message, "type", None),
+                                execution_id=getattr(message, "execution_id", None),
+                                interceptor=getattr(interceptor, "__name__", str(interceptor)),
+                            )
+                            _ = interceptor(message)
+                        except Exception as e:
+                            # Interceptors must never break routing; log and continue
+                            logger.warning(
+                                "message_interceptor_error",
+                                error=str(e),
+                                interceptor=getattr(interceptor, "__name__", str(interceptor)),
+                            )
+
                 # Handle different message types
                 if message.type == "ready":
                     from typing import cast
@@ -207,8 +234,8 @@ class Session:
                     self._info.cpu_percent = heartbeat.cpu_percent
 
                 else:
-                    # Route to appropriate handler
-                    await self._route_message(message)
+                    # Route to appropriate handler without blocking receive loop
+                    asyncio.create_task(self._route_message(message))
 
             except asyncio.TimeoutError:
                 continue

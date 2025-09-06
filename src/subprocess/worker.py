@@ -26,6 +26,7 @@ structlog.configure(
 
 from ..protocol.messages import (
     CancelMessage,
+    CheckpointMessage,
     ErrorMessage,
     ExecuteMessage,
     HeartbeatMessage,
@@ -33,6 +34,7 @@ from ..protocol.messages import (
     InputMessage,
     InputResponseMessage,
     MessageType,
+    RestoreMessage,
     ReadyMessage,
     ResultMessage,
     ShutdownMessage,
@@ -499,9 +501,28 @@ class SubprocessWorker:
 
                 if msg_type == "execute" or message.type == MessageType.EXECUTE:
                     logger.info("Processing execute message", id=message.id)
-                    # Don't await - let it run in background so we can process INPUT_RESPONSE
-                    exec_task = asyncio.create_task(self.execute(message))  # type: ignore
-                    logger.info(f"Created execution task for {message.id}")
+                    # Concurrency guard: only one execution at a time in local mode
+                    if self._active_executor is not None and (
+                        (self._active_thread and self._active_thread.is_alive())
+                        or True  # executor presence implies busy until cleared
+                    ):
+                        logger.warning(
+                            "Busy: rejecting concurrent execute",
+                            active_exec_id=self._active_executor.execution_id,
+                        )
+                        err = ErrorMessage(
+                            id=str(uuid.uuid4()),
+                            timestamp=time.time(),
+                            traceback="",
+                            exception_type="Busy",
+                            exception_message="Worker is busy; one execution at a time",
+                            execution_id=message.id,  # tie error to requested execution
+                        )
+                        await self._transport.send_message(err)
+                    else:
+                        # Don't await - let it run in background so we can process INPUT_RESPONSE
+                        exec_task = asyncio.create_task(self.execute(message))  # type: ignore
+                        logger.info(f"Created execution task for {message.id}")
 
                 elif msg_type == "input_response" or message.type == MessageType.INPUT_RESPONSE:
                     # Route input response to active executor

@@ -84,7 +84,7 @@ def test_durable_execute_promise_first_flow():
 
 
 @pytest.mark.unit
-def test_durable_execute_handles_error_payload_gracefully():
+def test_durable_execute_raises_on_rejected_promise():
     class ResonateMock:
         def __init__(self):
             self.registered = {}
@@ -121,29 +121,15 @@ def test_durable_execute_handles_error_payload_gracefully():
     yielded = gen.send(None) # yield promise handle
     assert yielded is not None
 
-    err_payload = {
-        "type": "error",
-        "exception_message": "boom",
-        "traceback": "Traceback...",
-        "execution_id": "E-9",
-    }
-    import json
-    # Send error payload; durable function may surface structured error
-    # or propagate None result depending on integration layer. For this
-    # unit slice, assert we complete without crashing and return shape.
-    import json as _json
-    # Accept either raising or direct completion with result payload
-    try:
-        yielded = gen.send(_json.dumps(err_payload))
-        # If it yields, we expect a post checkpoint then completion
-        assert yielded == ("post_execution", {"execution_id": "E-9"})
-        with pytest.raises(StopIteration) as si:
-            gen.send(None)
-        ret = si.value.value
-        assert ret["execution_id"] == "E-9"
-    except StopIteration as si:
-        ret = si.value
-        assert ret["execution_id"] == "E-9"
-    except RuntimeError:
-        # Error surfaced; acceptable
-        return
+    # Simulate durable promise rejection by throwing into the generator
+    class Rejection(Exception):
+        pass
+
+    # Expect the durable function to raise an exception; allow either
+    # our structured RuntimeError or the original rejection in this unit slice
+    with pytest.raises(Exception) as ei:
+        gen.throw(Rejection("boom"))
+    assert (
+        isinstance(ei.value, Rejection)
+        or "durable_execute rejected" in str(ei.value)
+    )

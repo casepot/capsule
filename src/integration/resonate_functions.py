@@ -63,8 +63,20 @@ def register_executor_functions(resonate: Any) -> Any:
             "execute", execution_id, exec_msg, timeout=timeout, promise_id=promise_id
         )
 
-        # Await durable resolution
-        raw = yield promise
+        # Await durable resolution (may raise on rejection)
+        try:
+            raw = yield promise
+        except Exception as e:
+            # Promise rejected -> surface structured error with context
+            err = RuntimeError("durable_execute rejected")
+            if hasattr(err, "add_note"):
+                try:
+                    err.add_note(f"Execution ID: {execution_id}")
+                    err.add_note(str(e))
+                except Exception:
+                    pass
+            raise err
+
         result_value: Any = None
         try:
             payload = json.loads(raw) if isinstance(raw, (str, bytes, bytearray)) else raw

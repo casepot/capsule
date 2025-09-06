@@ -12,6 +12,16 @@ This specification defines the AsyncExecutor implementation for PyREPL3, providi
 
 Promise‑first integration: The durable layer MUST prefer promise flows (`ctx.promise` + Protocol Bridge) for async work. Durable functions MUST NOT create or manage event loops; the executor/transport own a single loop per session.
 
+## Phase 2 Updates
+
+- Single‑loop policy is enforced end‑to‑end: only `Session` reads the transport; the protocol bridge resolves/rejects durable promises via message interceptors scheduled on the session loop.
+- Durable functions are promise‑first and must not import or manage `asyncio` constructs — they yield on `ctx.promise` and delegate all transport work to the bridge.
+- Correlation rules (local mode):
+  - Execute → Result/Error: `exec:{execution_id}`; correlate responses on `execution_id`.
+  - Input → InputResponse: `{execution_id}:input:{message.id}`; correlate on `input_id`.
+- Error semantics: the bridge rejects on `ErrorMessage` with structured JSON; durable functions raise with `add_note` context.
+- Timeout semantics: bridge rejections include context (`capability`, `execution_id`, `request_id`, `timeout`).
+
 ## Technical Foundation
 
 ### Core Discovery: PyCF_ALLOW_TOP_LEVEL_AWAIT
