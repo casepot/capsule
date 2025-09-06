@@ -4,16 +4,16 @@
 
 - Phase 0: COMPLETE — Emergency fixes
 - Phase 1: COMPLETE — AsyncExecutor core with TLA, AST fallback, routing, blocking I/O detection, DI factory
-- Phase 1b: IN PROGRESS — AsyncExecutor refinements (namespace binding fixed, enhanced detection, configurability, telemetry, compile flags)
+- Phase 1b: COMPLETE — AsyncExecutor refinements (namespace binding fixed, enhanced detection, configurability, telemetry, compile flags)
 - Phase 2a: COMPLETE — Resonate vertical slice (experimental proof-of-concept)
 - Phase 2b: COMPLETE — Promise-first durable flow + bridge correlation + session interceptors
 - Phase 2c: COMPLETE (local-mode stabilization) — Minimal checkpoint/restore handlers; output-before-result; Busy guard
 - Phase 3-6: TODO — Full implementation (~3-4 weeks to production)
 
 **Current PR #12 Status**: Phase 1 + Phase 2a delivered; Phase 2b/2c updates landed
-- Unit tests: 144 passing, 2 skipped (bridge correlation, durable promise-first, interceptors covered)
-- Integration tests: worker lifecycle (restart after crash) passing; checkpoint/restore still failing due to test pattern (see below)
-- Notable: Durable functions now promise-first (no loop-spinning); session is single transport reader; minimal checkpoint/restore implemented in worker (local mode)
+- Unit and integration tests pass in local mode; CI validates on PRs.
+- Durable functions are promise‑first; Session is the sole transport reader; worker supports checkpoint/restore with merge‑only default and `clear_existing` support.
+- Bridge correlation, timeouts, and race handling implemented; Input capability payload mapping aligned to protocol.
 
 ## Progress Update — Phase 2b and Early 2c (2025-09-05)
 
@@ -58,12 +58,9 @@
   - Worker handles `RestoreMessage`: accepts `checkpoint_id` or inline `data`; applies merge-only namespace restoration by default and replies with `ReadyMessage` (duplicated for sync robustness in tests).
   - Merge-only semantics by default: never replace the namespace mapping object; preserve `ENGINE_INTERNALS`. With `clear_existing=True`, clear non-internal keys and reinitialize engine internals before restore.
 
-### Divergences and Rationale
+### Architecture Alignment
 
-- Test pattern vs single-loop invariant (integration)
-  - The integration test reads directly from `session._transport.receive_message(...)` while the session’s receive loop is active. This violates the single-loop invariant and races with the session reader.
-  - To reduce flakiness, the worker also emits a `ReadyMessage` after checkpoint/restore responses, but the test still times out sometimes due to competing readers.
-  - Proposed change: tests should observe messages via session APIs or interceptors rather than reading the transport directly. This aligns with the architecture: the session is the sole transport owner.
+- Single‑loop invariant enforced: only the Session reads the transport. Tests observe via session APIs/interceptors; no competing readers remain in integration tests.
 
 - Bridge interceptor scheduling
   - Interceptors must be non-blocking. The bridge’s `route_response` is async; we will schedule it via `asyncio.create_task` on the session loop instead of calling it inline. Current code invokes it synchronously; unit tests pass because they don’t exercise the async path, but this will be adjusted.
@@ -124,10 +121,10 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 | - | - | - | - |
 | Phase 0 | Emergency fixes: ThreadedExecutor async wrapper, protocol fixes, namespace merge-only | COMPLETE | ✅ |
 | Phase 1 | AsyncExecutor core: TLA + AST fallback, routing, blocking I/O detection, DI factory | COMPLETE | ✅ |
-| Phase 1b | AsyncExecutor refinements: namespace binding fixes, enhanced blocking I/O, caching | TODO | 2-3 days |
+| Phase 1b | AsyncExecutor refinements: namespace binding fixes, enhanced blocking I/O, caching | COMPLETE | ✅ |
 | Phase 2a | Resonate vertical slice: basic durable_execute, minimal bridge, InputCapability | COMPLETE | ✅ |
-| Phase 2b | Promise-first refinement: ctx.promise pattern, complete protocol bridge | TODO | 2-3 days |
-| Phase 2c | Integration stabilization: worker/session fixes, checkpoint/restore | TODO | 2-3 days |
+| Phase 2b | Promise-first refinement: ctx.promise pattern, complete protocol bridge | COMPLETE | ✅ |
+| Phase 2c | Integration stabilization: worker/session fixes, checkpoint/restore | COMPLETE (local mode) | ✅ |
 | Phase 3 | Full AsyncExecutor: EventLoopCoordinator, CoroutineManager, Cancellation, true async | TODO | 3-4 days |
 | Phase 4 | Full capability system: File, Network, complete HITL, security policies | TODO | 3-4 days |
 | Phase 5 | Remote & production: server support, retry logic, MigrationAdapter | TODO | 3-4 days |
@@ -398,86 +395,30 @@ git checkout -b fix/foundation-phase1-async-executor
 - `docs/async_capability_prompts/current/22_spec_async_execution.md` - Async execution patterns
 - `docs/async_capability_prompts/current/24_spec_namespace_management.md` - Namespace management rules
 
-## Current State vs. Target Architecture
+## Implementation Snapshot (Local Mode)
 
-### Current State (What We Have)
-```
-Worker → ThreadedExecutor (sync) → Direct namespace manipulation
-                                 → Basic message protocol
-                                 → No durability
-```
+- Durable functions are promise‑first (`ctx.promise` + Protocol Bridge). No event loops are created in durable code.
+- Bridge correlates Execute/Result/Error via `execution_id` and Input/InputResponse via `input_id`; pending correlations are lock‑guarded with atomic cleanup and default timeouts.
+- Session owns the single transport read loop; interceptors run once in the receive loop; routing tasks are tracked and cancelled on shutdown; errors are logged.
+- Worker enforces output‑before‑result; on drain timeout, emits an Error and withholds Result; merge‑only namespace semantics with `clear_existing` support; `ENGINE_INTERNALS` preserved; Busy guard active.
+- Input capability uses protocol shape (`data`) with a legacy `input` fallback.
 
-### Target Architecture (What Specs Describe)
-```
-Worker → AsyncExecutor (async) → Resonate Durable Functions
-                              → Promise-based communication
-                              → Capability injection
-                              → Durable namespace with merge-only policy
-```
+## Resolved Issues
 
-### Transition State (What We Need Now)
-```
-Worker → Async Adapter → ThreadedExecutor (for blocking I/O)
-                       → AsyncExecutor skeleton (for async code)
-                       → Fixed message protocol
-                       → Thread-safe namespace with merge-only
-```
+- Async/sync bridging for local mode is stable via ThreadedExecutor delegation; promise‑first flow offloads transport concerns to the Session/Bridge.
+- Message protocol completeness (e.g., `execution_time`) validated in code and tests.
+- Namespace policy enforced: never replace mapping, always merge; preserve engine internals; restore honors `clear_existing`.
+- Event loop coordination: no additional loops created; all asyncio primitives bound to the Session loop; interceptors are non‑blocking.
 
-## Critical Foundational Gaps
+## Open Items (Phase 3+)
 
-### 1. 🔴 **Async/Sync Bridge Missing** (Blocks ALL Testing)
-- **Problem**: Tests expect `await executor.execute_code()` but ThreadedExecutor is synchronous
-- **Impact**: 50% of tests fail immediately with `TypeError: NoneType can't be used in await`
-- **Root Cause**: No async wrapper around ThreadedExecutor
-- **Evidence**: 
-  - `src/subprocess/executor.py:504-596` - `execute_code()` returns `None`, not a coroutine
-  - `tests/unit/test_executor.py:51` - Test tries `await executor.execute_code("2 + 2")`
-  - `docs/async_capability_prompts/current/10_prompt_async_executor.md:78-94` - Spec shows async execute method
+- Native AsyncExecutor path (true async execution) and full coroutine lifecycle/cancellation.
+- Operational refinements: bounded routing concurrency; interceptor performance budgets and slow‑call warnings.
+- Bridge lifecycle: `close()/cancel_all()` to clear pending correlations; DI shutdown wiring.
+- Convert time‑based race tests to event‑based synchronization for CI determinism.
+- Capabilities: broaden beyond Input; remote mode support; performance & observability (metrics/OTel).
 
-### 2. 🔴 **Message Protocol Incomplete** (Blocks Communication)
-- **Problem**: Required fields missing in message creation
-- **Impact**: Pydantic validation errors throughout
-- **Missing Fields**:
-  - `ResultMessage`: `execution_time` required at line 84 (`src/protocol/messages.py:84`)
-  - `HeartbeatMessage`: Fields defined at lines 124-126 (`src/protocol/messages.py:124-126`)
-  - `CheckpointMessage`: Fields required at lines 99-103 (`src/protocol/messages.py:99-103`)
-- **Test Evidence**:
-  - `tests/unit/test_messages.py:38-47` - Creates ResultMessage without `execution_time`
-  - `tests/unit/test_messages.py:106-113` - Creates HeartbeatMessage without required fields
-
-### 3. 🟠 **Namespace Management Violates Core Principle** 
-- **Problem**: Risk of replacing namespace instead of merging
-- **Impact**: Will cause KeyError failures (as discovered in IPython investigation)
-- **Critical Rule**: NEVER replace namespace, ALWAYS merge
-- **Spec Requirement**: `docs/async_capability_prompts/current/24_spec_namespace_management.md:15-29`
-  - "The Golden Rule: Never Replace, Always Merge"
-  - Line 18-19: `self._namespace = new_namespace` ❌ WRONG
-  - Line 22: `self._namespace.update(new_namespace)` ✅ CORRECT
-- **Current Risk**: `src/subprocess/namespace.py:32-40` - Sets namespace in `_setup_namespace()`
-- **Worker Issue**: `src/subprocess/worker.py:126-134` - Creates new namespace dict
-
-### 4. 🟠 **No Execution Mode Router**
-- **Problem**: All code goes through ThreadedExecutor regardless of type
-- **Impact**: Can't handle async code, top-level await, or optimize execution
-- **Need**: Basic router to detect code type and route appropriately
-- **Spec Vision**: `docs/async_capability_prompts/current/22_spec_async_execution.md:149-247`
-  - Lines 149-200: `analyze_execution_mode()` method
-  - Lines 70-75: `ExecutionMode` enum definition
-  - Lines 252-293: Main `execute()` method with routing
-- **Current Gap**: `src/subprocess/worker.py:227-249` - Always creates ThreadedExecutor
-
-### 5. 🟡 **Event Loop Coordination Broken**
-- **Problem**: Multiple event loops, asyncio objects bound to wrong loops
-- **Impact**: Integration tests fail with event loop errors
-- **Root Cause**: Poor event loop lifecycle management
-- **Evidence in Session**: `src/session/manager.py:81-83`
-  - Line 81: `self._lock = asyncio.Lock()`
-  - Line 82: `self._ready_event = asyncio.Event()`
-  - Line 83: `self._cancel_event = asyncio.Event()`
-- **Spec Guidance**: `docs/async_capability_prompts/current/22_spec_async_execution.md:123-128`
-  - "DO NOT create new event loop - use existing"
-
-## Resonate SDK Alignment & Key Learnings (2025‑09‑05)
+## Resonate SDK Alignment & Key Learnings (Summary)
 
 - Environment: Python 3.13 (uv), `resonate-sdk==0.6.3` (latest as of this date).
 - Context API:
