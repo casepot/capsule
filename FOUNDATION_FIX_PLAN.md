@@ -10,7 +10,7 @@
 - Phase 2c: COMPLETE (local-mode stabilization) — Minimal checkpoint/restore handlers; output-before-result; Busy guard
 - Phase 3-6: TODO — Full implementation (~3-4 weeks to production)
 
-**Current PR #11 Status**: Phase 1 + Phase 2a delivered; Phase 2b/2c updates landed
+**Current PR #12 Status**: Phase 1 + Phase 2a delivered; Phase 2b/2c updates landed
 - Unit tests: 144 passing, 2 skipped (bridge correlation, durable promise-first, interceptors covered)
 - Integration tests: worker lifecycle (restart after crash) passing; checkpoint/restore still failing due to test pattern (see below)
 - Notable: Durable functions now promise-first (no loop-spinning); session is single transport reader; minimal checkpoint/restore implemented in worker (local mode)
@@ -32,13 +32,15 @@
 
 - Single-loop ownership via interceptors
   - Added `Session.add_message_interceptor()` / `remove_message_interceptor()`.
-  - Interceptors invoked inside `_route_message()` before queueing; designed to be passive and non-blocking.
+  - Interceptors invoked inside the session `_receive_loop` (single call site) before routing; designed to be passive and non-blocking.
   - `initialize_resonate_local(session, resonate=...)` registers `ResonateProtocolBridge.route_response` as an interceptor for `Result`, `Error`, and `InputResponse`.
   - Bridge uses the session to send messages; it never reads from the transport.
+  - Routing tasks are scheduled via `create_task`, tracked with done-callback logging, and cancelled on session termination.
 
 - Capability/Input consistency
-  - `InputCapability` remains promise-based; now uses the same bridge + promise namespace (constructor simplified to `(resonate, bridge)`).
+  - `InputCapability` remains promise-based; now uses the same bridge + promise namespace (constructor `(resonate, bridge)`).
   - Uniform id format for input promises (`{execution_id}:input:{message.id}` handled by bridge).
+  - Payload mapping aligned to protocol: prefer `InputResponseMessage.data`; legacy fallback to `{ "input": ... }` tolerated.
 
 - Tests
   - Unit coverage added for: bridge execute/result/error correlation; interceptor registration/invocation; durable promise-first generator behavior; input capability JSON handling.
@@ -53,8 +55,8 @@
 
 - Minimal checkpoint/restore handlers (local mode)
   - Worker handles `CheckpointMessage`: creates in-memory snapshot via `CheckpointManager`, responds with `CheckpointMessage` populated with `data` and counts; also emits a `ReadyMessage` for simple confirmation.
-  - Worker handles `RestoreMessage`: accepts `checkpoint_id` or inline `data`; applies merge-only namespace restoration and replies with `ReadyMessage` (duplicated for sync robustness in tests).
-  - Merge-only semantics ensured: never replace the namespace mapping object; preserve `ENGINE_INTERNALS`.
+  - Worker handles `RestoreMessage`: accepts `checkpoint_id` or inline `data`; applies merge-only namespace restoration by default and replies with `ReadyMessage` (duplicated for sync robustness in tests).
+  - Merge-only semantics by default: never replace the namespace mapping object; preserve `ENGINE_INTERNALS`. With `clear_existing=True`, clear non-internal keys and reinitialize engine internals before restore.
 
 ### Divergences and Rationale
 
@@ -184,7 +186,7 @@ This section supersedes older mixed notes below. It defines a clear split betwee
   - 2 integration tests failing (checkpoint/worker lifecycle)
 - Status: COMPLETE as experimental proof-of-concept. Production implementation in Phase 2b/2c.
 
-### Phase 2b: Promise-First Refinement (TODO)
+### Phase 2b: Promise-First Refinement (COMPLETE)
 
 - Deliverables:
   - Replace ctx.lfc with ctx.promise pattern (avoiding event loop hazards)
@@ -197,9 +199,9 @@ This section supersedes older mixed notes below. It defines a clear split betwee
   - Integration tests passing
 - Dependencies:
   - Phase 2a completion
-- Status: TODO. Critical for production Resonate integration.
+- Status: COMPLETE. Critical durable flow and correlation landed.
 
-### Phase 2c: Integration Stabilization (TODO)
+### Phase 2c: Integration Stabilization (COMPLETE in local mode)
 
 - Deliverables:
   - Worker/session last-expression result delivery 
@@ -218,7 +220,7 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 - Dependencies:
   - Phase 2b completion
   - Stable transport framing
-- Status: TODO. Required for reliable execution.
+- Status: COMPLETE for local mode. Remote/performance items deferred.
 
 ### Phase 3: Full AsyncExecutor Implementation (TODO)
 
@@ -236,6 +238,13 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 - Dependencies:
   - Phase 1b completion
 - Status: TODO. Required for full async capabilities.
+
+### Phase 3: Operational and Performance Refinements (NEW)
+
+- Bounded routing task concurrency (Semaphore/TaskGroup) once we observe backpressure.
+- Interceptor performance budgets and warnings (measure call durations; structured logs on overruns).
+- Bridge lifecycle hook to cancel all pending correlations (`close()/cancel_all`) and DI shutdown wiring.
+- Convert sleep-based race tests to event-based synchronization for CI determinism.
 
 ### Phase 4: Full Capability System (TODO)
 

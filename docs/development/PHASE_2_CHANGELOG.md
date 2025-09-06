@@ -28,7 +28,8 @@ This changelog documents Phase 2 work across durable functions, the Resonate pro
 ## Session Manager (Single Loop + Interceptors)
 
 - Single reader invariant preserved: only `Session` reads the transport.
-- Message interceptors run on the session loop and are non‑blocking; routing is scheduled via `asyncio.create_task` to keep receive loop responsive.
+- Message interceptors run on the session loop and are non‑blocking; routing is scheduled via `asyncio.create_task` to keep the receive loop responsive.
+- Routing tasks are now tracked and cancelled on shutdown; exceptions in route tasks are logged via done‑callbacks for observability.
 - Interceptors now see all messages (including `ReadyMessage` and `HeartbeatMessage`).
 - Diagnostics: session start logs include `event_loop_id`.
 - Test ergonomics: integration tests no longer read the transport directly; they use interceptors or awaiters.
@@ -47,6 +48,10 @@ This changelog documents Phase 2 work across durable functions, the Resonate pro
 - Msgpack serialization switched to `model_dump(mode="python")` to preserve raw `bytes` for fields like `CheckpointMessage.data`.
 - JSON path continues to use `mode="json"`.
 
+## Capabilities (Input)
+
+- Input capability maps promise results to the protocol payload: `InputResponseMessage.data` is preferred; a legacy fallback to `{ "input": ... }` is tolerated for compatibility.
+
 ## Integration Tests & Ergonomics
 
 - `tests/integration/test_worker_communication.py::TestCheckpointProtocol::test_checkpoint_create_and_restore` now uses interceptors to await `CheckpointMessage`/`ReadyMessage` confirmations; no direct transport reads while session loop runs.
@@ -56,10 +61,17 @@ This changelog documents Phase 2 work across durable functions, the Resonate pro
 
 - 22_spec_async_execution.md: clarified promise‑first approach and single‑loop policy; durable functions do not own event loops.
 - 21_spec_resonate_integration.md: added correlation and rejection semantics section; deterministic promise id formats documented; timeout enrichment behavior described.
+- Planning doc updated to note: interceptors are invoked only in the receive loop (single call site), routing tasks are tracked, and default merge‑only restore semantics with optional `clear_existing=True` replacement.
+
+## Deferred (Phase 3)
+
+- Bounded routing task concurrency (Semaphore or TaskGroup) once we observe backpressure.
+- Interceptor performance guards: measure call durations and warn on slow interceptors; document budgets.
+- Bridge lifecycle hook to cancel all pending correlations (`close()/cancel_all`) and DI shutdown wiring.
+- Convert sleep‑based race test to event‑based synchronization for CI determinism.
 
 ## Next Steps (Planned)
 
 - Tests: add explicit coverage for “Busy” concurrent executes and output‑before‑result under long/CR outputs.
 - Logging: extend logs with loop/session ids at interceptor invocation points for finer tracing.
 - Docs: expand API reference to crisply document correlation IDs and rejection semantics across capabilities.
-

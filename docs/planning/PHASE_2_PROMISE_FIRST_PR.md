@@ -42,12 +42,14 @@ This PR delivers Phase 2 of the Capsule transition: Promise‑First refinement (
 2) Protocol Bridge (src/integration/resonate_bridge.py)
 - Centralized ID formats via `src/integration/constants.py`.
 - Correlate Execute by execution_id; correlate Input by input_id.
-- Cleanup `_pending` on resolve/reject; robust JSON handling.
-- Local breadcrumb for `_pending` high‑water mark with TODO(Phase 3) to expose a metric.
+- Cleanup `_pending` on resolve/reject with atomic pop‑and‑cancel; robust JSON handling.
+- Track per‑request timeout tasks and cancel them upon resolution; default timeout applied when none provided to avoid leaks.
+- Local breadcrumb for `_pending` high‑water mark; optional getter for diagnostics (exposure as a metric is a Phase 3 TODO).
 
 3) Session Manager Interceptors (src/session/manager.py)
 - Add `add_message_interceptor(callable)` / `remove_message_interceptor(callable)`.
 - Invoke interceptors in the `_receive_loop` only (before routing) to avoid duplicate invocation; they do not consume messages.
+- Route tasks are scheduled via `create_task`, tracked, logged on exception, and cancelled during session termination.
 - Register bridge `route_response` as an interceptor via DI init (see resonate_init).
 
 4) Worker Stabilization (src/subprocess/worker.py)
@@ -57,6 +59,7 @@ This PR delivers Phase 2 of the Capsule transition: Promise‑First refinement (
 
 5) Capability Input (src/integration/capability_input.py)
 - Continue using promise‑based bridge; unify promise id format; ensure invalid JSON handling returns safe defaults.
+- Align payload mapping to protocol: prefer `InputResponseMessage.data` with fallback to a legacy `{ "input": ... }` shape.
 
 ## File‑Level Change Summary (Implemented)
 - src/integration/constants.py: new constants + helper functions for promise IDs.
@@ -81,12 +84,19 @@ This PR delivers Phase 2 of the Capsule transition: Promise‑First refinement (
 - Event loop conflicts: Only session reads transport; bridge is interceptor callback. No durable loop creation.
 - Message ordering regressions: Maintain `drain_outputs` pre‑result; worker emits OutputDrainTimeout error and withholds result on timeout.
 - Namespace integrity on restore: Never replace namespace dict; merge updates; preserve ENGINE_INTERNALS.
-- Promise leaks: Ensure `_pending` cleanup on resolve/reject; add unit assertions.
+- Promise leaks: Ensure `_pending` cleanup on resolve/reject; default timeout when none provided; add unit assertions.
 
 ## Performance & Telemetry
 - Preserve current chunk sizes and frame limits; no extra copies.
 - Structured logs include session/loop ids for invariant checks.
-- Optional metrics: `_pending` HWM breadcrumb in bridge; further metrics deferred to Phase 3 to avoid runtime cost.
+- Optional metrics: `_pending` HWM breadcrumb in bridge + diagnostic getter; further exposure deferred to Phase 3 to avoid runtime cost.
+
+## Deferred (Phase 3)
+
+- Bounded routing task concurrency (Semaphore/TaskGroup) if backpressure observed.
+- Interceptor performance guard (timing + warnings) and budget documentation.
+- Bridge lifecycle `close()` that cancels all pending correlations and DI shutdown wiring.
+- Convert sleep‑based race test to event‑based synchronization for determinism in CI.
 
 ## Rollout & Backout
 - Rollout: land interceptors + bridge correlation + durable promise‑first behind local mode only.
