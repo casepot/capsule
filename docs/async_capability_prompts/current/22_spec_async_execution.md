@@ -64,6 +64,20 @@ Preferred strategy: attempt compile‑first with the flag; only use the AST fall
   - After execution, merge locals first (from `locals()` result) and then compute/apply global diffs; preserve `ENGINE_INTERNALS` and skip `__async_exec__`, `asyncio`, and `__builtins__`.
   - With hoisting disabled, names assigned in the wrapper body are locals of the wrapper; functions defined in the same body may close over those locals rather than observing later global updates. This is acceptable under PR 3 and documented behavior.
 
+#### Unexpected wrapper return type (statements path)
+
+The wrapper for statement blocks ends with `return locals()`, so the expected return type is `dict`.
+If a non-dict is returned (e.g., due to unforeseen execution anomalies), the engine:
+
+- Emits a warning and skips merging any local variables to avoid corrupting the namespace.
+- Still applies global diffs (e.g., if user code mutated `globals()` explicitly).
+- Returns the original value and records it in result history (for diagnostic visibility).
+
+Policy option (future deliberation): normalize this unexpected path by coercing the final result
+to `None` to strictly maintain "statements return None" semantics. This would reduce visibility of
+anomalous values in exchange for consistency. Any change to this policy should be documented and
+reflected in tests.
+
 ### Migration Notes
 
 - Hoisting removed: The engine no longer inserts `global` hoists in the fallback wrapper. Names assigned

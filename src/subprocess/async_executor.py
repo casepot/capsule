@@ -19,6 +19,7 @@ from typing import Any, Set
 import weakref
 import linecache
 import re
+import os as _os
 
 import structlog
 
@@ -145,6 +146,11 @@ class AsyncExecutor:
                 helper async def plus assignment to preserve semantics. When False, disabled.
                 When None (default), environment variable
                 ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
+            fallback_linecache_max_size: Bounded LRU capacity (int >= 0) for sources
+                registered in `linecache` for traceback mapping during AST fallback. If None,
+                capacity is resolved via `ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX` or defaults to 128.
+                A value of 0 retains no entries (evicts immediately). Entries are always cleaned
+                up on `close()`.
 
         Notes:
             - Thread safety: The namespace manager relies on Python's GIL for basic safety.
@@ -171,8 +177,6 @@ class AsyncExecutor:
             self._ast_cache_max_size = None
         else:
             try:
-                import os as _os
-
                 env_val = _os.getenv("ASYNC_EXECUTOR_AST_CACHE_SIZE")
                 self._ast_cache_max_size = (
                     int(env_val) if env_val and ast_cache_max_size == 100 else int(ast_cache_max_size)
@@ -195,7 +199,6 @@ class AsyncExecutor:
         # Fallback AST transform policy flags (default OFF)
         # Allow env override only if args left at defaults (mirror cache style)
         # Resolve flags: explicit constructor args win; otherwise allow env override; default False
-        import os as _os
 
         if enable_def_await_rewrite is None:
             env_def = _os.getenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE")
@@ -959,7 +962,26 @@ class AsyncExecutor:
         is_expression: bool,
         code: str,
     ) -> Any:
-        """Execute the wrapper, merge namespace updates, and return final result."""
+        """Execute the wrapper, merge namespace updates, and return final result.
+
+        Semantics:
+        - Expression case (is_expression=True):
+          Return the value and record it in result history via NamespaceManager.
+        - Statements case (is_expression=False, expected normal path):
+          The wrapper returns a `dict` from `locals()`. We merge filtered keys into the
+          live namespace (locals-first), then apply global diffs, and return None.
+        - Statements case (unexpected path):
+          If the wrapper returns a non-dict, we warn and do NOT merge any locals. We still
+          apply global diffs, and we currently return the original non-dict value (and it is
+          recorded in result history). This choice preserves diagnostic visibility without
+          mutating namespace in an ambiguous state.
+
+        Deliberation note (future policy option): we could normalize the unexpected return
+        type by coercing the final result to None for statements, to strictly preserve
+        "statements return None" semantics. That would hide the anomalous value but align
+        results across all statement paths. If we adopt that policy, update the tests and
+        document the trade-off in the spec.
+        """
         result = await async_func()
 
         if not is_expression:
@@ -1223,7 +1245,7 @@ class AsyncExecutor:
             pass
         cleaned = self.cleanup_coroutines()
         if cleaned > 0:
-            logger.debug(f"Cleaned up {cleaned} pending coroutines")
+            logger.debug("cleaned_pending_coroutines", cleaned=cleaned)
 
     async def __aenter__(self) -> "AsyncExecutor":
         """Enter context manager."""

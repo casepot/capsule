@@ -108,6 +108,10 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
     - Log LRU evictions at debug level for observability.
     - Thread `fallback_linecache_max_size` through `async_executor_factory` from `ctx.config`.
     - Add an opt-in mode to skip `close()` cleanup for post-mortem traceback retention.
+  - Semantics (discussion):
+    - Unexpected non-dict return from statement wrapper: current behavior warns, skips locals merge,
+      applies global diffs, and returns the value (recorded in result history). Consider normalizing
+      to `None` for strict "statements return None" semantics; document trade-offs if changed.
 
 - Migration note:
   - The fallback wrapper no longer injects a `global` hoist for simple assignments. As a result, names

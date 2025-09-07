@@ -53,6 +53,7 @@ def async_executor_factory(
     warn_on_blocking: bool | None = None,
     enable_def_await_rewrite: bool | None = None,
     enable_async_lambda_helper: bool | None = None,
+    fallback_linecache_max_size: int | None = None,
 ) -> AsyncExecutor:
     """Factory returning ready-to-use AsyncExecutor instances.
 
@@ -76,6 +77,10 @@ def async_executor_factory(
             zero-arg `lambda: await ...` assignments into an async helper function plus assignment.
             If False, disabled. If None (default), environment variable
             ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
+        fallback_linecache_max_size: Bounded LRU capacity (int >= 0) for registered fallback sources
+            in `linecache`. If None, the executor resolves capacity via the environment variable
+            `ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX` or defaults to 128. A value of 0 retains no entries
+            (evicts immediately). Entries are always cleaned up on `AsyncExecutor.close()`.
         
         TODO(follow-up): Thread `fallback_linecache_max_size` from `ctx.config` if present
         to allow configuring LRU retention from DI. Also consider exposing a mode
@@ -107,6 +112,12 @@ def async_executor_factory(
         blocking_methods_by_module = getattr(cfg, "blocking_methods_by_module", None)
     if warn_on_blocking is None and cfg is not None:
         warn_on_blocking = getattr(cfg, "warn_on_blocking", True)
+    # Thread fallback_linecache_max_size from config if not explicitly provided
+    if fallback_linecache_max_size is None and cfg is not None and hasattr(cfg, "fallback_linecache_max_size"):
+        try:
+            fallback_linecache_max_size = int(getattr(cfg, "fallback_linecache_max_size"))
+        except Exception:
+            fallback_linecache_max_size = None
     # New flags for AST fallback policy (default OFF)
     if enable_def_await_rewrite is None and cfg is not None:
         if hasattr(cfg, "enable_def_await_rewrite"):
@@ -129,4 +140,5 @@ def async_executor_factory(
         warn_on_blocking=True if warn_on_blocking is None else bool(warn_on_blocking),
         enable_def_await_rewrite=enable_def_await_rewrite,
         enable_async_lambda_helper=enable_async_lambda_helper,
+        fallback_linecache_max_size=fallback_linecache_max_size,
     )

@@ -119,11 +119,8 @@ def test_compile_and_register_linecache():
     assert isinstance(compiled, types.CodeType)
     assert filename in linecache.cache
 
-    # Cleanup via close()
-    asyncio.get_event_loop()
-    # Ensure cleanup works without raising
+    # Cleanup via close() (run the coroutine directly on current loop)
     loop = asyncio.get_event_loop()
-    # Close is async; run it
     loop.run_until_complete(ex.close())
     assert filename not in linecache.cache
 
@@ -160,3 +157,33 @@ async def test_run_wrapper_and_merge_statements():
     assert result is None
     assert ns.namespace.get("x") == 5
 
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_run_wrapper_and_merge_statements_non_dict_warns(monkeypatch):
+    """Wrapper returns non-dict for statements: warn and do not mutate namespace."""
+    ns = NamespaceManager()
+    ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="helpers-run-warn")
+
+    async def coro():
+        return 123  # non-dict should trigger warning path
+
+    # Capture warning call
+    calls = []
+    from src.subprocess import async_executor as ae_mod
+
+    def fake_warning(msg, **kw):
+        calls.append((msg, kw))
+
+    monkeypatch.setattr(ae_mod.logger, "warning", fake_warning, raising=True)
+
+    global_ns = ns.namespace
+    pre = dict(global_ns)
+    result = await ex._run_wrapper_and_merge(coro, global_ns, pre, False, "stmt")
+    assert result == 123
+    # Namespace should be unchanged (no new user keys)
+    new_keys = set(global_ns.keys()) - set(pre.keys())
+    # Allow engine internals that may be present; we only assert no user key 'x'
+    assert "x" not in new_keys
+    # Warning should have been recorded
+    assert calls, "Expected a warning for non-dict locals() result"
