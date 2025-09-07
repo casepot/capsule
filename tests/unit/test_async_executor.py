@@ -421,42 +421,43 @@ class TestAsyncExecutorExecution:
     """Test AsyncExecutor execution and delegation."""
     
     @pytest.mark.asyncio
-    async def test_execute_simple_sync_delegates_to_threaded(self):
-        """Test that simple sync code delegates to ThreadedExecutor."""
+    async def test_execute_simple_sync_native_expression(self):
+        """Simple sync expressions run natively and return value."""
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         mock_transport.send_message = AsyncMock()
-        
+
         executor = AsyncExecutor(
             namespace_manager=namespace_manager,
             transport=mock_transport,
             execution_id="test-exec"
         )
-        
-        # Mock ThreadedExecutor to verify delegation
+
+        # Ensure no delegation occurs
         with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreadedExecutor:
-            mock_instance = MockThreadedExecutor.return_value
-            mock_instance.start_output_pump = AsyncMock()
-            mock_instance.stop_output_pump = AsyncMock()
-            mock_instance.execute_code_async = AsyncMock(return_value=42)
-            
             result = await executor.execute("2 + 2")
-            
-            # Verify ThreadedExecutor was created with correct params
-            # Loop should be the current running loop, not executor.loop (which is None)
-            MockThreadedExecutor.assert_called_once_with(
-                transport=mock_transport,
-                execution_id="test-exec",
-                namespace=namespace_manager.namespace,
-                loop=asyncio.get_running_loop()
-            )
-            
-            # Verify execution methods were called
-            mock_instance.start_output_pump.assert_called_once()
-            mock_instance.execute_code_async.assert_called_once_with("2 + 2")
-            mock_instance.stop_output_pump.assert_called_once()
-            
-            assert result == 42
+            MockThreadedExecutor.assert_not_called()
+            assert result == 4
+
+    @pytest.mark.asyncio
+    async def test_execute_simple_sync_native_statements(self):
+        """Simple sync statements run natively and update namespace."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-exec"
+        )
+
+        with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreadedExecutor:
+            result = await executor.execute("x = 1\ny = x + 2")
+            MockThreadedExecutor.assert_not_called()
+            assert result is None
+            assert namespace_manager.namespace["x"] == 1
+            assert namespace_manager.namespace["y"] == 3
     
     @pytest.mark.asyncio
     async def test_execute_top_level_await_now_works(self):
@@ -487,20 +488,13 @@ class TestAsyncExecutorExecution:
             transport=mock_transport,
             execution_id="test-exec"
         )
+        # Execute simple sync code natively
+        await executor.execute("x = 1")
         
-        with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreadedExecutor:
-            mock_instance = MockThreadedExecutor.return_value
-            mock_instance.start_output_pump = AsyncMock()
-            mock_instance.stop_output_pump = AsyncMock()
-            mock_instance.execute_code_async = AsyncMock(return_value=None)
-            
-            # Execute simple sync code
-            await executor.execute("x = 1")
-            
-            # Check stats updated
-            assert executor.stats["executions"] == 1
-            assert executor.mode_counts[ExecutionMode.SIMPLE_SYNC] == 1
-            assert executor.stats["errors"] == 0
+        # Check stats updated
+        assert executor.stats["executions"] == 1
+        assert executor.mode_counts[ExecutionMode.SIMPLE_SYNC] == 1
+        assert executor.stats["errors"] == 0
     
     @pytest.mark.asyncio
     async def test_execute_handles_exceptions(self):
@@ -514,23 +508,11 @@ class TestAsyncExecutorExecution:
             transport=mock_transport,
             execution_id="test-exec"
         )
+        # Native path should surface exceptions and increment error stats
+        with pytest.raises(ValueError, match="boom"):
+            await executor.execute("raise ValueError('boom')")
         
-        with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreadedExecutor:
-            mock_instance = MockThreadedExecutor.return_value
-            mock_instance.start_output_pump = AsyncMock()
-            mock_instance.stop_output_pump = AsyncMock()
-            mock_instance.execute_code_async = AsyncMock(
-                side_effect=ValueError("Test error")
-            )
-            
-            with pytest.raises(ValueError, match="Test error"):
-                await executor.execute("invalid code")
-            
-            # Check error stats updated
-            assert executor.stats["errors"] == 1
-            
-            # Verify cleanup was called
-            mock_instance.stop_output_pump.assert_called_once()
+        assert executor.stats["errors"] == 1
     
     @pytest.mark.asyncio
     async def test_namespace_preservation(self):
@@ -551,16 +533,162 @@ class TestAsyncExecutorExecution:
         # Verify executor references same namespace object
         assert id(executor.namespace.namespace) == initial_namespace_id
         
+        await executor.execute("x = 42")
+        # Namespace identity must be preserved
+        assert id(namespace_manager.namespace) == initial_namespace_id
+
+    @pytest.mark.asyncio
+    async def test_execute_async_def_defines_function_natively(self):
+        """Async function definitions execute natively and bind live globals."""
+        ns = NamespaceManager()
+        mock_transport = Mock()
+        executor = AsyncExecutor(namespace_manager=ns, transport=mock_transport, execution_id="async-def-1")
+
+        with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreadedExecutor:
+            result = await executor.execute("""\nasync def f():\n    return 1\n""")
+            MockThreadedExecutor.assert_not_called()
+            assert result is None
+            assert callable(ns.namespace.get("f"))
+            f = ns.namespace["f"]
+            import types
+            assert isinstance(f, types.FunctionType)
+            assert f.__globals__ is ns.namespace
+
+    @pytest.mark.asyncio
+    async def test_execute_unknown_syntax_raises_and_updates_stats(self):
+        """UNKNOWN mode falls back to native path, surfaces SyntaxError, updates stats."""
+        ns = NamespaceManager()
+        executor = AsyncExecutor(namespace_manager=ns, transport=Mock(), execution_id="unknown-1")
+
+        code = "def oops(: pass"  # guaranteed SyntaxError, no 'await'
+        # Verify analysis returns UNKNOWN
+        assert executor.analyze_execution_mode(code) == ExecutionMode.UNKNOWN
+
+        with pytest.raises(SyntaxError):
+            await executor.execute(code)
+
+        # Error counted and mode count updated
+        assert executor.stats["errors"] == 1
+        assert executor.mode_counts[ExecutionMode.UNKNOWN] == 1
+
+    @pytest.mark.asyncio
+    async def test_globals_mutation_detected_via_global_diff(self):
+        """Direct mutation of globals() is captured via global diff and persists."""
+        ns = NamespaceManager()
+        executor = AsyncExecutor(namespace_manager=ns, transport=Mock(), execution_id="globals-1")
+
+        # Ensure 'g' not present initially
+        assert "g" not in ns.namespace
+
+        await executor.execute("globals()['g'] = 5")
+
+        assert ns.namespace.get("g") == 5
+
+    @pytest.mark.asyncio
+    async def test_execute_blocking_sync_delegates_to_threaded(self):
+        """Blocking sync code should delegate to ThreadedExecutor."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+        mock_transport.send_message = AsyncMock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="block-delegate-1"
+        )
+
+        code = "import requests"  # Detected as BLOCKING_SYNC via import
+
         with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreadedExecutor:
             mock_instance = MockThreadedExecutor.return_value
             mock_instance.start_output_pump = AsyncMock()
             mock_instance.stop_output_pump = AsyncMock()
             mock_instance.execute_code_async = AsyncMock(return_value=None)
-            
-            await executor.execute("x = 42")
-            
-            # Namespace identity must be preserved
-            assert id(namespace_manager.namespace) == initial_namespace_id
+
+            result = await executor.execute(code)
+
+            # Assert delegation occurred
+            MockThreadedExecutor.assert_called_once_with(
+                transport=mock_transport,
+                execution_id="block-delegate-1",
+                namespace=namespace_manager.namespace,
+                loop=asyncio.get_running_loop(),
+            )
+            mock_instance.start_output_pump.assert_called_once()
+            mock_instance.execute_code_async.assert_called_once_with(code)
+            mock_instance.stop_output_pump.assert_called_once()
+            assert result is None
+            assert executor.mode_counts[ExecutionMode.BLOCKING_SYNC] == 1
+
+    @pytest.mark.asyncio
+    async def test_ast_fallback_skips_internal_keys_in_global_diff(self, monkeypatch):
+        """AST fallback should not update namespace with skip-list keys via global diff."""
+        ns = NamespaceManager()
+        executor = AsyncExecutor(namespace_manager=ns, transport=Mock(), execution_id="ast-skip-1")
+
+        # Force both eval+flags and exec+flags to fail to trigger fallback
+        import builtins as _builtins
+
+        original_compile = _builtins.compile
+
+        def fake_compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1):
+            if flags & AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT:
+                raise SyntaxError("force ast fallback for tests")
+            return original_compile(source, filename, mode, flags=flags, dont_inherit=dont_inherit, optimize=optimize)
+
+        import src.subprocess.async_executor as ae_mod
+        monkeypatch.setattr(ae_mod, "compile", fake_compile, raising=False)
+
+        # Capture update_namespace calls
+        calls: list[tuple[dict, str]] = []
+        orig_update = ns.update_namespace
+
+        def wrapped_update(updates, source_context="user", merge_strategy="overwrite"):
+            calls.append((dict(updates), source_context))
+            return orig_update(updates, source_context=source_context, merge_strategy=merge_strategy)
+
+        monkeypatch.setattr(ns, "update_namespace", wrapped_update, raising=True)
+
+        # Execute a pure expression TLA so locals-first path is empty and only global-diff could run
+        result = await executor.execute("await asyncio.sleep(0, 'ok')")
+        assert result == "ok"
+
+        # Filter calls that came from async context (locals/global diffs)
+        async_calls = [u for u in calls if u[1] == "async"]
+
+        # No async-context updates expected (only engine context for result history)
+        assert async_calls == []
+
+    @pytest.mark.asyncio
+    async def test_tla_dual_compile_failure_invokes_ast_fallback(self, monkeypatch):
+        """When both eval+flags and exec+flags fail, fallback is invoked (notes path hit)."""
+        ns = NamespaceManager()
+        executor = AsyncExecutor(namespace_manager=ns, transport=Mock(), execution_id="ast-call-1")
+
+        # Force both flagged compiles to fail
+        import builtins as _builtins
+        original_compile = _builtins.compile
+
+        def fake_compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1):
+            if flags & AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT:
+                raise SyntaxError("force dual fail")
+            return original_compile(source, filename, mode, flags=flags, dont_inherit=dont_inherit, optimize=optimize)
+
+        import src.subprocess.async_executor as ae_mod
+        monkeypatch.setattr(ae_mod, "compile", fake_compile, raising=False)
+
+        # Stub _execute_with_ast_transform to observe invocation
+        called = {"n": 0}
+
+        async def fake_ast_transform(code: str) -> str:
+            called["n"] += 1
+            return "ok"
+
+        monkeypatch.setattr(executor, "_execute_with_ast_transform", fake_ast_transform, raising=True)
+
+        result = await executor.execute("await asyncio.sleep(0, 'ok')")
+        assert result == "ok"
+        assert called["n"] == 1
 
 
 @pytest.mark.unit
