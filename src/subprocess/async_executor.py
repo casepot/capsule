@@ -17,6 +17,7 @@ from enum import Enum
 import hashlib
 from typing import Any, Set
 import weakref
+import linecache
 
 import structlog
 
@@ -118,6 +119,8 @@ class AsyncExecutor:
         blocking_modules: set[str] | None = None,
         blocking_methods_by_module: dict[str, set[str]] | None = None,
         warn_on_blocking: bool = True,
+        enable_def_await_rewrite: bool | None = None,
+        enable_async_lambda_helper: bool | None = None,
     ):
         """
         Initialize AsyncExecutor skeleton.
@@ -174,6 +177,31 @@ class AsyncExecutor:
             "missed_attribute_chain": 0,
         }
         self.mode_counts = {mode: 0 for mode in ExecutionMode}
+
+        # Fallback AST transform policy flags (default OFF)
+        # Allow env override only if args left at defaults (mirror cache style)
+        # Resolve flags: explicit constructor args win; otherwise allow env override; default False
+        try:
+            import os as _os
+        except Exception:
+            _os = None
+
+        if enable_def_await_rewrite is None:
+            env_def = _os.getenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE") if _os else None
+            self._enable_def_await_rewrite = bool(env_def and env_def.lower() in {"1", "true", "yes"})
+        else:
+            self._enable_def_await_rewrite = bool(enable_def_await_rewrite)
+
+        if enable_async_lambda_helper is None:
+            env_lambda = _os.getenv("ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER") if _os else None
+            self._enable_async_lambda_helper = bool(env_lambda and env_lambda.lower() in {"1", "true", "yes"})
+        else:
+            self._enable_async_lambda_helper = bool(enable_async_lambda_helper)
+
+        # Telemetry counters for gated transforms
+        self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0)
+        self.stats["ast_transform_def_rewrites"] = 0
+        self.stats["ast_transform_lambda_helpers"] = 0
 
         # Detection policy setup
         policy = _DetectionPolicy()
@@ -747,19 +775,24 @@ class AsyncExecutor:
         Raises:
             Any exception from code execution
         """
-        # Increment AST transform count for stats
-        if "ast_transforms" not in self.stats:
-            self.stats["ast_transforms"] = 0
-        self.stats["ast_transforms"] += 1
+        # Increment AST transform count for stats and log entry
+        self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0) + 1
+        logger.info(
+            "ast_fallback_wrapper_start",
+            execution_id=self.execution_id,
+            def_rewrite_enabled=self._enable_def_await_rewrite,
+            lambda_helper_enabled=self._enable_async_lambda_helper,
+        )
 
-        # Parse code into AST
-        tree = ast.parse(code)
+        # Parse code into AST with stable filename for traceback mapping
+        FALLBACK_FILENAME = "<async_fallback>"
+        tree = ast.parse(code, filename=FALLBACK_FILENAME, type_comments=True)
 
-        # Pre-transform problematic patterns
+        # Optional, gated pre-transforms; default OFF
         transformed_body: list[ast.stmt] = []
         for stmt in tree.body:
-            # Transform def containing await -> async def
-            if isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
+            # Transform def containing await -> async def (behind flag)
+            if self._enable_def_await_rewrite and isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
                 async_def = ast.AsyncFunctionDef(
                     name=stmt.name,
                     args=stmt.args,
@@ -770,18 +803,27 @@ class AsyncExecutor:
                 )
                 ast.copy_location(async_def, stmt)
                 transformed_body.append(async_def)
+                self.stats["ast_transform_def_rewrites"] += 1
                 continue
 
-            # Transform zero-arg lambda with await assigned to name -> async def helper
-            if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Lambda):
-                if self._should_transform_lambda(stmt.value):
-                    transformed = self._transform_lambda_to_async_def(stmt)
-                    transformed_body.extend(transformed)
-                    continue
+            # Transform zero-arg lambda with await assigned to name -> async def helper (behind flag)
+            if (
+                self._enable_async_lambda_helper
+                and isinstance(stmt, ast.Assign)
+                and isinstance(stmt.value, ast.Lambda)
+                and self._should_transform_lambda(stmt.value)
+            ):
+                transformed = self._transform_lambda_to_async_def(stmt)
+                # Count only if an actual transform occurred (length change)
+                if len(transformed) != 1 or transformed[0] is not stmt:
+                    self.stats["ast_transform_lambda_helpers"] += 1
+                transformed_body.extend(transformed)
+                continue
 
             transformed_body.append(stmt)
 
-        tree.body = transformed_body
+        if transformed_body:
+            tree.body = transformed_body
 
         # Determine if expression or statements
         is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
@@ -791,19 +833,28 @@ class AsyncExecutor:
             from typing import cast
 
             expr_node = cast(ast.Expr, tree.body[0])
-            body: list[ast.stmt] = [ast.Return(value=expr_node.value)]
+            ret = ast.Return(value=expr_node.value)
+            # Copy source location from the expression value to Return for PEP 657 mapping
+            origin = expr_node.value if hasattr(expr_node, "value") else expr_node
+            ast.copy_location(ret, origin)
+            if hasattr(origin, "end_lineno"):
+                ret.end_lineno = origin.end_lineno  # type: ignore[attr-defined]
+                ret.end_col_offset = getattr(origin, "end_col_offset", 0)  # type: ignore[attr-defined]
+            body: list[ast.stmt] = [ret]
         else:
-            # Conservative global hoisting for simple assigned names
-            assigned_names = self._collect_safe_assigned_names(tree.body)
-            body = []
-            if assigned_names:
-                body.append(ast.Global(names=sorted(assigned_names)))
-            body.extend(tree.body)
-            body.append(
-                ast.Return(
-                    value=ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])
-                )
+            # Minimal wrapper: preserve original ordering; do not insert globals hoist
+            body = list(tree.body)
+            ret_stmt = ast.Return(
+                value=ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])
             )
+            # Copy location from the last original statement for traceback mapping
+            origin_stmt = tree.body[-1] if tree.body else None
+            if origin_stmt is not None:
+                ast.copy_location(ret_stmt, origin_stmt)
+                if hasattr(origin_stmt, "end_lineno"):
+                    ret_stmt.end_lineno = origin_stmt.end_lineno  # type: ignore[attr-defined]
+                    ret_stmt.end_col_offset = getattr(origin_stmt, "end_col_offset", 0)  # type: ignore[attr-defined]
+            body.append(ret_stmt)
 
         # Create async wrapper function at AST level
         # This directly follows spec lines 385-399
@@ -826,7 +877,19 @@ class AsyncExecutor:
         ast.fix_missing_locations(new_module)
 
         # Compile transformed AST
-        compiled = compile(new_module, "<async_transform>", "exec")
+        compiled = compile(new_module, FALLBACK_FILENAME, "exec")
+
+        # Register original source with linecache for traceback line mapping
+        try:
+            linecache.cache[FALLBACK_FILENAME] = (
+                len(code),
+                None,
+                code.splitlines(keepends=True),
+                FALLBACK_FILENAME,
+            )
+        except Exception:
+            # Best-effort; never fail execution due to cache registration
+            pass
 
         # Execute to define the async function
         # IMPORTANT: Use the live session namespace as globals so the created
@@ -903,6 +966,8 @@ class AsyncExecutor:
             result_type=type(result).__name__ if result is not None else "None",
             has_namespace_updates=True,  # conservative signal for tests/telemetry
             execution_id=self.execution_id,
+            def_rewrites=self.stats.get("ast_transform_def_rewrites", 0),
+            lambda_helpers=self.stats.get("ast_transform_lambda_helpers", 0),
         )
 
         return result

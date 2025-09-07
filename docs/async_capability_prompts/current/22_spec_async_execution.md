@@ -45,6 +45,24 @@ compiled = compile(code, '<async>', 'exec', flags=async_flags)
 
 Preferred strategy: attempt compile‑first with the flag; only use the AST fallback wrapper when compilation raises an unrecoverable SyntaxError unrelated to ordinary top‑level async constructs.
 
+### AST Fallback Policy (Phase 3)
+
+- Minimal wrapper only; do not rewrite user code by default.
+  - Insert an `async def __async_exec__():` wrapper.
+  - Expression case: wrapper body is a single `return <expr>` preserving the original expression node; locations copied for PEP 657.
+  - Statement case: wrapper body is the original statements in order, plus `return locals()` as the last statement. No reordering; no `global` declarations are inserted.
+- Transforms gated and OFF by default:
+  - def→async def (when body contains await): `enable_def_await_rewrite=False`.
+  - zero‑arg lambda with await → helper async def: `enable_async_lambda_helper=False`.
+- Location mapping and tracebacks:
+  - Parse with stable fallback filename `<async_fallback>`.
+  - Use `ast.copy_location` for inserted nodes and `ast.fix_missing_locations` before compile.
+  - Register original source in `linecache.cache['<async_fallback>']` so traceback frames display the user’s code lines.
+- Namespace merge semantics:
+  - Execute wrapper in the live globals mapping so functions bind `__globals__` to the session namespace.
+  - After execution, merge locals first (from `locals()` result) and then compute/apply global diffs; preserve `ENGINE_INTERNALS` and skip `__async_exec__`, `asyncio`, and `__builtins__`.
+  - With hoisting disabled, names assigned in the wrapper body are locals of the wrapper; functions defined in the same body may close over those locals rather than observing later global updates. This is acceptable under PR 3 and documented behavior.
+
 ### Execution Mode Detection
 
 ```

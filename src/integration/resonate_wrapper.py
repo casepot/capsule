@@ -51,6 +51,8 @@ def async_executor_factory(
     blocking_modules: set[str] | None = None,
     blocking_methods_by_module: dict[str, set[str]] | None = None,
     warn_on_blocking: bool | None = None,
+    enable_def_await_rewrite: bool | None = None,
+    enable_async_lambda_helper: bool | None = None,
 ) -> AsyncExecutor:
     """Factory returning ready-to-use AsyncExecutor instances.
 
@@ -82,6 +84,13 @@ def async_executor_factory(
         blocking_methods_by_module = getattr(cfg, "blocking_methods_by_module", None)
     if warn_on_blocking is None and cfg is not None:
         warn_on_blocking = getattr(cfg, "warn_on_blocking", True)
+    # New flags for AST fallback policy (default OFF)
+    if enable_def_await_rewrite is None and cfg is not None:
+        if hasattr(cfg, "enable_def_await_rewrite"):
+            enable_def_await_rewrite = bool(getattr(cfg, "enable_def_await_rewrite"))
+    if enable_async_lambda_helper is None and cfg is not None:
+        if hasattr(cfg, "enable_async_lambda_helper"):
+            enable_async_lambda_helper = bool(getattr(cfg, "enable_async_lambda_helper"))
     # TODO(loop-ownership): Ensure the executor receives the loop that owns the
     # transport. The durable layer must not create or run event loops; if a sync
     # submit() facade is needed for ctx.lfc, implement it by posting to this loop
@@ -95,4 +104,6 @@ def async_executor_factory(
         blocking_modules=blocking_modules,
         blocking_methods_by_module=blocking_methods_by_module,
         warn_on_blocking=True if warn_on_blocking is None else bool(warn_on_blocking),
+        enable_def_await_rewrite=enable_def_await_rewrite,
+        enable_async_lambda_helper=enable_async_lambda_helper,
     )

@@ -258,9 +258,9 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 ### Research‑Informed Updates (Python 3.11–3.13)
 
 - Top‑Level Await: Prefer compile‑first with `PyCF_ALLOW_TOP_LEVEL_AWAIT` for `exec` and `eval` modes; evaluate to a coroutine and `await` it. Support top‑level `async for`/`async with` without AST rewriting. Keep AST fallback wrapper solely for resilience.
-- Transform Policy: Remove broad “def→async def if contains await”; keep zero‑arg lambda transform disabled by default. Any fallback wrapper must preserve order, use locals‑first then global diffs, and bind functions to the live globals mapping.
+- Transform Policy (PR 3): Default to minimal wrapper only; do not rewrite user code. Broad “def→async def if contains await” and zero‑arg lambda→helper are retained but OFF by default and gated by flags. The fallback wrapper preserves order, appends `return locals()` for statements, uses locals‑first then global diffs, and binds functions to the live globals mapping.
 - Symbol‑Aware Hoisting: Behind a feature flag, use `symtable` + AST to hoist unconditional top‑level imports and defs not shadowed/rebound or conditional. Maintain original relative order. Treat `TypeAlias` as assignment‑like. Beware PEP 709 (3.12) comprehension symbols; never treat comp targets as globals.
-- PEP 657 Locations: Use `ast.copy_location` for replacements, `ast.fix_missing_locations` post‑transform; avoid `increment_lineno` unless unavoidable. Keep filenames stable and register sources in `linecache` when emitting virtual names.
+- PEP 657 Locations (PR 3): Use `ast.copy_location` for inserted `Return` nodes, copy end positions when available, and `ast.fix_missing_locations` post‑transform. Keep a stable fallback filename `<async_fallback>` and register original source in `linecache` for readable tracebacks.
 - AST Coverage (3.11–3.13): Ensure traversal/visitors handle `Match` + pattern subclasses, `TryStar`, `TypeAlias`, and `type_params` on defs/classes; no special handling needed for PEP 701 f‑strings beyond traversal.
 - Caching: Prefer code‑object LRU cache keyed by `(source, mode, flags)`; keep AST LRU only where transforms are applied. Optionally compile with TLA flag always (harmless when no await) to simplify keys.
 

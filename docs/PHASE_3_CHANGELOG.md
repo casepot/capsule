@@ -62,3 +62,23 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
   - Global-diff skip-list behavior validated under AST fallback (no updates for `__async_exec__`, `asyncio`, `__builtins__`).
   - UNKNOWN/SyntaxError surfaces naturally via native path and increments error counters.
   - Coverage improved for AsyncExecutor unit scope (≈88%) by targeting routing branches and diff paths.
+
+## PR 3 — AsyncExecutor: AST Fallback Wrapper (Minimal, PEP 657-aligned)
+
+- Scope and behavior changes:
+  - Default policy is minimal wrapper only. Broad transforms are disabled by default:
+    - def→async def when body contains await: gated by `enable_def_await_rewrite=False`.
+    - zero-arg lambda → async helper: gated by `enable_async_lambda_helper=False`.
+  - Removed global hoisting in fallback. User statements are not reordered. For statement blocks, the wrapper appends a single `return locals()` and merges back into the live namespace (locals-first, then global diffs). `ENGINE_INTERNALS` preserved; `__async_exec__`, `asyncio`, and `__builtins__` are skipped.
+- PEP 657 location mapping:
+  - Parse with a stable filename `<async_fallback>` and register original source via `linecache.cache` for readable tracebacks.
+  - Use `ast.copy_location` for inserted `Return` nodes; copy end positions when present.
+  - Call `ast.fix_missing_locations` before compile.
+- Telemetry and configuration:
+  - Added counters: `stats["ast_transforms"]`, `stats["ast_transform_def_rewrites"]`, `stats["ast_transform_lambda_helpers"]`.
+  - `AsyncExecutor.__init__` now accepts flags; `async_executor_factory` threads `ctx.config.enable_def_await_rewrite` and `ctx.config.enable_async_lambda_helper` (default OFF). Optional env overrides are supported.
+- Tests:
+  - Updated fallback tests to assert minimal wrapper semantics and no reordering.
+  - Added traceback mapping test asserting correct line numbers under `<async_fallback>`.
+  - Adjusted invalid await placement tests: lambda/regular def with await now raise `SyntaxError` by default.
+  - Namespace-binding tests updated to reflect no hoist (wrapper locals can shadow globals).
