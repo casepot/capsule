@@ -76,6 +76,10 @@ def async_executor_factory(
             zero-arg `lambda: await ...` assignments into an async helper function plus assignment.
             If False, disabled. If None (default), environment variable
             ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
+        
+        TODO(follow-up): Thread `fallback_linecache_max_size` from `ctx.config` if present
+        to allow configuring LRU retention from DI. Also consider exposing a mode
+        to skip `close()` cleanup for post-mortem retention.
 
     Usage in DI:
         resonate.set_dependency(

@@ -100,6 +100,15 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
     - `AsyncExecutor.__init__` and `async_executor_factory` docstrings document the new flags, defaults (OFF), and env override behavior.
     - Async execution spec updated to permit unique fallback filenames and includes migration notes for no hoist.
 
+- Future Work
+  - Performance niceties (as needed):
+    - Cache `splitlines()` result per fallback call before registering in `linecache`.
+    - If def-rewrite usage expands, consider a dedicated visitor to avoid repeated traversals approaching O(n²).
+  - Follow-ups (optional):
+    - Log LRU evictions at debug level for observability.
+    - Thread `fallback_linecache_max_size` through `async_executor_factory` from `ctx.config`.
+    - Add an opt-in mode to skip `close()` cleanup for post-mortem traceback retention.
+
 - Migration note:
   - The fallback wrapper no longer injects a `global` hoist for simple assignments. As a result, names
     assigned within the wrapper body are locals of the wrapper and can shadow module globals. Functions

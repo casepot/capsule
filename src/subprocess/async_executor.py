@@ -815,99 +815,24 @@ class AsyncExecutor:
         FALLBACK_FILENAME = self._make_fallback_filename(code)
         tree = ast.parse(code, filename=FALLBACK_FILENAME, type_comments=True)
 
-        # Optional, gated pre-transforms; default OFF
-        transformed_body: list[ast.stmt] = []
-        for stmt in tree.body:
-            # Transform def containing await -> async def (behind flag)
-            if self._enable_def_await_rewrite and isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
-                async_def = ast.AsyncFunctionDef(
-                    name=stmt.name,
-                    args=stmt.args,
-                    body=stmt.body,
-                    decorator_list=stmt.decorator_list,
-                    returns=stmt.returns,
-                    type_comment=stmt.type_comment if hasattr(stmt, "type_comment") else None,
-                )
-                ast.copy_location(async_def, stmt)
-                transformed_body.append(async_def)
-                self.stats["ast_transform_def_rewrites"] += 1
-                continue
+        # Apply gated transforms and rebuild body
+        tree.body = self._apply_gated_transforms(tree)
+        body, is_expression = self._build_wrapper_body(tree)
 
-            # Transform zero-arg lambda with await assigned to name -> async def helper (behind flag)
-            if (
-                self._enable_async_lambda_helper
-                and isinstance(stmt, ast.Assign)
-                and isinstance(stmt.value, ast.Lambda)
-                and self._should_transform_lambda(stmt.value)
-            ):
-                transformed = self._transform_lambda_to_async_def(stmt)
-                # Count only if an actual transform occurred (length change)
-                if len(transformed) != 1 or transformed[0] is not stmt:
-                    self.stats["ast_transform_lambda_helpers"] += 1
-                transformed_body.extend(transformed)
-                continue
-
-            transformed_body.append(stmt)
-
-        # Always assign transformed body (preserves original order when unchanged)
-        tree.body = transformed_body
-
-        # Determine if expression or statements
-        is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
-
-        # Prepare wrapper body
-        if is_expression:
-            from typing import cast
-
-            expr_node = cast(ast.Expr, tree.body[0])
-            ret = ast.Return(value=expr_node.value)
-            # Copy source location from the expression value to Return for PEP 657 mapping
-            origin = expr_node.value if hasattr(expr_node, "value") else expr_node
-            ast.copy_location(ret, origin)
-            if hasattr(origin, "end_lineno"):
-                ret.end_lineno = origin.end_lineno  # type: ignore[attr-defined]
-                ret.end_col_offset = getattr(origin, "end_col_offset", 0)  # type: ignore[attr-defined]
-            body: list[ast.stmt] = [ret]
-        else:
-            # Minimal wrapper: preserve original ordering; do not insert globals hoist
-            body = list(tree.body)
-            ret_stmt = ast.Return(
-                value=ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])
-            )
-            # Copy location from the last original statement for traceback mapping
-            origin_stmt = tree.body[-1] if tree.body else None
-            if origin_stmt is not None:
-                ast.copy_location(ret_stmt, origin_stmt)
-                if hasattr(origin_stmt, "end_lineno"):
-                    ret_stmt.end_lineno = origin_stmt.end_lineno  # type: ignore[attr-defined]
-                    ret_stmt.end_col_offset = getattr(origin_stmt, "end_col_offset", 0)  # type: ignore[attr-defined]
-            body.append(ret_stmt)
-
-        # Create async wrapper function at AST level
-        # This directly follows spec lines 385-399
-        # TODO(Phase 1): If supporting Python <3.8, adjust ast.arguments
-        # construction (posonlyargs not present). Current target is 3.11+.
+        # Create async wrapper function and module
         async_wrapper = ast.AsyncFunctionDef(
             name="__async_exec__",
             args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
-            body=body,  # Use prepared body with return if expression
+            body=body,
             decorator_list=[],
             returns=None,
             lineno=1,
             col_offset=0,
         )
-
-        # Create new module with wrapper
         new_module = ast.Module(body=[async_wrapper], type_ignores=[])
 
-        # Fix line numbers for error reporting
-        ast.fix_missing_locations(new_module)
-
-        # Compile transformed AST
-        compiled = compile(new_module, FALLBACK_FILENAME, "exec")
-
-        # Register original source with linecache for traceback mapping (LRU-managed)
-        self._register_fallback_source(FALLBACK_FILENAME, code)
+        # Compile and register source for traceback mapping
+        compiled = self._compile_and_register(code, new_module, FALLBACK_FILENAME)
 
         # Execute to define the async function
         # IMPORTANT: Use the live session namespace as globals so the created
@@ -938,46 +863,13 @@ class AsyncExecutor:
 
         # Execute the async function with timeout
         # The function will have access to global_ns as its globals
+        # Execute wrapper and merge results
         try:
             async with asyncio.timeout(self.tla_timeout):
-                result = await async_func()
+                result = await self._run_wrapper_and_merge(async_func, global_ns, pre_globals, is_expression, code)
         except asyncio.TimeoutError as e:
             self._annotate_timeout(e, code)
             raise
-
-        # Handle the result based on what we're expecting
-        if is_expression:
-            # For expressions, result is the actual value
-            pass
-        else:
-            # For statements, result is locals() dict
-            if isinstance(result, dict):
-                # Extract local variables (excluding internals)
-                updates: dict[str, Any] = {}
-                for key, value in result.items():
-                    if key.startswith("__") or key in {"asyncio", "__async_exec__"}:
-                        continue
-                    updates[key] = value
-                if updates:
-                    self.namespace.update_namespace(updates, source_context="async")
-                # For statements, return None
-                result = None
-            else:
-                # Unexpected case - log and continue
-                logger.warning(
-                    "Expected dict from locals() but got",
-                    result_type=type(result).__name__,
-                    execution_id=self.execution_id,
-                )
-
-        # Apply global diffs AFTER locals to ensure global writes win
-        global_updates = self._compute_global_diff(pre_globals, global_ns)
-        if global_updates:
-            self.namespace.update_namespace(global_updates, source_context="async")
-
-        # Track result if it's an expression
-        if result is not None:
-            self.namespace.record_expression_result(result)
 
         logger.debug(
             "AST transformation completed",
@@ -988,6 +880,111 @@ class AsyncExecutor:
             lambda_helpers=self.stats.get("ast_transform_lambda_helpers", 0),
         )
 
+        return result
+
+    # === AST fallback helper methods ===
+    def _apply_gated_transforms(self, tree: ast.Module) -> list[ast.stmt]:
+        """Apply optional, flag-gated transforms to the module body preserving order and locations."""
+        transformed_body: list[ast.stmt] = []
+        for stmt in tree.body:
+            if self._enable_def_await_rewrite and isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
+                async_def = ast.AsyncFunctionDef(
+                    name=stmt.name,
+                    args=stmt.args,
+                    body=stmt.body,
+                    decorator_list=stmt.decorator_list,
+                    returns=stmt.returns,
+                    type_comment=stmt.type_comment if hasattr(stmt, "type_comment") else None,
+                )
+                ast.copy_location(async_def, stmt)
+                transformed_body.append(async_def)
+                self.stats["ast_transform_def_rewrites"] += 1
+                continue
+
+            if (
+                self._enable_async_lambda_helper
+                and isinstance(stmt, ast.Assign)
+                and isinstance(stmt.value, ast.Lambda)
+                and self._should_transform_lambda(stmt.value)
+            ):
+                transformed = self._transform_lambda_to_async_def(stmt)
+                if len(transformed) != 1 or transformed[0] is not stmt:
+                    self.stats["ast_transform_lambda_helpers"] += 1
+                transformed_body.extend(transformed)
+                continue
+
+            transformed_body.append(stmt)
+        return transformed_body
+
+    def _build_wrapper_body(self, tree: ast.Module) -> tuple[list[ast.stmt], bool]:
+        """Build wrapper body with PEP 657-aligned locations; return (body, is_expression)."""
+        is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
+        if is_expression:
+            from typing import cast
+
+            expr_node = cast(ast.Expr, tree.body[0])
+            ret = ast.Return(value=expr_node.value)
+            origin = expr_node.value if hasattr(expr_node, "value") else expr_node
+            ast.copy_location(ret, origin)
+            if hasattr(origin, "end_lineno"):
+                ret.end_lineno = origin.end_lineno  # type: ignore[attr-defined]
+                ret.end_col_offset = getattr(origin, "end_col_offset", 0)  # type: ignore[attr-defined]
+            return [ret], True
+        else:
+            body = list(tree.body)
+            ret_stmt = ast.Return(
+                value=ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])
+            )
+            origin_stmt = tree.body[-1] if tree.body else None
+            if origin_stmt is not None:
+                ast.copy_location(ret_stmt, origin_stmt)
+                if hasattr(origin_stmt, "end_lineno"):
+                    ret_stmt.end_lineno = origin_stmt.end_lineno  # type: ignore[attr-defined]
+                    ret_stmt.end_col_offset = getattr(origin_stmt, "end_col_offset", 0)  # type: ignore[attr-defined]
+            body.append(ret_stmt)
+            return body, False
+
+    def _compile_and_register(self, code: str, module: ast.Module, filename: str):
+        """Fix locations, compile with filename, and register source in linecache (LRU-managed)."""
+        ast.fix_missing_locations(module)
+        compiled = compile(module, filename, "exec")
+        self._register_fallback_source(filename, code)
+        return compiled
+
+    async def _run_wrapper_and_merge(
+        self,
+        async_func: Any,
+        global_ns: dict[str, Any],
+        pre_globals: dict[str, Any],
+        is_expression: bool,
+        code: str,
+    ) -> Any:
+        """Execute the wrapper, merge namespace updates, and return final result."""
+        result = await async_func()
+
+        if not is_expression:
+            if isinstance(result, dict):
+                updates: dict[str, Any] = {}
+                for key, value in result.items():
+                    if key.startswith("__") or key in {"asyncio", "__async_exec__"}:
+                        continue
+                    updates[key] = value
+                if updates:
+                    self.namespace.update_namespace(updates, source_context="async")
+                result = None
+            else:
+                logger.warning(
+                    "Expected dict from locals() but got",
+                    result_type=type(result).__name__,
+                    execution_id=self.execution_id,
+                )
+
+        global_updates = self._compute_global_diff(pre_globals, global_ns)
+        if global_updates:
+            self.namespace.update_namespace(global_updates, source_context="async")
+
+        if result is not None:
+            self.namespace.record_expression_result(result)
         return result
 
     # Helper utilities
@@ -1094,6 +1091,10 @@ class AsyncExecutor:
         Traversal rules:
         - Search the body of the provided root node (even if it is a scope node itself).
         - Do not recurse into nested FunctionDef, AsyncFunctionDef, Lambda, or ClassDef encountered below.
+        
+        TODO(perf): If we expand def-rewrite scope or usage, consider a dedicated
+        visitor with memoization to avoid repeated traversal patterns that can
+        approach O(n^2) on deeply nested code.
         """
         def visit(n: ast.AST, barrier_for_scopes: bool) -> bool:
             if isinstance(n, ast.Await):
@@ -1208,6 +1209,8 @@ class AsyncExecutor:
         Alternatively, use AsyncExecutor as a context manager.
         """
         # Cleanup registered linecache entries (best-effort)
+        # TODO(modes): Consider an opt-in mode to skip cleanup for post-mortem
+        # traceback retention (e.g., keep a bounded set until process exit).
         try:
             for fname in list(self._fallback_linecache_keys.keys()):
                 try:
@@ -1249,6 +1252,8 @@ class AsyncExecutor:
     def _register_fallback_source(self, filename: str, code: str) -> None:
         """Register code in linecache and maintain per-executor LRU with optional capacity."""
         try:
+            # TODO(perf): Consider caching splitlines() per fallback call to avoid
+            # repeated splitlines on hot paths.
             linecache.cache[filename] = (
                 len(code),
                 None,
@@ -1273,6 +1278,8 @@ class AsyncExecutor:
                     try:
                         if old in linecache.cache:
                             del linecache.cache[old]
+                            # TODO(obs): Consider logging LRU evictions at debug level
+                            # for observability (evicted filename, current size).
                     except Exception:
                         pass
         except Exception:
