@@ -76,8 +76,8 @@ def initialize_resonate_local(session: Any, resonate: Optional[Any] = None) -> A
             try:
                 # Schedule async route to remain non-blocking
                 import asyncio as _asyncio
-                task = _asyncio.create_task(bridge.route_response(message))  # type: ignore[arg-type]
-                def _done(t: _asyncio.Task):
+                task = _asyncio.create_task(bridge.route_response(message))
+                def _done(t: _asyncio.Task[object]) -> None:
                     if t.cancelled():
                         return
                     exc = t.exception()

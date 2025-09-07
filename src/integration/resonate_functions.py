@@ -7,7 +7,7 @@ AsyncExecutor via DI factory. The function follows generator-style
 durable function semantics expected by the Resonate SDK.
 """
 
-from typing import Any, Callable, Generator
+from typing import Any, Generator
 import time
 import json
 from ..protocol.messages import ExecuteMessage

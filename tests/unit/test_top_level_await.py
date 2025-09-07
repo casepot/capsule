@@ -60,6 +60,8 @@ x = await asyncio.sleep(0, 42)
         assert result is None
         # But x should be in namespace
         assert namespace_manager.namespace.get('x') == 42
+        # Compile-first exec path should not need AST fallback
+        assert executor.stats.get("ast_transforms", 0) == 0
     
     @pytest.mark.asyncio
     async def test_multiple_awaits(self):
@@ -86,6 +88,8 @@ c = a + b
         assert namespace_manager.namespace.get('a') == 1
         assert namespace_manager.namespace.get('b') == 2
         assert namespace_manager.namespace.get('c') == 3
+        # Ensure no AST fallback for standard statements
+        assert executor.stats.get("ast_transforms", 0) == 0
     
     @pytest.mark.asyncio
     async def test_await_expression_result(self):
@@ -187,6 +191,29 @@ async def get_value(x):
         await executor.execute(code)
         
         assert namespace_manager.namespace.get('result') == [0, 2, 4]
+        # Should use compile-first path
+        assert executor.stats.get("ast_transforms", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_await_in_fstring_py312_plus(self):
+        """Test await inside f-string for Python >=3.12 (PEP 701)."""
+        import sys
+        if sys.version_info < (3, 12):
+            pytest.skip("f-strings with await require Python 3.12+")
+
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-edge-fstr"
+        )
+
+        code = "msg = f'value {await asyncio.sleep(0, 5)}'"
+        await executor.execute(code)
+        assert namespace_manager.namespace.get('msg') == 'value 5'
+        assert executor.stats.get("ast_transforms", 0) == 0
     
     @pytest.mark.asyncio
     async def test_await_in_conditional(self):
@@ -528,14 +555,13 @@ class TestASTTransformationFallback:
             execution_id="test-ast-1"
         )
         
-        # Patch compile to simulate SyntaxError on first attempt
+        # Patch compile to simulate SyntaxError whenever TLA flags are used
         original_compile = compile
-        call_count = 0
         
         def mock_compile(source, filename, mode, flags=0, *args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1 and flags & executor.PyCF_ALLOW_TOP_LEVEL_AWAIT:
+            if flags & executor.PyCF_ALLOW_TOP_LEVEL_AWAIT:
+                # Force both eval and exec compilation paths to fail,
+                # ensuring the AST fallback is exercised
                 raise SyntaxError("Simulated syntax error")
             return original_compile(source, filename, mode, flags, *args, **kwargs)
         

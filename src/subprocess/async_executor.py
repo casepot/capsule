@@ -525,7 +525,9 @@ class AsyncExecutor:
         Execute code with top-level await support.
 
         Uses PyCF_ALLOW_TOP_LEVEL_AWAIT flag for direct compilation
-        when possible, falls back to AST transformation if needed.
+        when possible, falls back to AST transformation only when
+        both eval+flags and exec+flags compilation paths fail with
+        SyntaxError.
 
         Args:
             code: Python code containing top-level await
@@ -536,43 +538,43 @@ class AsyncExecutor:
         Raises:
             Any exception from code execution
         """
-        # Use TLA flag directly (avoid extra compile() to read base flags)
+        # Use TLA flag directly
         flags = self.PyCF_ALLOW_TOP_LEVEL_AWAIT
 
+        # Bind to the live namespace mapping and prepare locals dict
+        global_ns = self.namespace.namespace
+        local_ns: dict[str, Any] = {}
+
+        # Snapshot globals before any execution for diffs
+        pre_globals = dict(global_ns)
+
+        # Ensure asyncio is available in globals
+        if "asyncio" not in global_ns:
+            import asyncio as _asyncio
+
+            global_ns["asyncio"] = _asyncio
+
+        import inspect as _inspect
+
         try:
-            # Try eval mode first to preserve expression results
-            compiled = compile(code, "<async_session>", "eval", flags=flags)
+            # Eval-first to preserve expression results when possible
+            compiled_eval = compile(code, "<async_session>", "eval", flags=flags)
+            is_coro_eval = bool(_inspect.CO_COROUTINE & compiled_eval.co_flags)
 
-            import inspect as _inspect
+            value = eval(compiled_eval, global_ns, local_ns)
 
-            is_coroutine_code = bool(_inspect.CO_COROUTINE & compiled.co_flags)
-
-            global_ns = self.namespace.namespace
-            local_ns: dict[str, Any] = {}
-
-            # Snapshot globals before execution for diffing
-            pre_globals = dict(global_ns)
-
-            # Ensure asyncio
-            if "asyncio" not in global_ns:
-                import asyncio as _asyncio
-
-                global_ns["asyncio"] = _asyncio
-
-            coro_or_result = eval(compiled, global_ns, local_ns)
-
-            if is_coroutine_code and asyncio.iscoroutine(coro_or_result):
-                self._track_coroutine(coro_or_result)
+            if is_coro_eval and asyncio.iscoroutine(value):
+                self._track_coroutine(value)
                 async with asyncio.timeout(self.tla_timeout):
-                    result = await coro_or_result
+                    result = await value
             else:
-                result = coro_or_result
+                result = value
 
-            # Merge locals first
+            # locals-first merge
             if local_ns:
                 self.namespace.update_namespace(local_ns, source_context="async")
 
-            # Merge global diffs next
+            # then global diffs
             global_updates = self._compute_global_diff(pre_globals, global_ns)
             if global_updates:
                 self.namespace.update_namespace(global_updates, source_context="async")
@@ -584,16 +586,66 @@ class AsyncExecutor:
 
         except asyncio.TimeoutError as e:
             if hasattr(e, "add_note"):
-                e.add_note("Code execution timed out after 30 seconds")
+                e.add_note(f"Code execution timed out after {self.tla_timeout:.1f} seconds")
                 e.add_note(f"Execution ID: {self.execution_id}")
-                snippet = code[:100] + ("..." if len(code) > 100 else "")
+                snippet = code[:160] + ("..." if len(code) > 160 else "")
                 e.add_note(f"Code snippet: {snippet}")
             raise
-        except SyntaxError as e:
-            if hasattr(e, "add_note"):
-                e.add_note("Direct compilation with PyCF_ALLOW_TOP_LEVEL_AWAIT failed")
-                e.add_note("Falling back to AST transformation wrapper")
-            return await self._execute_with_ast_transform(code)
+        except SyntaxError:
+            # Attempt exec+flags path for statements and mixed content
+            try:
+                compiled_exec = compile(code, "<async_session>", "exec", flags=flags)
+                is_coro_exec = bool(_inspect.CO_COROUTINE & compiled_exec.co_flags)
+
+                # Use a fresh locals mapping for this path; assignments will populate it
+                exec_locals: dict[str, Any] = {}
+
+                # Fresh snapshot for accurate global diffs on this branch
+                pre_globals_exec = dict(global_ns)
+
+                value = eval(compiled_exec, global_ns, exec_locals)
+
+                if is_coro_exec and asyncio.iscoroutine(value):
+                    self._track_coroutine(value)
+                    async with asyncio.timeout(self.tla_timeout):
+                        result = await value
+                else:
+                    result = value
+
+                # Merge locals first (exec_locals contains assigned names)
+                if exec_locals:
+                    self.namespace.update_namespace(exec_locals, source_context="async")
+
+                # Then merge any global diffs
+                global_updates = self._compute_global_diff(pre_globals_exec, global_ns)
+                if global_updates:
+                    self.namespace.update_namespace(global_updates, source_context="async")
+
+                # Exec path typically returns None; record only if non-None
+                if result is not None:
+                    self.namespace.record_expression_result(result)
+
+                return result
+
+            except asyncio.TimeoutError as e:
+                if hasattr(e, "add_note"):
+                    e.add_note(f"Code execution timed out after {self.tla_timeout:.1f} seconds")
+                    e.add_note(f"Execution ID: {self.execution_id}")
+                    snippet = code[:160] + ("..." if len(code) > 160 else "")
+                    e.add_note(f"Code snippet: {snippet}")
+                raise
+            except SyntaxError as exec_syntax_err:
+                # Both compilation paths failed; annotate and fallback to AST transform
+                if hasattr(exec_syntax_err, "add_note"):
+                    exec_syntax_err.add_note(
+                        "Direct compilation with PyCF_ALLOW_TOP_LEVEL_AWAIT failed"
+                    )
+                    exec_syntax_err.add_note("Falling back to AST transformation wrapper")
+                    snippet = code[:160] + ("..." if len(code) > 160 else "")
+                    exec_syntax_err.add_note(
+                        f"Execution ID: {self.execution_id}; Code snippet: {snippet}"
+                    )
+                return await self._execute_with_ast_transform(code)
 
     async def _execute_with_ast_transform(self, code: str) -> Any:
         """
