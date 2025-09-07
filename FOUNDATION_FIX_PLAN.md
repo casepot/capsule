@@ -219,19 +219,29 @@ This section supersedes older mixed notes below. It defines a clear split betwee
   - Stable transport framing
 - Status: COMPLETE for local mode. Remote/performance items deferred.
 
-### Phase 3: Full AsyncExecutor Implementation (TODO)
+### Phase 3: Full AsyncExecutor Implementation (UPDATED — 3.11–3.13 research)
 
 - Deliverables:
-  - EventLoopCoordinator class for proper event loop management
-  - Enhanced CoroutineManager with lifecycle tracking
-  - ExecutionCancellation support for interrupting executions
-  - ASTOptimizer for performance improvements
-  - True async execution (not delegation to ThreadedExecutor)
-  - Message queue for non-async contexts
+  - EventLoopCoordinator for proper event loop management and non‑async queuing
+  - CoroutineManager with lifecycle tracking and structured cancellation
+  - ExecutionCancellation (cooperative cancel for async paths; delegated for blocking sync)
+  - Native async execution paths (no ThreadedExecutor for TLA/async defs)
+  - Compile‑first TLA strategy using `PyCF_ALLOW_TOP_LEVEL_AWAIT` (exec/eval) with await/eval handling
+  - Minimal AST fallback wrapper only when direct compile fails; no broad refactors
+  - Blocking I/O detection refinements (attribute chains, aliasing, overshadowing) with telemetry and config
+  - Code‑object caching (LRU) keyed by `source+mode+flags` (optional AST cache only where transforms apply)
+  - Optional (flagged) symtable‑backed hoisting for top‑level imports/defs (preserve order; semantics‑safe)
+  - PEP 657 location‑mapping rules for any transforms (copy_location, fix_missing_locations)
 - Acceptance Criteria:
-  - AsyncExecutor handles all execution modes natively
-  - Proper coroutine cleanup and cancellation
-  - Event loop coordination without conflicts
+  - Compile‑first path executes TLA/`async for`/`async with` across 3.11–3.13; fallback wrapper only for rare failures
+  - No “def→async def” mass transforms; lambda→async helper disabled by default (documented, guarded if retained)
+  - Transforms do not reorder user statements; locals‑first then global‑diffs applied; ENGINE_INTERNALS preserved
+  - Visitors/analyzers tolerate 3.11–3.13 nodes: Match/Patterns, TryStar, TypeAlias, and `type_params`
+  - Accurate error spans (PEP 657) for transformed code; tracebacks underline original expressions
+  - Cancellation closes/cleans pending coroutines and tasks; metrics recorded
+  - Blocking I/O detection handles alias/attribute patterns; false positives reduced by overshadowing checks
+  - Caching improves repeated execution latency; cache keys distinguish `mode` and flags; tests verify correctness
+  - Hoisting (if enabled) is semantics‑preserving on edge‑case corpus; OFF by default in Phase 3
 - Dependencies:
   - Phase 1b completion
 - Status: TODO. Required for full async capabilities.
@@ -242,6 +252,15 @@ This section supersedes older mixed notes below. It defines a clear split betwee
 - Interceptor performance budgets and warnings (measure call durations; structured logs on overruns).
 - Bridge lifecycle hook to cancel all pending correlations (`close()/cancel_all`) and DI shutdown wiring.
 - Convert sleep-based race tests to event-based synchronization for CI determinism.
+
+### Research‑Informed Updates (Python 3.11–3.13)
+
+- Top‑Level Await: Prefer compile‑first with `PyCF_ALLOW_TOP_LEVEL_AWAIT` for `exec` and `eval` modes; evaluate to a coroutine and `await` it. Support top‑level `async for`/`async with` without AST rewriting. Keep AST fallback wrapper solely for resilience.
+- Transform Policy: Remove broad “def→async def if contains await”; keep zero‑arg lambda transform disabled by default. Any fallback wrapper must preserve order, use locals‑first then global diffs, and bind functions to the live globals mapping.
+- Symbol‑Aware Hoisting: Behind a feature flag, use `symtable` + AST to hoist unconditional top‑level imports and defs not shadowed/rebound or conditional. Maintain original relative order. Treat `TypeAlias` as assignment‑like. Beware PEP 709 (3.12) comprehension symbols; never treat comp targets as globals.
+- PEP 657 Locations: Use `ast.copy_location` for replacements, `ast.fix_missing_locations` post‑transform; avoid `increment_lineno` unless unavoidable. Keep filenames stable and register sources in `linecache` when emitting virtual names.
+- AST Coverage (3.11–3.13): Ensure traversal/visitors handle `Match` + pattern subclasses, `TryStar`, `TypeAlias`, and `type_params` on defs/classes; no special handling needed for PEP 701 f‑strings beyond traversal.
+- Caching: Prefer code‑object LRU cache keyed by `(source, mode, flags)`; keep AST LRU only where transforms are applied. Optionally compile with TLA flag always (harmless when no await) to simplify keys.
 
 ### Phase 4: Full Capability System (TODO)
 

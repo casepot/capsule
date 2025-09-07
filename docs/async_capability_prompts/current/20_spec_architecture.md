@@ -267,7 +267,7 @@ self._namespace.update(new_namespace)
 ```
 
 ### 2. PyCF_ALLOW_TOP_LEVEL_AWAIT Flag Usage
-**Decision:** Use compile flag 0x2000 for top-level await support.
+**Decision:** Use compile flag 0x2000 for top-level await support (compile-first); evaluate to coroutine and await. Keep an AST wrapper only as a resilience fallback.
 
 **Rationale:**
 - Avoids IPython dependency complexity
@@ -303,6 +303,20 @@ self._namespace.update(new_namespace)
 ```python
 session.add_message_interceptor(bridge.route_response)  # passive; bridge never reads
 ```
+
+### 6. Compile-First + Minimal Transform Policy
+**Decision:** Prefer compile-first with `PyCF_ALLOW_TOP_LEVEL_AWAIT` for TLA/async constructs; avoid broad AST rewrites.
+
+**Rationale:**
+- Native compiler supports top-level `await`/`async for`/`async with` in 3.11–3.13.
+- Minimizes semantic drift and preserves PEP 657 error locations.
+
+**Implementation:**
+- Attempt direct compile; if successful, `eval` yields a coroutine to await.
+- Use a minimal async wrapper only when compile-first path fails; preserve ordering and locations; apply locals-first then global diffs.
+
+**Optional Optimization:**
+- Symtable-backed hoisting of safe top-level imports/defs behind a feature flag; maintain original order and semantics.
 
 ## Performance Considerations
 
