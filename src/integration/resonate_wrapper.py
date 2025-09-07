@@ -51,10 +51,40 @@ def async_executor_factory(
     blocking_modules: set[str] | None = None,
     blocking_methods_by_module: dict[str, set[str]] | None = None,
     warn_on_blocking: bool | None = None,
+    enable_def_await_rewrite: bool | None = None,
+    enable_async_lambda_helper: bool | None = None,
+    fallback_linecache_max_size: int | None = None,
 ) -> AsyncExecutor:
     """Factory returning ready-to-use AsyncExecutor instances.
 
-    No initialize() needed - instances are fully configured on creation.
+    No initialize() needed — instances are fully configured on creation.
+
+    Params:
+        ctx: Optional DI context. If provided and `ctx.config` exists, the factory will
+            read defaults for `tla_timeout`, `ast_cache_max_size`, blocking detection,
+            and the AST fallback flags below.
+        namespace_manager: Optional pre-existing `NamespaceManager`.
+        transport: Optional `MessageTransport` for output routing.
+        execution_id: Custom execution id; falls back to `ctx.execution_id` or "local-exec".
+        tla_timeout: Override timeout for awaited top-level coroutines.
+        ast_cache_max_size: Optional AST cache size used by analysis.
+        blocking_modules, blocking_methods_by_module, warn_on_blocking: Detection policy overrides.
+        enable_def_await_rewrite: If True, enables the AST fallback pre-transform that rewrites
+            top-level `def` whose body contains `await` into `async def`. If False, disabled. If None
+            (default), environment variable ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE ("1"/"true"/"yes")
+            may enable it.
+        enable_async_lambda_helper: If True, enables the AST fallback pre-transform that rewrites
+            zero-arg `lambda: await ...` assignments into an async helper function plus assignment.
+            If False, disabled. If None (default), environment variable
+            ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
+        fallback_linecache_max_size: Bounded LRU capacity (int >= 0) for registered fallback sources
+            in `linecache`. If None, the executor resolves capacity via the environment variable
+            `ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX` or defaults to 128. A value of 0 retains no entries
+            (evicts immediately). Entries are always cleaned up on `AsyncExecutor.close()`.
+        
+        TODO(follow-up): Thread `fallback_linecache_max_size` from `ctx.config` if present
+        to allow configuring LRU retention from DI. Also consider exposing a mode
+        to skip `close()` cleanup for post-mortem retention.
 
     Usage in DI:
         resonate.set_dependency(
@@ -82,6 +112,19 @@ def async_executor_factory(
         blocking_methods_by_module = getattr(cfg, "blocking_methods_by_module", None)
     if warn_on_blocking is None and cfg is not None:
         warn_on_blocking = getattr(cfg, "warn_on_blocking", True)
+    # Thread fallback_linecache_max_size from config if not explicitly provided
+    if fallback_linecache_max_size is None and cfg is not None and hasattr(cfg, "fallback_linecache_max_size"):
+        try:
+            fallback_linecache_max_size = int(getattr(cfg, "fallback_linecache_max_size"))
+        except Exception:
+            fallback_linecache_max_size = None
+    # New flags for AST fallback policy (default OFF)
+    if enable_def_await_rewrite is None and cfg is not None:
+        if hasattr(cfg, "enable_def_await_rewrite"):
+            enable_def_await_rewrite = bool(getattr(cfg, "enable_def_await_rewrite"))
+    if enable_async_lambda_helper is None and cfg is not None:
+        if hasattr(cfg, "enable_async_lambda_helper"):
+            enable_async_lambda_helper = bool(getattr(cfg, "enable_async_lambda_helper"))
     # TODO(loop-ownership): Ensure the executor receives the loop that owns the
     # transport. The durable layer must not create or run event loops; if a sync
     # submit() facade is needed for ctx.lfc, implement it by posting to this loop
@@ -95,4 +138,7 @@ def async_executor_factory(
         blocking_modules=blocking_modules,
         blocking_methods_by_module=blocking_methods_by_module,
         warn_on_blocking=True if warn_on_blocking is None else bool(warn_on_blocking),
+        enable_def_await_rewrite=enable_def_await_rewrite,
+        enable_async_lambda_helper=enable_async_lambda_helper,
+        fallback_linecache_max_size=fallback_linecache_max_size,
     )

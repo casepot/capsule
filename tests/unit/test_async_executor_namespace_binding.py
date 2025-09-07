@@ -148,10 +148,12 @@ _ = await asyncio.sleep(0)
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_ast_fallback_function_sees_global_updates(monkeypatch):
-    """Force AST fallback and verify that later global updates are observed.
+    """Force AST fallback. Without hoisting, locals shadow globals in wrapper.
 
-    Phase 1 resolution: AST transform preserves module-level globals and
-    functions bind __globals__ to the live mapping; later updates are observed.
+    PR3 default disables hoisting and broad rewrites; functions still bind
+    __globals__ to the live mapping, but names assigned in the same wrapper
+    body are locals of the wrapper. As a result, functions may capture those
+    locals rather than observing later global updates.
     """
     ns = NamespaceManager()
     executor = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="tla-fallback-1b")
@@ -186,7 +188,9 @@ z = await addg(12)
     )
 
     assert ns.namespace.get("g") == 8
-    assert ns.namespace.get("z") == 20
+    # Without global hoist, addg closes over the wrapper-local 'g' (=2)
+    # so z reflects 12 + 2 = 14
+    assert ns.namespace.get("z") == 14
 
 
 @pytest.mark.unit

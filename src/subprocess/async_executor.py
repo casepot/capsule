@@ -17,6 +17,9 @@ from enum import Enum
 import hashlib
 from typing import Any, Set
 import weakref
+import linecache
+import re
+import os as _os
 
 import structlog
 
@@ -118,21 +121,41 @@ class AsyncExecutor:
         blocking_modules: set[str] | None = None,
         blocking_methods_by_module: dict[str, set[str]] | None = None,
         warn_on_blocking: bool = True,
+        enable_def_await_rewrite: bool | None = None,
+        enable_async_lambda_helper: bool | None = None,
+        fallback_linecache_max_size: int | None = None,
     ):
         """
         Initialize AsyncExecutor skeleton.
 
         Args:
-            namespace_manager: Namespace manager (GIL-protected for basic operations)
-            transport: Message transport for output
-            execution_id: Unique execution identifier
+            namespace_manager: Namespace manager (GIL-protected for basic operations).
+            transport: Message transport for output.
+            execution_id: Unique execution identifier.
+            tla_timeout: Timeout in seconds applied to awaited top-level coroutines.
+            ast_cache_max_size: Optional AST LRU cache size used by analysis; None disables.
+            blocking_modules: Override for blocking I/O detection policy.
+            blocking_methods_by_module: Override per-module blocking method names.
+            warn_on_blocking: Emit logs on blocking patterns when True.
+            enable_def_await_rewrite: When True, the AST fallback pre-transform rewrites
+                top-level "def" whose body contains an await into "async def". When False,
+                this rewrite is disabled. When None (default), environment variable
+                ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE ("1"/"true"/"yes") may enable it.
+            enable_async_lambda_helper: When True, the AST fallback pre-transform rewrites
+                zero-arg lambda assignments of the form "name = lambda: await ..." into a
+                helper async def plus assignment to preserve semantics. When False, disabled.
+                When None (default), environment variable
+                ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
+            fallback_linecache_max_size: Bounded LRU capacity (int >= 0) for sources
+                registered in `linecache` for traceback mapping during AST fallback. If None,
+                capacity is resolved via `ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX` or defaults to 128.
+                A value of 0 retains no entries (evicts immediately). Entries are always cleaned
+                up on `close()`.
 
-        Note:
-            - Thread safety: The namespace manager relies on Python's GIL
-              for basic thread safety. Explicit synchronization may be needed
-              for complex operations in production use.
-            - In future phases, this will accept a Resonate instance
-              instead of transport for durability support.
+        Notes:
+            - Thread safety: The namespace manager relies on Python's GIL for basic safety.
+            - AST fallback transforms run only on the fallback path (after TLA compile fails).
+            - Both transforms are disabled by default to preserve user code semantics.
         """
         self.namespace = namespace_manager
         self.transport = transport
@@ -154,8 +177,6 @@ class AsyncExecutor:
             self._ast_cache_max_size = None
         else:
             try:
-                import os as _os
-
                 env_val = _os.getenv("ASYNC_EXECUTOR_AST_CACHE_SIZE")
                 self._ast_cache_max_size = (
                     int(env_val) if env_val and ast_cache_max_size == 100 else int(ast_cache_max_size)
@@ -174,6 +195,43 @@ class AsyncExecutor:
             "missed_attribute_chain": 0,
         }
         self.mode_counts = {mode: 0 for mode in ExecutionMode}
+
+        # Fallback AST transform policy flags (default OFF)
+        # Allow env override only if args left at defaults (mirror cache style)
+        # Resolve flags: explicit constructor args win; otherwise allow env override; default False
+
+        if enable_def_await_rewrite is None:
+            env_def = _os.getenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE")
+            self._enable_def_await_rewrite = bool(env_def and env_def.lower() in {"1", "true", "yes"})
+        else:
+            self._enable_def_await_rewrite = bool(enable_def_await_rewrite)
+
+        if enable_async_lambda_helper is None:
+            env_lambda = _os.getenv("ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER")
+            self._enable_async_lambda_helper = bool(env_lambda and env_lambda.lower() in {"1", "true", "yes"})
+        else:
+            self._enable_async_lambda_helper = bool(enable_async_lambda_helper)
+
+        # Track per-execution fallback filenames for linecache cleanup (LRU)
+        self._fallback_linecache_keys: OrderedDict[str, None] = OrderedDict()
+        self._fallback_seq: int = 0
+        # Resolve fallback linecache capacity: None disables cleanup; default from env or 128
+        if fallback_linecache_max_size is None:
+            env_cap = _os.getenv("ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX")
+            if env_cap is not None:
+                try:
+                    self._fallback_linecache_max_size = int(env_cap)
+                except Exception:
+                    self._fallback_linecache_max_size = 128
+            else:
+                self._fallback_linecache_max_size = 128
+        else:
+            self._fallback_linecache_max_size = fallback_linecache_max_size
+
+        # Telemetry counters for gated transforms
+        self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0)
+        self.stats["ast_transform_def_rewrites"] = 0
+        self.stats["ast_transform_lambda_helpers"] = 0
 
         # Detection policy setup
         policy = _DetectionPolicy()
@@ -747,86 +805,37 @@ class AsyncExecutor:
         Raises:
             Any exception from code execution
         """
-        # Increment AST transform count for stats
-        if "ast_transforms" not in self.stats:
-            self.stats["ast_transforms"] = 0
-        self.stats["ast_transforms"] += 1
+        # Increment AST transform count for stats and log entry
+        self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0) + 1
+        logger.info(
+            "ast_fallback_wrapper_start",
+            execution_id=self.execution_id,
+            def_rewrite_enabled=self._enable_def_await_rewrite,
+            lambda_helper_enabled=self._enable_async_lambda_helper,
+        )
 
-        # Parse code into AST
-        tree = ast.parse(code)
+        # Parse code into AST with per-execution virtual filename for traceback mapping
+        FALLBACK_FILENAME = self._make_fallback_filename(code)
+        tree = ast.parse(code, filename=FALLBACK_FILENAME, type_comments=True)
 
-        # Pre-transform problematic patterns
-        transformed_body: list[ast.stmt] = []
-        for stmt in tree.body:
-            # Transform def containing await -> async def
-            if isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
-                async_def = ast.AsyncFunctionDef(
-                    name=stmt.name,
-                    args=stmt.args,
-                    body=stmt.body,
-                    decorator_list=stmt.decorator_list,
-                    returns=stmt.returns,
-                    type_comment=stmt.type_comment if hasattr(stmt, "type_comment") else None,
-                )
-                ast.copy_location(async_def, stmt)
-                transformed_body.append(async_def)
-                continue
+        # Apply gated transforms and rebuild body
+        tree.body = self._apply_gated_transforms(tree)
+        body, is_expression = self._build_wrapper_body(tree)
 
-            # Transform zero-arg lambda with await assigned to name -> async def helper
-            if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Lambda):
-                if self._should_transform_lambda(stmt.value):
-                    transformed = self._transform_lambda_to_async_def(stmt)
-                    transformed_body.extend(transformed)
-                    continue
-
-            transformed_body.append(stmt)
-
-        tree.body = transformed_body
-
-        # Determine if expression or statements
-        is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
-
-        # Prepare wrapper body
-        if is_expression:
-            from typing import cast
-
-            expr_node = cast(ast.Expr, tree.body[0])
-            body: list[ast.stmt] = [ast.Return(value=expr_node.value)]
-        else:
-            # Conservative global hoisting for simple assigned names
-            assigned_names = self._collect_safe_assigned_names(tree.body)
-            body = []
-            if assigned_names:
-                body.append(ast.Global(names=sorted(assigned_names)))
-            body.extend(tree.body)
-            body.append(
-                ast.Return(
-                    value=ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])
-                )
-            )
-
-        # Create async wrapper function at AST level
-        # This directly follows spec lines 385-399
-        # TODO(Phase 1): If supporting Python <3.8, adjust ast.arguments
-        # construction (posonlyargs not present). Current target is 3.11+.
+        # Create async wrapper function and module
         async_wrapper = ast.AsyncFunctionDef(
             name="__async_exec__",
             args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
-            body=body,  # Use prepared body with return if expression
+            body=body,
             decorator_list=[],
             returns=None,
             lineno=1,
             col_offset=0,
         )
-
-        # Create new module with wrapper
         new_module = ast.Module(body=[async_wrapper], type_ignores=[])
 
-        # Fix line numbers for error reporting
-        ast.fix_missing_locations(new_module)
-
-        # Compile transformed AST
-        compiled = compile(new_module, "<async_transform>", "exec")
+        # Compile and register source for traceback mapping
+        compiled = self._compile_and_register(code, new_module, FALLBACK_FILENAME)
 
         # Execute to define the async function
         # IMPORTANT: Use the live session namespace as globals so the created
@@ -857,21 +866,126 @@ class AsyncExecutor:
 
         # Execute the async function with timeout
         # The function will have access to global_ns as its globals
+        # Execute wrapper and merge results
         try:
             async with asyncio.timeout(self.tla_timeout):
-                result = await async_func()
+                result = await self._run_wrapper_and_merge(async_func, global_ns, pre_globals, is_expression, code)
         except asyncio.TimeoutError as e:
             self._annotate_timeout(e, code)
             raise
 
-        # Handle the result based on what we're expecting
+        logger.debug(
+            "AST transformation completed",
+            result_type=type(result).__name__ if result is not None else "None",
+            has_namespace_updates=True,  # conservative signal for tests/telemetry
+            execution_id=self.execution_id,
+            def_rewrites=self.stats.get("ast_transform_def_rewrites", 0),
+            lambda_helpers=self.stats.get("ast_transform_lambda_helpers", 0),
+        )
+
+        return result
+
+    # === AST fallback helper methods ===
+    def _apply_gated_transforms(self, tree: ast.Module) -> list[ast.stmt]:
+        """Apply optional, flag-gated transforms to the module body preserving order and locations."""
+        transformed_body: list[ast.stmt] = []
+        for stmt in tree.body:
+            if self._enable_def_await_rewrite and isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
+                async_def = ast.AsyncFunctionDef(
+                    name=stmt.name,
+                    args=stmt.args,
+                    body=stmt.body,
+                    decorator_list=stmt.decorator_list,
+                    returns=stmt.returns,
+                    type_comment=stmt.type_comment if hasattr(stmt, "type_comment") else None,
+                )
+                ast.copy_location(async_def, stmt)
+                transformed_body.append(async_def)
+                self.stats["ast_transform_def_rewrites"] += 1
+                continue
+
+            if (
+                self._enable_async_lambda_helper
+                and isinstance(stmt, ast.Assign)
+                and isinstance(stmt.value, ast.Lambda)
+                and self._should_transform_lambda(stmt.value)
+            ):
+                transformed = self._transform_lambda_to_async_def(stmt)
+                if len(transformed) != 1 or transformed[0] is not stmt:
+                    self.stats["ast_transform_lambda_helpers"] += 1
+                transformed_body.extend(transformed)
+                continue
+
+            transformed_body.append(stmt)
+        return transformed_body
+
+    def _build_wrapper_body(self, tree: ast.Module) -> tuple[list[ast.stmt], bool]:
+        """Build wrapper body with PEP 657-aligned locations; return (body, is_expression)."""
+        is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
         if is_expression:
-            # For expressions, result is the actual value
-            pass
+            from typing import cast
+
+            expr_node = cast(ast.Expr, tree.body[0])
+            ret = ast.Return(value=expr_node.value)
+            origin = expr_node.value if hasattr(expr_node, "value") else expr_node
+            ast.copy_location(ret, origin)
+            if hasattr(origin, "end_lineno"):
+                ret.end_lineno = origin.end_lineno  # type: ignore[attr-defined]
+                ret.end_col_offset = getattr(origin, "end_col_offset", 0)  # type: ignore[attr-defined]
+            return [ret], True
         else:
-            # For statements, result is locals() dict
+            body = list(tree.body)
+            ret_stmt = ast.Return(
+                value=ast.Call(func=ast.Name(id="locals", ctx=ast.Load()), args=[], keywords=[])
+            )
+            origin_stmt = tree.body[-1] if tree.body else None
+            if origin_stmt is not None:
+                ast.copy_location(ret_stmt, origin_stmt)
+                if hasattr(origin_stmt, "end_lineno"):
+                    ret_stmt.end_lineno = origin_stmt.end_lineno  # type: ignore[attr-defined]
+                    ret_stmt.end_col_offset = getattr(origin_stmt, "end_col_offset", 0)  # type: ignore[attr-defined]
+            body.append(ret_stmt)
+            return body, False
+
+    def _compile_and_register(self, code: str, module: ast.Module, filename: str):
+        """Fix locations, compile with filename, and register source in linecache (LRU-managed)."""
+        ast.fix_missing_locations(module)
+        compiled = compile(module, filename, "exec")
+        self._register_fallback_source(filename, code)
+        return compiled
+
+    async def _run_wrapper_and_merge(
+        self,
+        async_func: Any,
+        global_ns: dict[str, Any],
+        pre_globals: dict[str, Any],
+        is_expression: bool,
+        code: str,
+    ) -> Any:
+        """Execute the wrapper, merge namespace updates, and return final result.
+
+        Semantics:
+        - Expression case (is_expression=True):
+          Return the value and record it in result history via NamespaceManager.
+        - Statements case (is_expression=False, expected normal path):
+          The wrapper returns a `dict` from `locals()`. We merge filtered keys into the
+          live namespace (locals-first), then apply global diffs, and return None.
+        - Statements case (unexpected path):
+          If the wrapper returns a non-dict, we warn and do NOT merge any locals. We still
+          apply global diffs, and we currently return the original non-dict value (and it is
+          recorded in result history). This choice preserves diagnostic visibility without
+          mutating namespace in an ambiguous state.
+
+        Deliberation note (future policy option): we could normalize the unexpected return
+        type by coercing the final result to None for statements, to strictly preserve
+        "statements return None" semantics. That would hide the anomalous value but align
+        results across all statement paths. If we adopt that policy, update the tests and
+        document the trade-off in the spec.
+        """
+        result = await async_func()
+
+        if not is_expression:
             if isinstance(result, dict):
-                # Extract local variables (excluding internals)
                 updates: dict[str, Any] = {}
                 for key, value in result.items():
                     if key.startswith("__") or key in {"asyncio", "__async_exec__"}:
@@ -879,32 +993,20 @@ class AsyncExecutor:
                     updates[key] = value
                 if updates:
                     self.namespace.update_namespace(updates, source_context="async")
-                # For statements, return None
                 result = None
             else:
-                # Unexpected case - log and continue
                 logger.warning(
                     "Expected dict from locals() but got",
                     result_type=type(result).__name__,
                     execution_id=self.execution_id,
                 )
 
-        # Apply global diffs AFTER locals to ensure global writes win
         global_updates = self._compute_global_diff(pre_globals, global_ns)
         if global_updates:
             self.namespace.update_namespace(global_updates, source_context="async")
 
-        # Track result if it's an expression
         if result is not None:
             self.namespace.record_expression_result(result)
-
-        logger.debug(
-            "AST transformation completed",
-            result_type=type(result).__name__ if result is not None else "None",
-            has_namespace_updates=True,  # conservative signal for tests/telemetry
-            execution_id=self.execution_id,
-        )
-
         return result
 
     # Helper utilities
@@ -1006,11 +1108,29 @@ class AsyncExecutor:
         return None
 
     def _contains_await(self, node: ast.AST) -> bool:
-        """Return True if the subtree contains an Await node."""
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Await):
+        """Return True if the subtree contains an Await, skipping nested scopes.
+
+        Traversal rules:
+        - Search the body of the provided root node (even if it is a scope node itself).
+        - Do not recurse into nested FunctionDef, AsyncFunctionDef, Lambda, or ClassDef encountered below.
+        
+        TODO(perf): If we expand def-rewrite scope or usage, consider a dedicated
+        visitor with memoization to avoid repeated traversal patterns that can
+        approach O(n^2) on deeply nested code.
+        """
+        def visit(n: ast.AST, barrier_for_scopes: bool) -> bool:
+            if isinstance(n, ast.Await):
                 return True
-        return False
+            if barrier_for_scopes and isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                return False
+            for child in ast.iter_child_nodes(n):
+                # After the root, treat nested scopes as barriers
+                if visit(child, True):
+                    return True
+            return False
+
+        # Start without barriers so we inspect the immediate body of the root node
+        return visit(node, False)
 
     def _should_transform_lambda(self, lam: ast.Lambda) -> bool:
         """Detect zero-arg lambda containing await."""
@@ -1110,9 +1230,22 @@ class AsyncExecutor:
         This should be called when the executor is no longer needed.
         Alternatively, use AsyncExecutor as a context manager.
         """
+        # Cleanup registered linecache entries (best-effort)
+        # TODO(modes): Consider an opt-in mode to skip cleanup for post-mortem
+        # traceback retention (e.g., keep a bounded set until process exit).
+        try:
+            for fname in list(self._fallback_linecache_keys.keys()):
+                try:
+                    if fname in linecache.cache:
+                        del linecache.cache[fname]
+                except Exception:
+                    pass
+            self._fallback_linecache_keys.clear()
+        except Exception:
+            pass
         cleaned = self.cleanup_coroutines()
         if cleaned > 0:
-            logger.debug(f"Cleaned up {cleaned} pending coroutines")
+            logger.debug("cleaned_pending_coroutines", cleaned=cleaned)
 
     async def __aenter__(self) -> "AsyncExecutor":
         """Enter context manager."""
@@ -1127,3 +1260,50 @@ class AsyncExecutor:
         """Exit context manager and clean up."""
         await self.close()
         return False
+
+    # Fallback filename and linecache helpers
+    def _make_fallback_filename(self, code: str) -> str:
+        """Create a unique, human-readable virtual filename for fallback frames."""
+        # Sanitize and truncate execution_id for readability
+        exec_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(self.execution_id))[:20]
+        short_hash = hashlib.md5(code.encode()).hexdigest()[:8]
+        self._fallback_seq += 1
+        seq = self._fallback_seq
+        return f"<async_fallback:{exec_id}:{short_hash}:{seq}>"
+
+    def _register_fallback_source(self, filename: str, code: str) -> None:
+        """Register code in linecache and maintain per-executor LRU with optional capacity."""
+        try:
+            # TODO(perf): Consider caching splitlines() per fallback call to avoid
+            # repeated splitlines on hot paths.
+            linecache.cache[filename] = (
+                len(code),
+                None,
+                code.splitlines(keepends=True),
+                filename,
+            )
+        except Exception:
+            # Best-effort; never fail execution due to cache registration
+            return
+
+        # Track in LRU and evict if necessary
+        try:
+            if filename in self._fallback_linecache_keys:
+                # Move to end
+                self._fallback_linecache_keys.move_to_end(filename)
+            else:
+                self._fallback_linecache_keys[filename] = None
+            cap = self._fallback_linecache_max_size
+            if isinstance(cap, int) and cap >= 0:
+                while len(self._fallback_linecache_keys) > cap:
+                    old, _ = self._fallback_linecache_keys.popitem(last=False)
+                    try:
+                        if old in linecache.cache:
+                            del linecache.cache[old]
+                            # TODO(obs): Consider logging LRU evictions at debug level
+                            # for observability (evicted filename, current size).
+                    except Exception:
+                        pass
+        except Exception:
+            # Never let LRU maintenance cause failures
+            pass

@@ -350,7 +350,7 @@ class TestTopLevelAwaitErrors:
     
     @pytest.mark.asyncio
     async def test_await_in_lambda_fails(self):
-        """Test that await in lambda is handled properly."""
+        """Await in lambda should raise SyntaxError by default (no rewrite)."""
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         
@@ -360,17 +360,13 @@ class TestTopLevelAwaitErrors:
             execution_id="test-error-1"
         )
         
-        # lambda with await is syntactically valid but semantically invalid
-        # The assignment itself should work
         code = "f = lambda: await foo()"
-        result = await executor.execute(code)
-        
-        # The lambda definition itself succeeds
-        assert 'f' in namespace_manager.namespace
+        with pytest.raises(SyntaxError):
+            await executor.execute(code)
     
     @pytest.mark.asyncio
     async def test_await_without_async_context_in_def(self):
-        """Test await in regular function definition."""
+        """Await in regular def should raise SyntaxError by default (no rewrite)."""
         namespace_manager = NamespaceManager()
         mock_transport = Mock()
         
@@ -380,16 +376,12 @@ class TestTopLevelAwaitErrors:
             execution_id="test-error-2"
         )
         
-        # This is syntactically valid (the def succeeds)
-        # but would fail at runtime when the function is called
         code = """
 def regular_func():
     return await something()
 """
-        result = await executor.execute(code)
-        
-        # Function definition should succeed
-        assert 'regular_func' in namespace_manager.namespace
+        with pytest.raises(SyntaxError):
+            await executor.execute(code)
     
     @pytest.mark.asyncio
     async def test_execution_error_handling(self):
@@ -658,6 +650,120 @@ result = x + y
             # The wrapper function approach means variables won't persist
             # in namespace (they're local to the wrapper function)
             # But the result should still be correct if we return it
+
+    @pytest.mark.asyncio
+    async def test_ast_fallback_no_reordering(self, monkeypatch):
+        """AST fallback should not reorder user statements."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-ast-order"
+        )
+
+        # Define log() and events first, outside of fallback
+        await executor.execute("""
+events = []
+def log(x):
+    events.append(x)
+""")
+
+        # Force fallback by failing flagged compiles
+        import builtins as _builtins
+        original_compile = _builtins.compile
+
+        def fake_compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1):
+            if flags & AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT:
+                raise SyntaxError("force fallback")
+            return original_compile(source, filename, mode, flags=flags, dont_inherit=dont_inherit, optimize=optimize)
+
+        import src.subprocess.async_executor as ae_mod
+        monkeypatch.setattr(ae_mod, "compile", fake_compile, raising=False)
+
+        # Now run code that should preserve order under fallback
+        await executor.execute("""
+log(1)
+import asyncio
+_ = await asyncio.sleep(0)
+log(2)
+""")
+
+        assert namespace_manager.namespace.get("events") == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_ast_fallback_pep657_location_mapping(self):
+        """Error spans should map to original source lines under fallback."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-ast-loc"
+        )
+
+        code = """a = 1
+b = 0
+c = a / b
+"""
+        # Call fallback directly to avoid needing await in code
+        with pytest.raises(ZeroDivisionError) as exc:
+            await executor._execute_with_ast_transform(code)
+
+        # Inspect the traceback to verify the error line points to line 3
+        tb = exc.value.__traceback__
+        frames = []
+        while tb is not None:
+            frames.append((tb.tb_frame.f_code.co_filename, tb.tb_lineno))
+            tb = tb.tb_next
+        # Find the last frame within our fallback filename prefix
+        target = [f for f in frames if str(f[0]).startswith("<async_fallback")]
+        assert target, f"No frame with fallback filename; frames: {frames}"
+        # The last matching frame should be at line 3
+        assert target[-1][1] == 3
+
+        # Additionally assert the code object for the wrapper function has the fallback filename
+        # Find traceback again to locate the code object
+        tb = exc.value.__traceback__
+        wrapper_frames = []
+        while tb is not None:
+            code = tb.tb_frame.f_code
+            wrapper_frames.append((code.co_name, code.co_filename, tb.tb_lineno))
+            tb = tb.tb_next
+        # There should be a frame for __async_exec__ with our fallback filename
+        assert any(name == "__async_exec__" and str(fn).startswith("<async_fallback") for name, fn, _ in wrapper_frames)
+
+    @pytest.mark.asyncio
+    async def test_ast_fallback_transform_counters_default_off(self, monkeypatch):
+        """By default, def->async and lambda helper rewrites are disabled (counters 0)."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-ast-counters"
+        )
+
+        # Force fallback
+        import builtins as _builtins
+        orig_compile = _builtins.compile
+
+        def fake_compile(source, filename, mode, flags=0, dont_inherit=False, optimize=-1):
+            if flags & AsyncExecutor.PyCF_ALLOW_TOP_LEVEL_AWAIT:
+                raise SyntaxError("force fallback")
+            return orig_compile(source, filename, mode, flags=flags, dont_inherit=dont_inherit, optimize=optimize)
+
+        import src.subprocess.async_executor as ae_mod
+        monkeypatch.setattr(ae_mod, "compile", fake_compile, raising=False)
+
+        # Simple expression under fallback
+        res = await executor.execute("await asyncio.sleep(0, 'ok')")
+        assert res == "ok"
+        assert executor.stats.get("ast_transform_def_rewrites", 0) == 0
+        assert executor.stats.get("ast_transform_lambda_helpers", 0) == 0
 
 
 @pytest.mark.unit

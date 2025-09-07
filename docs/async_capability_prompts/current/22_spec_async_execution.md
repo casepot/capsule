@@ -45,6 +45,52 @@ compiled = compile(code, '<async>', 'exec', flags=async_flags)
 
 Preferred strategy: attempt compile‑first with the flag; only use the AST fallback wrapper when compilation raises an unrecoverable SyntaxError unrelated to ordinary top‑level async constructs.
 
+### AST Fallback Policy (Phase 3)
+
+- Minimal wrapper only; do not rewrite user code by default.
+  - Insert an `async def __async_exec__():` wrapper.
+  - Expression case: wrapper body is a single `return <expr>` preserving the original expression node; locations copied for PEP 657.
+  - Statement case: wrapper body is the original statements in order, plus `return locals()` as the last statement. No reordering; no `global` declarations are inserted.
+- Transforms gated and OFF by default:
+  - def→async def (when body contains await): `enable_def_await_rewrite=False`.
+  - zero‑arg lambda with await → helper async def: `enable_async_lambda_helper=False`.
+ - Location mapping and tracebacks:
+  - Parse with a human‑readable virtual filename using a stable prefix, e.g., `<async_fallback:...>`.
+    The filename should be unique per execution (and source) to avoid collisions under concurrency.
+  - Use `ast.copy_location` for inserted nodes and `ast.fix_missing_locations` before compile.
+  - Register original source in `linecache.cache[filename]` so traceback frames display the user’s code lines. An engine may bound the number of registered entries (LRU) and clean them up on executor close.
+- Namespace merge semantics:
+  - Execute wrapper in the live globals mapping so functions bind `__globals__` to the session namespace.
+  - After execution, merge locals first (from `locals()` result) and then compute/apply global diffs; preserve `ENGINE_INTERNALS` and skip `__async_exec__`, `asyncio`, and `__builtins__`.
+  - With hoisting disabled, names assigned in the wrapper body are locals of the wrapper; functions defined in the same body may close over those locals rather than observing later global updates. This is acceptable under PR 3 and documented behavior.
+
+#### Unexpected wrapper return type (statements path)
+
+The wrapper for statement blocks ends with `return locals()`, so the expected return type is `dict`.
+If a non-dict is returned (e.g., due to unforeseen execution anomalies), the engine:
+
+- Emits a warning and skips merging any local variables to avoid corrupting the namespace.
+- Still applies global diffs (e.g., if user code mutated `globals()` explicitly).
+- Returns the original value and records it in result history (for diagnostic visibility).
+
+Policy option (future deliberation): normalize this unexpected path by coercing the final result
+to `None` to strictly maintain "statements return None" semantics. This would reduce visibility of
+anomalous values in exchange for consistency. Any change to this policy should be documented and
+reflected in tests.
+
+### Migration Notes
+
+- Hoisting removed: The engine no longer inserts `global` hoists in the fallback wrapper. Names assigned
+  within the wrapper are locals of the wrapper function and can shadow module globals. Functions defined
+  in the same wrapper body may close over those locals.
+- Recommended patterns to preserve module-level semantics:
+  - Use explicit `global <name>` in user code where appropriate.
+  - Split code: assign globals first, then define functions in a separate execution/cell.
+  - Avoid defining and consuming mutable globals within the same cell.
+- Feature flags:
+  - `enable_def_await_rewrite` and `enable_async_lambda_helper` remain OFF by default. Enabling them
+    does not reintroduce hoisting; they are independent transforms available for advanced scenarios.
+
 ### Execution Mode Detection
 
 ```

@@ -36,7 +36,7 @@ self._namespace.update(new_namespace)
 
 Note on Async Transforms (3.11–3.13):
 - Prefer compile‑first for top‑level async constructs to avoid rewriting user code.
-- If a minimal wrapper is used as fallback, do not reorder statements; apply locals‑first then global diffs when merging back into the live namespace; preserve engine internals.
+- If a minimal wrapper is used as fallback, do not reorder statements; no `global` hoisting is inserted by the engine; apply locals‑first then global diffs when merging back into the live namespace; preserve engine internals. Names assigned inside the wrapper remain wrapper‑locals and may shadow module globals.
 
 ## Architecture Overview
 
