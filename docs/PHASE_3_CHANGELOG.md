@@ -82,3 +82,31 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
   - Added traceback mapping test asserting correct line numbers under `<async_fallback>`.
   - Adjusted invalid await placement tests: lambda/regular def with await now raise `SyntaxError` by default.
   - Namespace-binding tests updated to reflect no hoist (wrapper locals can shadow globals).
+
+- Additional updates after review:
+  - Per-execution virtual filenames for fallback:
+    - Replaced single global `<async_fallback>` with unique, readable filenames: `<async_fallback:{exec_id}:{md5[:8]}:{seq}>`.
+    - Prevents linecache collisions under concurrency and keeps tracebacks unambiguous.
+    - Tests updated to assert filename prefix (`<async_fallback`) and line numbers; spec amended to allow unique virtual filenames.
+  - Linecache lifecycle management:
+    - Registered sources are now tracked per executor with a bounded LRU (default 128 entries).
+    - New constructor parameter `fallback_linecache_max_size` (env: `ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX`).
+    - Old entries are evicted from `linecache.cache` when over capacity; all entries cleaned on `AsyncExecutor.close()`.
+    - New tests validate unique filenames, LRU eviction, and cleanup on close.
+  - Correctness improvement (flagged def→async path):
+    - `_contains_await` is now scope-aware and does not descend into nested scopes (FunctionDef/AsyncFunctionDef/Lambda/ClassDef).
+    - Added a test ensuring an outer def is not rewritten when only an inner async def contains `await`.
+  - Documentation/docstrings:
+    - `AsyncExecutor.__init__` and `async_executor_factory` docstrings document the new flags, defaults (OFF), and env override behavior.
+    - Async execution spec updated to permit unique fallback filenames and includes migration notes for no hoist.
+
+- Migration note:
+  - The fallback wrapper no longer injects a `global` hoist for simple assignments. As a result, names
+    assigned within the wrapper body are locals of the wrapper and can shadow module globals. Functions
+    defined in the same cell may close over those locals and not observe later global updates defined in
+    subsequent cells. To regain previous behavior, prefer one of the following:
+    - Add explicit `global <name>` in user code where appropriate.
+    - Split code across cells so global values are assigned before function definitions (module-level defs).
+    - Avoid relying on side effects within the same cell where functions are defined and used.
+  - The optional AST transforms (def→async and lambda helper) do not reintroduce hoisting; they are
+    independent and remain OFF by default.

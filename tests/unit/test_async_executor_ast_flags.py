@@ -161,3 +161,37 @@ f = lambda: await asyncio.sleep(0, 1)
     finally:
         monkeypatch.delenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE", raising=False)
         monkeypatch.delenv("ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER", raising=False)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_def_rewrite_does_not_rewrite_outer_def_with_inner_async_def():
+    """With def-rewrite enabled, do not rewrite an outer def if only an inner async def awaits.
+
+    This guards against overmatching when scanning the subtree: the outer def should remain
+    a normal function even if a nested async def contains await.
+    """
+    ns = NamespaceManager()
+    executor = AsyncExecutor(
+        namespace_manager=ns,
+        transport=None,
+        execution_id="flags-scope-1",
+        enable_def_await_rewrite=True,
+    )
+
+    code = """
+import asyncio
+def outer():
+    async def inner():
+        await asyncio.sleep(0)
+        return 1
+    return 2
+"""
+    # This code is valid Python; fallback not strictly required, but exercise fallback path
+    await executor._execute_with_ast_transform(code)
+
+    outer = ns.namespace.get("outer")
+    assert callable(outer)
+    # Ensure not rewritten to coroutine function
+    import asyncio as _asyncio
+    assert not _asyncio.iscoroutinefunction(outer)

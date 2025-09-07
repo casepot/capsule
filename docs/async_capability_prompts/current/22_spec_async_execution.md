@@ -54,14 +54,28 @@ Preferred strategy: attempt compile‑first with the flag; only use the AST fall
 - Transforms gated and OFF by default:
   - def→async def (when body contains await): `enable_def_await_rewrite=False`.
   - zero‑arg lambda with await → helper async def: `enable_async_lambda_helper=False`.
-- Location mapping and tracebacks:
-  - Parse with stable fallback filename `<async_fallback>`.
+ - Location mapping and tracebacks:
+  - Parse with a human‑readable virtual filename using a stable prefix, e.g., `<async_fallback:...>`.
+    The filename should be unique per execution (and source) to avoid collisions under concurrency.
   - Use `ast.copy_location` for inserted nodes and `ast.fix_missing_locations` before compile.
-  - Register original source in `linecache.cache['<async_fallback>']` so traceback frames display the user’s code lines.
+  - Register original source in `linecache.cache[filename]` so traceback frames display the user’s code lines. An engine may bound the number of registered entries (LRU) and clean them up on executor close.
 - Namespace merge semantics:
   - Execute wrapper in the live globals mapping so functions bind `__globals__` to the session namespace.
   - After execution, merge locals first (from `locals()` result) and then compute/apply global diffs; preserve `ENGINE_INTERNALS` and skip `__async_exec__`, `asyncio`, and `__builtins__`.
   - With hoisting disabled, names assigned in the wrapper body are locals of the wrapper; functions defined in the same body may close over those locals rather than observing later global updates. This is acceptable under PR 3 and documented behavior.
+
+### Migration Notes
+
+- Hoisting removed: The engine no longer inserts `global` hoists in the fallback wrapper. Names assigned
+  within the wrapper are locals of the wrapper function and can shadow module globals. Functions defined
+  in the same wrapper body may close over those locals.
+- Recommended patterns to preserve module-level semantics:
+  - Use explicit `global <name>` in user code where appropriate.
+  - Split code: assign globals first, then define functions in a separate execution/cell.
+  - Avoid defining and consuming mutable globals within the same cell.
+- Feature flags:
+  - `enable_def_await_rewrite` and `enable_async_lambda_helper` remain OFF by default. Enabling them
+    does not reintroduce hoisting; they are independent transforms available for advanced scenarios.
 
 ### Execution Mode Detection
 

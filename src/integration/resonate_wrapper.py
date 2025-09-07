@@ -56,7 +56,26 @@ def async_executor_factory(
 ) -> AsyncExecutor:
     """Factory returning ready-to-use AsyncExecutor instances.
 
-    No initialize() needed - instances are fully configured on creation.
+    No initialize() needed — instances are fully configured on creation.
+
+    Params:
+        ctx: Optional DI context. If provided and `ctx.config` exists, the factory will
+            read defaults for `tla_timeout`, `ast_cache_max_size`, blocking detection,
+            and the AST fallback flags below.
+        namespace_manager: Optional pre-existing `NamespaceManager`.
+        transport: Optional `MessageTransport` for output routing.
+        execution_id: Custom execution id; falls back to `ctx.execution_id` or "local-exec".
+        tla_timeout: Override timeout for awaited top-level coroutines.
+        ast_cache_max_size: Optional AST cache size used by analysis.
+        blocking_modules, blocking_methods_by_module, warn_on_blocking: Detection policy overrides.
+        enable_def_await_rewrite: If True, enables the AST fallback pre-transform that rewrites
+            top-level `def` whose body contains `await` into `async def`. If False, disabled. If None
+            (default), environment variable ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE ("1"/"true"/"yes")
+            may enable it.
+        enable_async_lambda_helper: If True, enables the AST fallback pre-transform that rewrites
+            zero-arg `lambda: await ...` assignments into an async helper function plus assignment.
+            If False, disabled. If None (default), environment variable
+            ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
 
     Usage in DI:
         resonate.set_dependency(

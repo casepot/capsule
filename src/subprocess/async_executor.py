@@ -18,6 +18,7 @@ import hashlib
 from typing import Any, Set
 import weakref
 import linecache
+import re
 
 import structlog
 
@@ -121,21 +122,34 @@ class AsyncExecutor:
         warn_on_blocking: bool = True,
         enable_def_await_rewrite: bool | None = None,
         enable_async_lambda_helper: bool | None = None,
+        fallback_linecache_max_size: int | None = None,
     ):
         """
         Initialize AsyncExecutor skeleton.
 
         Args:
-            namespace_manager: Namespace manager (GIL-protected for basic operations)
-            transport: Message transport for output
-            execution_id: Unique execution identifier
+            namespace_manager: Namespace manager (GIL-protected for basic operations).
+            transport: Message transport for output.
+            execution_id: Unique execution identifier.
+            tla_timeout: Timeout in seconds applied to awaited top-level coroutines.
+            ast_cache_max_size: Optional AST LRU cache size used by analysis; None disables.
+            blocking_modules: Override for blocking I/O detection policy.
+            blocking_methods_by_module: Override per-module blocking method names.
+            warn_on_blocking: Emit logs on blocking patterns when True.
+            enable_def_await_rewrite: When True, the AST fallback pre-transform rewrites
+                top-level "def" whose body contains an await into "async def". When False,
+                this rewrite is disabled. When None (default), environment variable
+                ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE ("1"/"true"/"yes") may enable it.
+            enable_async_lambda_helper: When True, the AST fallback pre-transform rewrites
+                zero-arg lambda assignments of the form "name = lambda: await ..." into a
+                helper async def plus assignment to preserve semantics. When False, disabled.
+                When None (default), environment variable
+                ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER ("1"/"true"/"yes") may enable it.
 
-        Note:
-            - Thread safety: The namespace manager relies on Python's GIL
-              for basic thread safety. Explicit synchronization may be needed
-              for complex operations in production use.
-            - In future phases, this will accept a Resonate instance
-              instead of transport for durability support.
+        Notes:
+            - Thread safety: The namespace manager relies on Python's GIL for basic safety.
+            - AST fallback transforms run only on the fallback path (after TLA compile fails).
+            - Both transforms are disabled by default to preserve user code semantics.
         """
         self.namespace = namespace_manager
         self.transport = transport
@@ -181,22 +195,35 @@ class AsyncExecutor:
         # Fallback AST transform policy flags (default OFF)
         # Allow env override only if args left at defaults (mirror cache style)
         # Resolve flags: explicit constructor args win; otherwise allow env override; default False
-        try:
-            import os as _os
-        except Exception:
-            _os = None
+        import os as _os
 
         if enable_def_await_rewrite is None:
-            env_def = _os.getenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE") if _os else None
+            env_def = _os.getenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE")
             self._enable_def_await_rewrite = bool(env_def and env_def.lower() in {"1", "true", "yes"})
         else:
             self._enable_def_await_rewrite = bool(enable_def_await_rewrite)
 
         if enable_async_lambda_helper is None:
-            env_lambda = _os.getenv("ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER") if _os else None
+            env_lambda = _os.getenv("ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER")
             self._enable_async_lambda_helper = bool(env_lambda and env_lambda.lower() in {"1", "true", "yes"})
         else:
             self._enable_async_lambda_helper = bool(enable_async_lambda_helper)
+
+        # Track per-execution fallback filenames for linecache cleanup (LRU)
+        self._fallback_linecache_keys: OrderedDict[str, None] = OrderedDict()
+        self._fallback_seq: int = 0
+        # Resolve fallback linecache capacity: None disables cleanup; default from env or 128
+        if fallback_linecache_max_size is None:
+            env_cap = _os.getenv("ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX")
+            if env_cap is not None:
+                try:
+                    self._fallback_linecache_max_size = int(env_cap)
+                except Exception:
+                    self._fallback_linecache_max_size = 128
+            else:
+                self._fallback_linecache_max_size = 128
+        else:
+            self._fallback_linecache_max_size = fallback_linecache_max_size
 
         # Telemetry counters for gated transforms
         self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0)
@@ -784,8 +811,8 @@ class AsyncExecutor:
             lambda_helper_enabled=self._enable_async_lambda_helper,
         )
 
-        # Parse code into AST with stable filename for traceback mapping
-        FALLBACK_FILENAME = "<async_fallback>"
+        # Parse code into AST with per-execution virtual filename for traceback mapping
+        FALLBACK_FILENAME = self._make_fallback_filename(code)
         tree = ast.parse(code, filename=FALLBACK_FILENAME, type_comments=True)
 
         # Optional, gated pre-transforms; default OFF
@@ -822,8 +849,8 @@ class AsyncExecutor:
 
             transformed_body.append(stmt)
 
-        if transformed_body:
-            tree.body = transformed_body
+        # Always assign transformed body (preserves original order when unchanged)
+        tree.body = transformed_body
 
         # Determine if expression or statements
         is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
@@ -879,17 +906,8 @@ class AsyncExecutor:
         # Compile transformed AST
         compiled = compile(new_module, FALLBACK_FILENAME, "exec")
 
-        # Register original source with linecache for traceback line mapping
-        try:
-            linecache.cache[FALLBACK_FILENAME] = (
-                len(code),
-                None,
-                code.splitlines(keepends=True),
-                FALLBACK_FILENAME,
-            )
-        except Exception:
-            # Best-effort; never fail execution due to cache registration
-            pass
+        # Register original source with linecache for traceback mapping (LRU-managed)
+        self._register_fallback_source(FALLBACK_FILENAME, code)
 
         # Execute to define the async function
         # IMPORTANT: Use the live session namespace as globals so the created
@@ -1071,11 +1089,25 @@ class AsyncExecutor:
         return None
 
     def _contains_await(self, node: ast.AST) -> bool:
-        """Return True if the subtree contains an Await node."""
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Await):
+        """Return True if the subtree contains an Await, skipping nested scopes.
+
+        Traversal rules:
+        - Search the body of the provided root node (even if it is a scope node itself).
+        - Do not recurse into nested FunctionDef, AsyncFunctionDef, Lambda, or ClassDef encountered below.
+        """
+        def visit(n: ast.AST, barrier_for_scopes: bool) -> bool:
+            if isinstance(n, ast.Await):
                 return True
-        return False
+            if barrier_for_scopes and isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                return False
+            for child in ast.iter_child_nodes(n):
+                # After the root, treat nested scopes as barriers
+                if visit(child, True):
+                    return True
+            return False
+
+        # Start without barriers so we inspect the immediate body of the root node
+        return visit(node, False)
 
     def _should_transform_lambda(self, lam: ast.Lambda) -> bool:
         """Detect zero-arg lambda containing await."""
@@ -1175,6 +1207,17 @@ class AsyncExecutor:
         This should be called when the executor is no longer needed.
         Alternatively, use AsyncExecutor as a context manager.
         """
+        # Cleanup registered linecache entries (best-effort)
+        try:
+            for fname in list(self._fallback_linecache_keys.keys()):
+                try:
+                    if fname in linecache.cache:
+                        del linecache.cache[fname]
+                except Exception:
+                    pass
+            self._fallback_linecache_keys.clear()
+        except Exception:
+            pass
         cleaned = self.cleanup_coroutines()
         if cleaned > 0:
             logger.debug(f"Cleaned up {cleaned} pending coroutines")
@@ -1192,3 +1235,46 @@ class AsyncExecutor:
         """Exit context manager and clean up."""
         await self.close()
         return False
+
+    # Fallback filename and linecache helpers
+    def _make_fallback_filename(self, code: str) -> str:
+        """Create a unique, human-readable virtual filename for fallback frames."""
+        # Sanitize and truncate execution_id for readability
+        exec_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(self.execution_id))[:20]
+        short_hash = hashlib.md5(code.encode()).hexdigest()[:8]
+        self._fallback_seq += 1
+        seq = self._fallback_seq
+        return f"<async_fallback:{exec_id}:{short_hash}:{seq}>"
+
+    def _register_fallback_source(self, filename: str, code: str) -> None:
+        """Register code in linecache and maintain per-executor LRU with optional capacity."""
+        try:
+            linecache.cache[filename] = (
+                len(code),
+                None,
+                code.splitlines(keepends=True),
+                filename,
+            )
+        except Exception:
+            # Best-effort; never fail execution due to cache registration
+            return
+
+        # Track in LRU and evict if necessary
+        try:
+            if filename in self._fallback_linecache_keys:
+                # Move to end
+                self._fallback_linecache_keys.move_to_end(filename)
+            else:
+                self._fallback_linecache_keys[filename] = None
+            cap = self._fallback_linecache_max_size
+            if isinstance(cap, int) and cap >= 0:
+                while len(self._fallback_linecache_keys) > cap:
+                    old, _ = self._fallback_linecache_keys.popitem(last=False)
+                    try:
+                        if old in linecache.cache:
+                            del linecache.cache[old]
+                    except Exception:
+                        pass
+        except Exception:
+            # Never let LRU maintenance cause failures
+            pass

@@ -718,8 +718,8 @@ c = a / b
         while tb is not None:
             frames.append((tb.tb_frame.f_code.co_filename, tb.tb_lineno))
             tb = tb.tb_next
-        # Find the last frame within our fallback filename
-        target = [f for f in frames if f[0] == "<async_fallback>"]
+        # Find the last frame within our fallback filename prefix
+        target = [f for f in frames if str(f[0]).startswith("<async_fallback")]
         assert target, f"No frame with fallback filename; frames: {frames}"
         # The last matching frame should be at line 3
         assert target[-1][1] == 3
@@ -733,7 +733,7 @@ c = a / b
             wrapper_frames.append((code.co_name, code.co_filename, tb.tb_lineno))
             tb = tb.tb_next
         # There should be a frame for __async_exec__ with our fallback filename
-        assert any(name == "__async_exec__" and fn == "<async_fallback>" for name, fn, _ in wrapper_frames)
+        assert any(name == "__async_exec__" and str(fn).startswith("<async_fallback") for name, fn, _ in wrapper_frames)
 
     @pytest.mark.asyncio
     async def test_ast_fallback_transform_counters_default_off(self, monkeypatch):
