@@ -765,9 +765,14 @@ class AsyncExecutor:
         if not async_func:
             raise RuntimeError("Failed to create async wrapper function")
 
-        # Execute the async function
+        # Execute the async function with timeout
         # The function will have access to global_ns as its globals
-        result = await async_func()
+        try:
+            async with asyncio.timeout(self.tla_timeout):
+                result = await async_func()
+        except asyncio.TimeoutError as e:
+            self._annotate_timeout(e, code)
+            raise
 
         # Handle the result based on what we're expecting
         if is_expression:
@@ -856,7 +861,12 @@ class AsyncExecutor:
         """Collect simple identifiers safe for global declaration."""
         try:
             from .constants import ENGINE_INTERNALS as _engine_internals
-        except Exception:
+        except Exception as _e:
+            logger.debug(
+                "ENGINE_INTERNALS import failed in _collect_safe_assigned_names; defaulting to empty set",
+                error=str(_e),
+                execution_id=self.execution_id,
+            )
             _engine_internals = set()
 
         names: set[str] = set()
