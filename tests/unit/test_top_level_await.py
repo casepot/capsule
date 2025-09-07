@@ -757,27 +757,20 @@ result = await task
             transport=mock_transport,
             execution_id="test-integ-2"
         )
-        
-        # Execute sync code
-        with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreaded:
-            mock_instance = MockThreaded.return_value
-            mock_instance.start_output_pump = AsyncMock()
-            mock_instance.stop_output_pump = AsyncMock()
-            mock_instance.execute_code_async = AsyncMock(return_value=None)
-            
-            await executor.execute("x = 10")
-        
+        initial_ns_id = id(namespace_manager.namespace)
+
+        # Execute sync code natively
+        await executor.execute("x = 10")
+
         # Execute async code
         await executor.execute("y = await asyncio.sleep(0, 20)")
         
-        # Execute sync code that uses previous values
-        with patch('src.subprocess.async_executor.ThreadedExecutor') as MockThreaded:
-            mock_instance = MockThreaded.return_value
-            mock_instance.start_output_pump = AsyncMock()
-            mock_instance.stop_output_pump = AsyncMock()
-            mock_instance.execute_code_async = AsyncMock(return_value=None)
-            
-            await executor.execute("z = x + y")
+        # Execute sync code that uses previous values natively
+        await executor.execute("z = x + y")
         
         # Check all values are in namespace
         assert namespace_manager.namespace.get('y') == 20
+        assert namespace_manager.namespace.get('x') == 10
+        assert namespace_manager.namespace.get('z') == 30
+        # Namespace identity remains stable
+        assert id(namespace_manager.namespace) == initial_ns_id
