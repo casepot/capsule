@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This specification defines the AsyncExecutor implementation for PyREPL3, providing top-level await support without IPython dependencies. The system leverages the `PyCF_ALLOW_TOP_LEVEL_AWAIT` compile flag (0x2000) to enable native async/await syntax at the module level, with automatic execution mode detection and AST transformation fallback mechanisms.
+This specification defines the AsyncExecutor implementation for PyREPL3, providing top-level await support without IPython dependencies. The system leverages the `PyCF_ALLOW_TOP_LEVEL_AWAIT` compile flag (0x2000) to enable native async/await syntax at the module level, with automatic execution mode detection. An AST transformation wrapper exists only as a resilience fallback when direct compilation is unsuitable.
 
 Promise‑first integration: The durable layer MUST prefer promise flows (`ctx.promise` + Protocol Bridge) for async work. Durable functions MUST NOT create or manage event loops; the executor/transport own a single loop per session.
 
@@ -35,6 +35,15 @@ base_flags = compile('', '', 'exec').co_flags
 async_flags = base_flags | PyCF_ALLOW_TOP_LEVEL_AWAIT
 compiled = compile(code, '<async>', 'exec', flags=async_flags)
 ```
+
+### TLA Compile Decision Matrix (3.11–3.13)
+
+- No flag, any mode: top‑level `await`/`async for`/`async with` → SyntaxError.
+- Flag + `mode='exec'`: code object has `CO_COROUTINE`; evaluate to coroutine and await it.
+- Flag + `mode='eval'`: evaluating the code object yields a coroutine that must be awaited to produce the value.
+- Flag + `mode='single'`: interactive one‑liner semantics analogous to `exec`.
+
+Preferred strategy: attempt compile‑first with the flag; only use the AST fallback wrapper when compilation raises an unrecoverable SyntaxError unrelated to ordinary top‑level async constructs.
 
 ### Execution Mode Detection
 
@@ -312,7 +321,7 @@ class AsyncExecutor:
         Uses PyCF_ALLOW_TOP_LEVEL_AWAIT flag for direct compilation
         when possible, falls back to AST transformation if needed.
         """
-        # Get base compile flags
+        # Get base compile flags (compile-first preferred)
         base_flags = compile('', '', 'exec').co_flags
         
         # Add the magic flag for top-level await
@@ -389,8 +398,13 @@ class AsyncExecutor:
         """
         Transform code for top-level await execution.
         
-        Wraps code in async function when direct compilation
+        Wraps code in async function only when direct compilation
         with PyCF_ALLOW_TOP_LEVEL_AWAIT fails.
+
+        Narrow transform policy:
+        - Do NOT mass-convert `def`→`async def` (semantics risk)
+        - Zero-arg lambda→async helper is disabled by default
+        - Preserve original ordering; apply locals-first then global diffs
         """
         self.stats["ast_transforms"] += 1
         
@@ -442,6 +456,23 @@ class AsyncExecutor:
         )
         
         return result
+
+### Location Mapping (PEP 657)
+
+- Use `ast.copy_location(new, old)` when replacing nodes to preserve start/end spans.
+- Call `ast.fix_missing_locations(tree)` after modifications.
+- Avoid `ast.increment_lineno` unless required; prefer not inserting prelude lines.
+- Keep filenames stable; if using virtual filenames, register source in `linecache` for tracebacks.
+
+### AST Coverage (3.11–3.13)
+
+- Ensure traversal tolerates: `Match` and pattern subclasses (PEP 634), `TryStar` (PEP 654), `TypeAlias` and `type_params` on defs/classes (PEP 695). PEP 701 (f‑strings) needs no special handling.
+- PEP 709 (comprehension inlining) affects symbol tables in 3.12+; do not mistake comprehension targets for real top‑level assignments during analysis.
+
+### Caching Strategy
+
+- Use a code‑object LRU cache keyed by `(source, mode, flags)` to skip re‑parse/compile for repeated inputs.
+- Keep a small AST cache only if transforms are applied; compile‑first is faster when no transforms are needed.
 ```
 
 ### Thread-Based Execution for Blocking I/O

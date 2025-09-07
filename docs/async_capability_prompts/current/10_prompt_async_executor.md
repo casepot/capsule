@@ -14,17 +14,18 @@ Before implementing, you MUST understand:
 - **Invariant**: Namespace must be under our control without breaking display hooks
 
 ### 2. Critical Technical Discovery
-- **The Magic Flag**: `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000` enables top-level await in compile()
-- **How It Works**: Add to compile flags: `compile(code, '<session>', 'exec', flags=base_flags | 0x2000)`
-- **Edge Case**: Some code needs AST transformation before compilation
+- **The Magic Flag**: `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000` enables top-level await in compile(); prefer a compile-first strategy and only use an AST wrapper as a resilience fallback when direct compilation is unsuitable
+- **How It Works**: Add to compile flags: `compile(code, '<session>', 'exec', flags=base_flags | 0x2000)`; evaluate the code object to a coroutine and await it when `CO_COROUTINE` is set
+- **Edge Case**: Rarely, a minimal AST wrapper is needed when the compile-first path fails for reasons outside ordinary top-level async constructs; keep wrapper minimal and preserve ordering/locations
 
 ### 3. Architecture Recognition
-- **ThreadedExecutor**: Works perfectly for sync/blocking code - DO NOT break it
+- **ThreadedExecutor**: Works perfectly for sync/blocking code - DO NOT break it; route only blocking paths to threads, keep native async paths for TLA/async defs
 - **Protocol Transport**: Already async-aware but needs careful event loop management
 - **Namespace Manager**: Thread-safe but needs async context awareness
 
 ### 4. Constraints That Cannot Be Violated
 - **No IPython Dependency**: We build our own to maintain control
+- **Compile-First**: Use `PyCF_ALLOW_TOP_LEVEL_AWAIT` with `exec`/`eval`; evaluate to coroutine and await it; fallback wrapper only when necessary
 - **Cancellation Support**: Must support sys.settrace for sync, but async is harder
 - **Protocol Order**: Message ordering must be preserved despite async execution
 - **Memory Safety**: No coroutine leaks in namespace
@@ -281,7 +282,7 @@ def initialize_executor_system():
     return resonate
 ```
 
-### Phase 3: Risk Mitigation (20% effort - FOCUSED on discovered issues)
+### Phase 3: Risk Mitigation (20% effort - UPDATED by 3.11–3.13 findings)
 
 **Critical Risks from Investigation:**
 
@@ -293,7 +294,7 @@ def initialize_executor_system():
 2. **Event Loop Conflicts**  
    - **Issue**: Protocol messages need async context
    - **Mitigation**: Queue messages when not in async context
-   - **Implementation**: Message buffer with `await send_pending()`
+   - **Implementation**: Message buffer with `await send_pending()`; prefer compile-first to avoid wrappers that shift line numbers
 
 3. **Coroutine Leaks**
    - **Issue**: Unawaited coroutines left in namespace
@@ -314,10 +315,10 @@ def initialize_executor_system():
 - Maintain protocol message ordering through careful async management
 - Zero dependencies beyond standard library
 
-### 2. Implementation Checklist
+### 2. Implementation Checklist (updated)
 - [ ] Use `PyCF_ALLOW_TOP_LEVEL_AWAIT = 0x2000` flag
 - [ ] Never replace namespace entirely (merge only)
-- [ ] Handle both compilable and AST-transform cases
+- [ ] Prefer compile-first; keep AST wrapper only as fallback; preserve ordering and locations
 - [ ] Track pending coroutines for cleanup
 - [ ] Preserve ThreadedExecutor for blocking I/O
 - [ ] Queue protocol messages when not in async context
@@ -399,9 +400,9 @@ def test_resonate_recovery():
 3. **Preserve Namespace Control**: No `_oh` or IPython internals
 4. **Maintain ThreadedExecutor**: It works well for blocking I/O
 
-## Success Criteria (REFINED with Resonate)
+## Success Criteria (REFINED with Resonate + 3.11–3.13)
 
-- [ ] Top-level await works with `PyCF_ALLOW_TOP_LEVEL_AWAIT` flag
+- [ ] Top-level await works with `PyCF_ALLOW_TOP_LEVEL_AWAIT` flag (exec/eval decision matrix)
 - [ ] No namespace KeyErrors (avoided IPython's pitfall)
 - [ ] Protocol messages maintain order via Resonate promises
 - [ ] Blocking I/O still uses threads

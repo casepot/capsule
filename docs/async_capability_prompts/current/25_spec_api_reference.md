@@ -501,7 +501,7 @@ def __init__(
 )
 ```
 
-Note: Provided via a DI factory and not used in promise‑first durable flows. A full native async implementation is planned for later phases.
+Note: Provided via a DI factory and not used in promise‑first durable flows. A full native async implementation is planned for later phases. The executor prefers a compile‑first strategy using `PyCF_ALLOW_TOP_LEVEL_AWAIT` for TLA paths, with a minimal AST wrapper only as a resilience fallback.
 
 ---
 
@@ -535,6 +535,12 @@ result = await executor.execute(
 - `CompilationError`: If code cannot be compiled
 - `ExecutionError`: If execution fails
 - `CancellationError`: If execution is cancelled
+
+#### Configuration Notes (3.11–3.13)
+
+- `tla_mode`: compile‑first with `PyCF_ALLOW_TOP_LEVEL_AWAIT` (preferred) vs. forced wrapper (testing only)
+- `code_cache_size`: LRU size for compiled code objects keyed by `(source, mode, flags)`
+- `enable_hoisting`: Optional (default False). If enabled, perform symtable‑backed hoisting of top‑level imports/defs that are not shadowed or conditional; preserves original order and semantics.
 
 ---
 

@@ -51,6 +51,35 @@ _ = await asyncio.sleep(0)
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_direct_tla_function_binds_live_globals_but_not_closure_hoisted():
+    """Direct compile-first path binds __globals__ but may still close over locals.
+
+    This confirms current semantics without AST hoisting: functions bind to the
+    live namespace mapping but names assigned in the same cell may be captured
+    as closure variables (addressed in later PRs).
+    """
+    ns = NamespaceManager()
+    executor = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="tla-live-1b")
+
+    await executor.execute(
+        """
+import asyncio
+g = 2
+async def addg(x):
+    await asyncio.sleep(0)
+    return x + g
+_ = await asyncio.sleep(0)
+"""
+    )
+
+    addg = ns.namespace.get("addg")
+    import types
+    assert isinstance(addg, types.FunctionType)
+    assert addg.__globals__ is ns.namespace
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_direct_tla_global_assignment_inside_function_persists():
     """A function that assigns to a global should persist the change.
 
