@@ -228,7 +228,7 @@ class AsyncExecutor:
                     if len(self._ast_cache) > int(self._ast_cache_max_size):
                         self._ast_cache.popitem(last=False)
 
-            # Check for top-level await (not inside function)
+            # Check for top-level await/async constructs (not inside function)
             # Need to check all nodes, not just Expr nodes
             for node in tree.body:
                 if self._contains_await_at_top_level(node):
@@ -259,7 +259,7 @@ class AsyncExecutor:
             # If code contains 'await' at top-level and failed normal parse,
             # treat as TOP_LEVEL_AWAIT without compiling here. We'll let
             # the execution path handle compilation and fallback choices.
-            if "await" in code:
+            if ("await" in code) or ("async for" in code) or ("async with" in code):
                 logger.debug("Detected TOP_LEVEL_AWAIT mode via quick check after SyntaxError")
                 return ExecutionMode.TOP_LEVEL_AWAIT
             # Otherwise unknown/invalid
@@ -268,9 +268,9 @@ class AsyncExecutor:
 
     def _contains_await_at_top_level(self, node: ast.AST) -> bool:
         """
-        Check if node contains await at module level.
+        Check if node contains await/async constructs at module level.
 
-        Recursively walks AST to find Await nodes that are
+        Recursively walks AST to find Await, AsyncFor, or AsyncWith nodes that are
         not inside function definitions.
 
         Args:
@@ -279,8 +279,8 @@ class AsyncExecutor:
         Returns:
             True if contains top-level await
         """
-        # Direct await node
-        if isinstance(node, ast.Await):
+        # Direct await/async node
+        if isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith)):
             return True
 
         # Don't recurse into function definitions
@@ -545,14 +545,14 @@ class AsyncExecutor:
         global_ns = self.namespace.namespace
         local_ns: dict[str, Any] = {}
 
-        # Snapshot globals before any execution for diffs
-        pre_globals = dict(global_ns)
-
-        # Ensure asyncio is available in globals
+        # Ensure asyncio is available in globals before snapshotting
         if "asyncio" not in global_ns:
             import asyncio as _asyncio
 
             global_ns["asyncio"] = _asyncio
+
+        # Snapshot globals after ensuring asyncio is present (avoid spurious diffs)
+        pre_globals = dict(global_ns)
 
         import inspect as _inspect
 
@@ -585,11 +585,7 @@ class AsyncExecutor:
             return result
 
         except asyncio.TimeoutError as e:
-            if hasattr(e, "add_note"):
-                e.add_note(f"Code execution timed out after {self.tla_timeout:.1f} seconds")
-                e.add_note(f"Execution ID: {self.execution_id}")
-                snippet = code[:160] + ("..." if len(code) > 160 else "")
-                e.add_note(f"Code snippet: {snippet}")
+            self._annotate_timeout(e, code)
             raise
         except SyntaxError:
             # Attempt exec+flags path for statements and mixed content
@@ -628,11 +624,7 @@ class AsyncExecutor:
                 return result
 
             except asyncio.TimeoutError as e:
-                if hasattr(e, "add_note"):
-                    e.add_note(f"Code execution timed out after {self.tla_timeout:.1f} seconds")
-                    e.add_note(f"Execution ID: {self.execution_id}")
-                    snippet = code[:160] + ("..." if len(code) > 160 else "")
-                    e.add_note(f"Code snippet: {snippet}")
+                self._annotate_timeout(e, code)
                 raise
             except SyntaxError as exec_syntax_err:
                 # Both compilation paths failed; annotate and fallback to AST transform
@@ -829,7 +821,12 @@ class AsyncExecutor:
         # ENGINE_INTERNALS is imported from constants via NamespaceManager module
         try:
             from .constants import ENGINE_INTERNALS as _engine_internals
-        except Exception:
+        except Exception as _e:
+            logger.debug(
+                "ENGINE_INTERNALS import failed; proceeding with empty set",
+                error=str(_e),
+                execution_id=self.execution_id,
+            )
             _engine_internals = set()
 
         for key, value in after.items():
@@ -840,6 +837,20 @@ class AsyncExecutor:
             if key not in before or before.get(key) is not value:
                 updates[key] = value
         return updates
+
+    def _annotate_timeout(self, e: BaseException, code: str) -> None:
+        """Annotate a TimeoutError with standard notes for observability."""
+        try:
+            # Only annotate exceptions that support add_note (3.11+)
+            add_note = getattr(e, "add_note", None)
+            if callable(add_note):
+                add_note(f"Code execution timed out after {self.tla_timeout:.1f} seconds")
+                add_note(f"Execution ID: {self.execution_id}")
+                snippet = code[:160] + ("..." if len(code) > 160 else "")
+                add_note(f"Code snippet: {snippet}")
+        except Exception:
+            # Never fail on annotation
+            pass
 
     def _collect_safe_assigned_names(self, body: list[ast.stmt]) -> set[str]:
         """Collect simple identifiers safe for global declaration."""

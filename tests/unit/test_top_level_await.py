@@ -214,6 +214,63 @@ async def get_value(x):
         await executor.execute(code)
         assert namespace_manager.namespace.get('msg') == 'value 5'
         assert executor.stats.get("ast_transforms", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_top_level_async_for(self):
+        """Test top-level async for loop under compile-first exec path."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-edge-async-for"
+        )
+
+        setup = """
+import asyncio
+
+async def agen():
+    for i in range(3):
+        await asyncio.sleep(0)
+        yield i
+"""
+        await executor.execute(setup)
+
+        code = """
+result = []
+async for v in agen():
+    result.append(v)
+"""
+        result = await executor.execute(code)
+        assert result is None
+        assert namespace_manager.namespace.get('result') == [0, 1, 2]
+        assert executor.stats.get("ast_transforms", 0) == 0
+
+    @pytest.mark.asyncio
+    async def test_top_level_async_with(self):
+        """Test top-level async with block under compile-first exec path."""
+        namespace_manager = NamespaceManager()
+        mock_transport = Mock()
+
+        executor = AsyncExecutor(
+            namespace_manager=namespace_manager,
+            transport=mock_transport,
+            execution_id="test-edge-async-with"
+        )
+
+        code = """
+import asyncio
+lock = asyncio.Lock()
+done = False
+async with lock:
+    await asyncio.sleep(0)
+    done = True
+"""
+        result = await executor.execute(code)
+        assert result is None
+        assert namespace_manager.namespace.get('done') is True
+        assert executor.stats.get("ast_transforms", 0) == 0
     
     @pytest.mark.asyncio
     async def test_await_in_conditional(self):
