@@ -22,6 +22,10 @@
       - Validate locals-first then global-diff merge under both eval and exec flows.
   - Success criteria
       - All TLA unit tests pass; expression results recorded; no global mapping replacement; AST fallback used only when compile-first SyntaxError occurs.
+  - Changelog
+      - After PR acceptance, update `docs/PHASE_3_CHANGELOG.md` with a concise summary of behavior changes, tests, and any notable decisions.
+
+  Note: Maintain the Phase 3 changelog after each PR is successfully validated and accepted.
 
   PR 2 — AsyncExecutor: Native Simple Sync + Async Def (no delegation)
 

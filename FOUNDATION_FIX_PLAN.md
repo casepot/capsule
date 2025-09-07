@@ -10,6 +10,8 @@
 - Phase 2c: COMPLETE (local-mode stabilization) — Minimal checkpoint/restore handlers; output-before-result; Busy guard
 - Phase 3-6: TODO — Full implementation (~3-4 weeks to production)
 
+Changelog Practice (Phase 3): After each Phase 3 PR is validated and accepted, append a brief entry to `docs/PHASE_3_CHANGELOG.md` summarizing the behavior changes, tests, and decisions. This keeps implementation and plan aligned for reviewers.
+
 **Current PR #12 Status**: Phase 1 + Phase 2a delivered; Phase 2b/2c updates landed
 - Unit and integration tests pass in local mode; CI validates on PRs.
 - Durable functions are promise‑first; Session is the sole transport reader; worker supports checkpoint/restore with merge‑only default and `clear_existing` support.
