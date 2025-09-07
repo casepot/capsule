@@ -1,10 +1,24 @@
-"""AsyncExecutor skeleton implementation for transition to async architecture.
+"""Async execution entrypoint for subprocess‑isolated sessions.
 
-This module provides the foundation for async execution support, including
-top-level await capability via the PyCF_ALLOW_TOP_LEVEL_AWAIT compile flag.
+Provides top‑level await (TLA) via the ``PyCF_ALLOW_TOP_LEVEL_AWAIT`` compile flag
+and an AST‑wrapper fallback when direct compilation fails. Executes simple
+synchronous code and async‑def blocks natively; heuristically detects likely
+blocking synchronous I/O and delegates those cases to ``ThreadedExecutor`` during
+the transition period.
 
-During Phase 0, this is a skeleton that delegates to ThreadedExecutor.
-Future phases will implement full async execution capabilities.
+Key behaviors:
+- Mode analysis via AST (top‑level await, async defs, blocking sync, simple sync).
+- TLA path: eval‑first, exec‑second with TLA flags; if both fail, wrap in an
+  async function via AST transform and run with a bounded timeout.
+- Namespace policy: merge locals first, then compute and merge global diffs
+  (filters ENGINE_INTERNALS and system keys).
+- Optional gated transforms (disabled by default): def→async def rewrite;
+  async‑lambda helper. Controlled by environment variables.
+- Virtual filenames registered in ``linecache`` with a bounded LRU for tracebacks.
+- Weakref‑based coroutine tracking and async context manager support.
+
+This module participates in a phased transition from threaded to fully async
+execution; only BLOCKING_SYNC paths delegate to ``ThreadedExecutor``.
 """
 
 from __future__ import annotations
@@ -32,7 +46,14 @@ logger = structlog.get_logger()
 
 
 class ExecutionMode(Enum):
-    """Execution modes for code analysis."""
+    """Execution modes for code analysis and routing.
+
+    - TOP_LEVEL_AWAIT: Code uses ``await``/``async for``/``async with`` at module scope.
+    - ASYNC_DEF: Code defines async functions but has no top‑level await.
+    - BLOCKING_SYNC: Code likely performs blocking sync I/O (heuristic).
+    - SIMPLE_SYNC: Plain synchronous code without async or blocking indicators.
+    - UNKNOWN: Parse failed or code could not be categorized.
+    """
 
     TOP_LEVEL_AWAIT = "top_level_await"
     ASYNC_DEF = "async_def"
@@ -78,20 +99,23 @@ class _DetectionPolicy:
 
 
 class AsyncExecutor:
-    """
-    Skeleton async executor for transition to async architecture.
+    """Async code executor with mode analysis, TLA support, and merge‑only namespace updates.
 
-    This is a Phase 0 implementation that:
-    - Provides the AsyncExecutor interface expected by tests
-    - Analyzes code to detect execution modes
-    - Delegates actual execution to ThreadedExecutor
-    - Prepares for future async implementation
+    Routes code by mode:
+    - TOP_LEVEL_AWAIT: compile with TLA flag if possible; otherwise wrap via AST and await.
+    - ASYNC_DEF and SIMPLE_SYNC: compile/execute natively and merge updates.
+    - BLOCKING_SYNC: delegate to ``ThreadedExecutor`` to avoid blocking the event loop.
 
-    Key Features (skeleton only):
-    - PyCF_ALLOW_TOP_LEVEL_AWAIT constant defined
-    - Execution mode detection via AST analysis
-    - Event loop management
-    - Namespace merge-only policy enforcement
+    Features:
+    - Optional AST LRU for analysis.
+    - Heuristic blocking‑I/O detection (imports, aliased calls, attribute chains).
+    - AST fallback wrapper with optional gated transforms (def→async def; async‑lambda helper).
+    - Bounded ``linecache`` registration for traceback mapping.
+    - Coroutine tracking and async context manager.
+
+    Environment flags (when constructor args left as defaults):
+    - ``ASYNC_EXECUTOR_AST_CACHE_SIZE``, ``ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE``,
+      ``ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER``, ``ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX``.
     """
 
     # Top-level await compile flag from Python's ast module
@@ -126,7 +150,7 @@ class AsyncExecutor:
         fallback_linecache_max_size: int | None = None,
     ):
         """
-        Initialize AsyncExecutor skeleton.
+        Initialize AsyncExecutor.
 
         Args:
             namespace_manager: Namespace manager (GIL-protected for basic operations).
@@ -166,7 +190,7 @@ class AsyncExecutor:
         # Don't try to get loop during init; get it when needed in execute()
         self.loop = None  # Will be set when needed in async context
 
-        # Future: Coroutine tracking for cleanup
+        # Coroutine tracking for cleanup (weakref-based)
         self._pending_coroutines: Set[weakref.ReferenceType[Any]] = set()
 
         # AST cache with LRU limit to prevent unbounded growth
@@ -215,7 +239,9 @@ class AsyncExecutor:
         # Track per-execution fallback filenames for linecache cleanup (LRU)
         self._fallback_linecache_keys: OrderedDict[str, None] = OrderedDict()
         self._fallback_seq: int = 0
-        # Resolve fallback linecache capacity: None disables cleanup; default from env or 128
+        # Resolve fallback linecache capacity: when arg is None, use env
+        # (ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX) or default 128; 0 retains no entries;
+        # entries are cleaned up on close().
         if fallback_linecache_max_size is None:
             env_cap = _os.getenv("ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX")
             if env_cap is not None:
@@ -254,20 +280,21 @@ class AsyncExecutor:
 
     def analyze_execution_mode(self, code: str) -> ExecutionMode:
         """
-        Determine optimal execution mode for code.
+        Determine an execution mode for the provided source code.
 
-        Analysis Steps:
-        1. Try standard AST parsing
-        2. Check for top-level await expressions
-        3. Detect async function definitions
-        4. Identify blocking I/O patterns
-        5. Default to simple sync
+        Analysis steps:
+        1. Parse standard AST.
+        2. Detect top‑level ``await``/``async for``/``async with``.
+        3. Detect async function definitions.
+        4. Heuristically detect blocking sync I/O (imports, calls, attributes).
+        5. Default to SIMPLE_SYNC.
 
         Args:
             code: Python code to analyze
 
         Returns:
-            ExecutionMode enum value
+            ExecutionMode: One of TOP_LEVEL_AWAIT, ASYNC_DEF, BLOCKING_SYNC, SIMPLE_SYNC,
+            or UNKNOWN when parsing fails and no quick async indicators are present.
         """
         try:
             # Try to parse code normally
@@ -366,24 +393,28 @@ class AsyncExecutor:
 
     def _contains_blocking_io(self, tree: ast.AST) -> bool:
         """
-        Detect blocking I/O operations in code.
+        Detect likely blocking synchronous I/O from the AST.
 
-        Checks for:
-        - Imports of blocking libraries
-        - Calls to blocking functions
-        - File operations without async
+        Heuristics:
+        - Maps import aliases to base modules (first segment) and flags direct imports
+          of configured blocking modules.
+        - Flags direct name calls such as ``open()``/``input()``.
+        - Resolves simple attribute/call/subscript chains to a base name (e.g., ``time.sleep``,
+          ``requests.get``, ``socket.socket().recv``) and checks the per‑module method allowlist.
 
-        TODO(Phase 1): Extend detection to handle attribute calls such as
-        `time.sleep()`, `requests.get()`, and `socket.socket().recv()`. This
-        likely requires resolving `ast.Attribute` chains and mapping imported
-        names to modules. Add tests first to capture common patterns before
-        broadening detection to reduce false positives.
+        Configuration:
+        - Base modules, per‑module methods, and name‑calls are supplied by ``_DetectionPolicy``,
+          which may be overridden via constructor parameters.
+
+        Limitations:
+        - Dynamic/importlib usage and complex expressions may be missed.
+        - Heuristic may produce false positives/negatives; intended for coarse routing.
 
         Args:
             tree: AST tree to analyze
 
         Returns:
-            True if contains blocking I/O
+            bool: True if any blocking import/call is detected; otherwise False.
         """
         # Extended detection with alias tracking and configurable policy
         alias_to_module: dict[str, str] = {}
@@ -464,20 +495,32 @@ class AsyncExecutor:
 
     async def execute(self, code: str) -> Any:
         """
-        Main execution entry point (skeleton implementation).
+        Analyze and execute code according to its mode.
 
-        Analyzes code and routes to appropriate execution method.
-        Currently delegates to ThreadedExecutor for all execution.
+        Routing:
+        - TOP_LEVEL_AWAIT: Try TLA compile (eval then exec); if both fail, apply an
+          AST wrapper and await with a timeout.
+        - ASYNC_DEF and SIMPLE_SYNC: Execute natively and merge namespace updates.
+        - BLOCKING_SYNC: Delegate to ThreadedExecutor to avoid blocking the event loop.
+
+        Side effects:
+        - Merges locals first, then global diffs (filters ENGINE_INTERNALS and system keys).
+        - Records the last expression result when applicable.
+        - Updates execution statistics and per‑mode counters.
 
         Args:
-            code: Python code to execute
+            code: Python source to execute.
 
         Returns:
-            Execution result
+            Any: Expression value (if any) or None for statements.
 
         Raises:
-            NotImplementedError: For TOP_LEVEL_AWAIT mode (future work)
-            Any exception raised during execution
+            asyncio.TimeoutError: If an awaited computation exceeds the configured timeout.
+            RuntimeError: If delegation requires a running event loop or a transport is missing.
+            Exception: Any exception raised by user code is propagated.
+
+        Note:
+            Must be called from an async context (``await executor.execute(...)``).
         """
         self.stats["executions"] += 1
 
@@ -528,23 +571,27 @@ class AsyncExecutor:
 
     async def _execute_with_threaded_executor(self, code: str) -> Any:
         """
-        Execute code using ThreadedExecutor delegation.
+        Execute code by delegating to ThreadedExecutor (blocking‑sync path).
 
-        This is the Phase 0 implementation that maintains
-        compatibility while we transition to full async.
+        Uses the current running loop to start/stop the output pump and executes via the
+        ThreadedExecutor’s async wrapper.
 
         Args:
-            code: Python code to execute
+            code: Python source to execute.
 
         Returns:
-            Execution result
+            Any: Expression value (if any) or None for statements.
+
+        Raises:
+            RuntimeError: If no running event loop is present or ``transport`` is None.
+            Exception: Any exception raised during delegated execution.
         """
         # Create ThreadedExecutor instance
         # Note: We pass namespace.namespace to get the dict
         # TODO: Consider pooling ThreadedExecutor instances to reduce allocation overhead
         # This would be beneficial for high-concurrency scenarios during the transition phase
 
-        # Get current running loop - we're in async method so this should work
+        # Requires a running event loop to integrate the output pump
         try:
             current_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -567,14 +614,10 @@ class AsyncExecutor:
         await executor.start_output_pump()
 
         try:
-            # Use the async wrapper we added in Phase 0
+            # Execute via ThreadedExecutor's async wrapper
             result = await executor.execute_code_async(code)
-
-            # CRITICAL: Update namespace with merge-only policy
-            # The ThreadedExecutor modifies the namespace dict directly,
-            # but we need to ensure any new keys are properly tracked
-            # Note: ThreadedExecutor already updates the dict in-place,
-            # so we don't need to do anything extra here
+            # Namespace updates are applied in-place by ThreadedExecutor; no additional
+            # merge needed here.
 
             return result
 
@@ -583,14 +626,19 @@ class AsyncExecutor:
             await executor.stop_output_pump()
 
     async def _execute_simple_sync(self, code: str) -> Any:
-        """Execute simple synchronous code natively.
+        """
+        Execute simple synchronous code natively.
 
-        Detect expression vs statements using ast.parse(..., mode='eval').
-        Execute against the live namespace mapping with merge-only semantics:
-        - Merge locals first
-        - Then merge global diffs computed against a pre-execution snapshot
+        Detection:
+        - Attempts ``ast.parse(..., mode='eval')`` to decide expression vs statements.
 
-        Returns the expression value for eval; None for exec.
+        Semantics:
+        - Evaluate/execute against the live namespace mapping.
+        - Merge locals first, then merge global diffs (filters ENGINE_INTERNALS/system keys).
+        - Record the expression result for eval paths.
+
+        Returns:
+            Any: Expression value for eval; None for exec.
         """
         logger.debug(
             "execute_simple_sync_start", execution_id=self.execution_id, code_length=len(code)
@@ -641,11 +689,14 @@ class AsyncExecutor:
             return None
 
     async def _execute_async_definitions(self, code: str) -> Any:
-        """Execute blocks that define async functions natively.
+        """
+        Execute code that defines async functions (no top‑level await).
 
-        Always compile with mode='exec' and merge namespace updates
-        using the same locals-first, then global-diff strategy.
-        Returns None.
+        Compiles in exec mode and merges namespace updates using the same
+        locals‑first, then global‑diff strategy. Does not create or await any coroutines.
+
+        Returns:
+            None
         """
         logger.debug(
             "execute_async_def_start", execution_id=self.execution_id, code_length=len(code)
@@ -670,21 +721,21 @@ class AsyncExecutor:
 
     async def _execute_top_level_await(self, code: str) -> Any:
         """
-        Execute code with top-level await support.
+        Execute code with top‑level await support.
 
-        Uses PyCF_ALLOW_TOP_LEVEL_AWAIT flag for direct compilation
-        when possible, falls back to AST transformation only when
-        both eval+flags and exec+flags compilation paths fail with
-        SyntaxError.
+        Uses ``PyCF_ALLOW_TOP_LEVEL_AWAIT`` for direct compilation (eval then exec). If both
+        flagged compilations fail with ``SyntaxError``, falls back to an AST wrapper and
+        awaits the resulting coroutine under a bounded timeout.
 
         Args:
-            code: Python code containing top-level await
+            code: Python code containing top‑level await.
 
         Returns:
-            Execution result (for expressions) or None (for statements)
+            Any: Expression value (eval) or None (statements).
 
         Raises:
-            Any exception from code execution
+            asyncio.TimeoutError: If the awaited computation exceeds the configured timeout.
+            Exception: Any exception raised by user code is propagated.
         """
         # Use TLA flag directly
         flags = self.PyCF_ALLOW_TOP_LEVEL_AWAIT
@@ -789,21 +840,30 @@ class AsyncExecutor:
 
     async def _execute_with_ast_transform(self, code: str) -> Any:
         """
-        Transform code for top-level await execution.
+        Transform and execute code that requires a top‑level await wrapper.
 
-        Wraps code in async function when direct compilation
-        with PyCF_ALLOW_TOP_LEVEL_AWAIT fails.
-
-        Following spec lines 372-429 using AST manipulation.
+        Process:
+        - Parse source with a unique virtual filename for traceback mapping.
+        - Apply optional, gated transforms (disabled by default):
+          - def→async def rewrite when the body contains ``await``.
+          - Async lambda helper for ``name = lambda: await ...``.
+        - Build an async wrapper that returns either the expression value or ``locals()``.
+        - Compile with the virtual filename, register source in ``linecache`` (bounded LRU),
+          execute to define the wrapper, then await it under a bounded timeout.
+        - Merge locals first (from ``locals()``), then global diffs; record expression results.
 
         Args:
-            code: Python code with top-level await
+            code: Python source with top‑level ``await``.
 
         Returns:
-            Execution result
+            Any: Expression value (if any) or None for statements.
 
         Raises:
-            Any exception from code execution
+            asyncio.TimeoutError: If awaiting the wrapper exceeds the configured timeout.
+            Exception: Any exception raised by user code is propagated.
+
+        See also:
+            docs/async_capability_prompts/current/ for design notes and rationale.
         """
         # Increment AST transform count for stats and log entry
         self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0) + 1
@@ -887,7 +947,21 @@ class AsyncExecutor:
 
     # === AST fallback helper methods ===
     def _apply_gated_transforms(self, tree: ast.Module) -> list[ast.stmt]:
-        """Apply optional, flag-gated transforms to the module body preserving order and locations."""
+        """Apply optional, flag‑gated AST transforms to the module body, preserving order and locations.
+
+        Transforms (when enabled):
+        - def→async def: Rewrites a top‑level ``def`` whose body contains ``await``.
+        - Async lambda helper: Rewrites ``name = lambda: await ...`` into an ``async def``
+          helper plus an assignment to preserve semantics.
+
+        Gating:
+        - Constructor flags or environment variables:
+          - ``ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE``
+          - ``ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER``
+
+        Returns:
+            list[ast.stmt]: Transformed statements to replace the original module body.
+        """
         transformed_body: list[ast.stmt] = []
         for stmt in tree.body:
             if self._enable_def_await_rewrite and isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
@@ -920,7 +994,15 @@ class AsyncExecutor:
         return transformed_body
 
     def _build_wrapper_body(self, tree: ast.Module) -> tuple[list[ast.stmt], bool]:
-        """Build wrapper body with PEP 657-aligned locations; return (body, is_expression)."""
+        """Build the async wrapper body with PEP 657‑aligned locations.
+
+        Cases:
+        - Single expression: return that expression value (``Return(expr)``), marking locations.
+        - Statements: append ``return locals()`` to capture assigned names for merging.
+
+        Returns:
+            tuple[list[ast.stmt], bool]: (wrapper body, is_expression)
+        """
         is_expression = len(tree.body) == 1 and isinstance(tree.body[0], ast.Expr)
         if is_expression:
             from typing import cast
@@ -1011,7 +1093,20 @@ class AsyncExecutor:
 
     # Helper utilities
     def _compute_global_diff(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-        """Compute globals diff, filtering system variables."""
+        """Compute a globals diff between two mappings, filtering engine/system variables.
+
+        Rules:
+        - Skips ``__builtins__``, ``__async_exec__``, ``asyncio``, dunder names, and keys in
+          ENGINE_INTERNALS (if import succeeds).
+        - Uses identity (``is``) comparison to detect updated bindings.
+
+        Args:
+            before: Snapshot of the global namespace before execution.
+            after:  Snapshot of the global namespace after execution.
+
+        Returns:
+            dict[str, Any]: Keys and values to merge into the live namespace.
+        """
         updates: dict[str, Any] = {}
         skip = {"__async_exec__", "asyncio", "__builtins__"}
 
@@ -1196,10 +1291,15 @@ class AsyncExecutor:
 
     def cleanup_coroutines(self) -> int:
         """
-        Clean up any pending coroutines (future implementation).
+        Close any tracked coroutines (best‑effort) and return the number cleaned.
+
+        Details:
+        - Uses weak references to avoid prolonging coroutine lifetimes.
+        - Calls ``close()`` on still‑alive coroutines when available.
+        - Ignores exceptions during cleanup; prunes dead weakrefs.
 
         Returns:
-            Number of coroutines cleaned
+            int: Count of coroutines closed during cleanup.
         """
         cleaned = 0
         dead_refs = []
@@ -1225,10 +1325,18 @@ class AsyncExecutor:
         return cleaned
 
     async def close(self) -> None:
-        """Explicitly close the executor and clean up resources.
+        """Close the executor and clean up resources.
 
-        This should be called when the executor is no longer needed.
-        Alternatively, use AsyncExecutor as a context manager.
+        Actions:
+        - Remove virtual filenames from ``linecache`` using a bounded LRU registry.
+        - Clear the internal LRU registry of fallback filenames.
+        - Run ``cleanup_coroutines()`` and log the number cleaned at debug level.
+
+        Use:
+        - Call explicitly when the executor is no longer needed, or via ``async with``.
+
+        Returns:
+            None
         """
         # Cleanup registered linecache entries (best-effort)
         # TODO(modes): Consider an opt-in mode to skip cleanup for post-mortem
