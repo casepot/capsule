@@ -442,11 +442,15 @@ class AsyncExecutor:
         try:
             if mode == ExecutionMode.TOP_LEVEL_AWAIT:
                 return await self._execute_top_level_await(code)
-            elif "await" in code:
-                # Edge cases like lambdas with await: force TLA path
-                return await self._execute_top_level_await(code)
-            else:
+            elif mode == ExecutionMode.SIMPLE_SYNC:
+                return await self._execute_simple_sync(code)
+            elif mode == ExecutionMode.ASYNC_DEF:
+                return await self._execute_async_definitions(code)
+            elif mode == ExecutionMode.BLOCKING_SYNC:
                 return await self._execute_with_threaded_executor(code)
+            else:
+                # UNKNOWN: prefer native simple path to surface SyntaxError naturally
+                return await self._execute_simple_sync(code)
 
         except Exception as e:
             self.stats["errors"] += 1
@@ -519,6 +523,92 @@ class AsyncExecutor:
         finally:
             # Always stop output pump
             await executor.stop_output_pump()
+
+    async def _execute_simple_sync(self, code: str) -> Any:
+        """Execute simple synchronous code natively.
+
+        Detect expression vs statements using ast.parse(..., mode='eval').
+        Execute against the live namespace mapping with merge-only semantics:
+        - Merge locals first
+        - Then merge global diffs computed against a pre-execution snapshot
+
+        Returns the expression value for eval; None for exec.
+        """
+        logger.debug(
+            "execute_simple_sync_start", execution_id=self.execution_id, code_length=len(code)
+        )
+
+        global_ns = self.namespace.namespace
+        pre_globals = dict(global_ns)
+
+        # Decide expression vs statements
+        is_expr = False
+        try:
+            ast.parse(code, mode="eval")
+            is_expr = True
+        except SyntaxError:
+            is_expr = False
+
+        if is_expr:
+            compiled = compile(code, "<session>", "eval", dont_inherit=False, optimize=0)
+            local_ns: dict[str, Any] = {}
+            value = eval(compiled, global_ns, local_ns)
+
+            if local_ns:
+                self.namespace.update_namespace(local_ns, source_context="async")
+
+            global_updates = self._compute_global_diff(pre_globals, global_ns)
+            if global_updates:
+                self.namespace.update_namespace(global_updates, source_context="async")
+
+            self.namespace.record_expression_result(value)
+
+            logger.debug(
+                "execute_simple_sync_done", execution_id=self.execution_id, result_type=type(value).__name__
+            )
+            return value
+        else:
+            compiled = compile(code, "<session>", "exec", dont_inherit=False, optimize=0)
+            local_ns: dict[str, Any] = {}
+            exec(compiled, global_ns, local_ns)
+
+            if local_ns:
+                self.namespace.update_namespace(local_ns, source_context="async")
+
+            global_updates = self._compute_global_diff(pre_globals, global_ns)
+            if global_updates:
+                self.namespace.update_namespace(global_updates, source_context="async")
+
+            logger.debug("execute_simple_sync_done", execution_id=self.execution_id, result_type="None")
+            return None
+
+    async def _execute_async_definitions(self, code: str) -> Any:
+        """Execute blocks that define async functions natively.
+
+        Always compile with mode='exec' and merge namespace updates
+        using the same locals-first, then global-diff strategy.
+        Returns None.
+        """
+        logger.debug(
+            "execute_async_def_start", execution_id=self.execution_id, code_length=len(code)
+        )
+
+        global_ns = self.namespace.namespace
+        pre_globals = dict(global_ns)
+
+        compiled = compile(code, "<session>", "exec", dont_inherit=False, optimize=0)
+        local_ns: dict[str, Any] = {}
+        exec(compiled, global_ns, local_ns)
+
+        if local_ns:
+            self.namespace.update_namespace(local_ns, source_context="async")
+
+        global_updates = self._compute_global_diff(pre_globals, global_ns)
+        if global_updates:
+            self.namespace.update_namespace(global_updates, source_context="async")
+
+        logger.debug("execute_async_def_done", execution_id=self.execution_id)
+        return None
 
     async def _execute_top_level_await(self, code: str) -> Any:
         """
