@@ -41,3 +41,24 @@ notable decisions. Update this file after each Phase 3 PR is validated and accep
 
 Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
 
+## PR 2 — AsyncExecutor: Native Simple Sync + Async Def
+
+- Native execution for simple sync and async-def defining code in `AsyncExecutor`:
+  - Added `_execute_simple_sync` for expressions and statement blocks compiled with `mode='eval'`/`'exec'`.
+  - Added `_execute_async_definitions` for blocks that define `async def` without awaiting.
+  - Routing updated: `SIMPLE_SYNC` → native, `ASYNC_DEF` → native, `BLOCKING_SYNC` → ThreadedExecutor, `TOP_LEVEL_AWAIT` unchanged.
+- Namespace semantics preserved (merge-only, identity stable):
+  - Bind to live mapping (`NamespaceManager.namespace`); merge locals first, then global diffs via `_compute_global_diff`.
+  - Never replace mapping; `ENGINE_INTERNALS` preserved via `NamespaceManager.update_namespace`.
+  - Expression results recorded via `record_expression_result`.
+- Delegation policy:
+  - Delegation remains only for detected blocking sync paths (no change to detection logic).
+- Tests updated/added:
+  - Removed assertions that simple sync delegates to `ThreadedExecutor`.
+  - Added native simple expression/statements tests; async-def defining code test ensures `__globals__` binds to live mapping and no delegation occurs.
+  - Mixed sequence test (sync → async → sync) validates correct results and stable namespace identity.
+  - Error propagation test on native path increments error stats.
+  - Positive BLOCKING_SYNC delegation test ensures ThreadedExecutor is invoked only for blocking sync.
+  - Global-diff skip-list behavior validated under AST fallback (no updates for `__async_exec__`, `asyncio`, `__builtins__`).
+  - UNKNOWN/SyntaxError surfaces naturally via native path and increments error counters.
+  - Coverage improved for AsyncExecutor unit scope (≈88%) by targeting routing branches and diff paths.
