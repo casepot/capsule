@@ -623,6 +623,43 @@ print(f"Cleaned {cleaned} coroutines")
 
 ---
 
+#### `AsyncExecutor.cancel_current()`
+
+Cooperatively cancel the current top‑level execution task (managed by the executor) without affecting user‑spawned background tasks.
+
+**Signature:**
+```python
+def cancel_current(self, *, reason: str | None = None) -> bool
+```
+
+**Parameters:**
+- `reason` (str | None): Optional human‑readable reason recorded in cancel notes/telemetry.
+
+**Returns:**
+- `bool`: True when a cancellation was issued to an active top‑level task; False when no active task exists or the loop is not running.
+
+**Behavior:**
+- Scope: Cancels only the task created by the executor for top‑level await or the AST wrapper; it does not enumerate or cancel user tasks.
+- Thread‑safety: If called from a non‑event‑loop thread, cancellation is scheduled via `loop.call_soon_threadsafe(task.cancel)` and returns immediately (non‑blocking). When called on the loop thread, it returns the boolean result of `task.cancel()`.
+- Telemetry: Increments `cancels_requested`; increments `cancels_effective` on success, or `cancels_noop` when nothing is running.
+- Exception notes: If cancellation propagates, `CancelledError` includes `execution_id`, execution mode, `cancel_reason` (when provided), `cancel_requested_at` timestamp, and a short code snippet.
+
+**Example:**
+```python
+# Start an execution
+task = asyncio.create_task(executor.execute("await asyncio.sleep(10)"))
+
+# Request cancellation from another thread
+import threading
+threading.Thread(target=lambda: executor.cancel_current(reason="user_request")).start()
+
+# Observe CancelledError
+with pytest.raises(asyncio.CancelledError):
+    await task
+```
+
+---
+
 ## Capability System API
 
 ### Capability Base Class

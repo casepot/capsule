@@ -132,6 +132,42 @@ class TestAsyncCancellation:
         assert ex.cleanup_coroutines() == 0
 
     @pytest.mark.asyncio
+    async def test_multiple_background_tasks_untouched(self):
+        ns = NamespaceManager()
+        ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="cancel-user-many")
+
+        # Create multiple background tasks
+        await ex.execute(
+            "import asyncio; bg1 = asyncio.create_task(asyncio.sleep(1)); bg2 = asyncio.create_task(asyncio.sleep(1))"
+        )
+        # Start a long-running top-level await and cancel it
+        run_task = asyncio.create_task(ex.execute("await asyncio.sleep(10)"))
+        await asyncio.sleep(0.01)
+        ex.cancel_current(reason="only_top_level_many")
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+        bg1 = ns.namespace.get("bg1")
+        bg2 = ns.namespace.get("bg2")
+        assert isinstance(bg1, asyncio.Task)
+        assert isinstance(bg2, asyncio.Task)
+        assert not bg1.cancelled()
+        assert not bg2.cancelled()
+
+        # Cleanup both background tasks
+        for t in (bg1, bg2):
+            try:
+                await asyncio.wait_for(t, timeout=1.0)
+            except asyncio.TimeoutError:
+                t.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await t
+            except asyncio.CancelledError:
+                pass
+
+        assert ex.cleanup_coroutines() == 0
+
+    @pytest.mark.asyncio
     async def test_cleanup_on_error_still_works(self):
         ns = NamespaceManager()
         ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="cancel-err-1")

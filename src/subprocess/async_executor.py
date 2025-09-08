@@ -74,7 +74,6 @@ class _CoroutineManager:
     """
 
     top_task: Optional[asyncio.Task] = None
-    top_coro_ref: Optional[weakref.ReferenceType[Any]] = None
     top_loop: Optional[asyncio.AbstractEventLoop] = None
     cancel_requested: bool = False
     cancel_reason: Optional[str] = None
@@ -82,7 +81,6 @@ class _CoroutineManager:
 
     def set_top(self, task: asyncio.Task, coro: Coroutine[Any, Any, Any]) -> None:
         self.top_task = task
-        self.top_coro_ref = weakref.ref(coro)
         try:
             self.top_loop = task.get_loop()
         except Exception:
@@ -97,8 +95,10 @@ class _CoroutineManager:
         if task is None or task.done():
             return False
 
-        # Default outcome if scheduling fails
-        effective = False
+        # Record cancel request metadata early for consistent visibility
+        self.cancel_requested = True
+        self.cancel_reason = reason
+        self.requested_at = time.time()
 
         # If we're on the same running loop, cancel directly to get accurate bool
         try:
@@ -107,46 +107,19 @@ class _CoroutineManager:
             current = None
 
         if loop is not None and current is loop:
-            effective = bool(task.cancel())
-        elif loop is not None:
-            # Schedule cancellation thread-safely and capture return value
-            result_future: _futures.Future[bool] = _futures.Future()
-
-            def _do_cancel() -> None:
-                try:
-                    result_future.set_result(bool(task.cancel()))
-                except Exception as _e:
-                    # Capture failure; treat as no-op
-                    try:
-                        result_future.set_result(False)
-                    except Exception:
-                        pass
-
+            return bool(task.cancel())
+        # Off-loop: schedule thread-safely only if loop is running
+        if loop is not None and getattr(loop, "is_running", lambda: False)():
             try:
-                loop.call_soon_threadsafe(_do_cancel)
-                # Wait briefly for scheduling to run and set result
-                effective = bool(result_future.result(timeout=0.5))
-            except _futures.TimeoutError:
-                # Assume cancellation scheduled; treat as effective
-                effective = True
+                loop.call_soon_threadsafe(task.cancel)
+                return True
             except Exception:
-                effective = False
-        else:
-            # No recorded loop; fall back to direct call (best-effort)
-            try:
-                effective = bool(task.cancel())
-            except Exception:
-                effective = False
-
-        # Record cancel request metadata
-        self.cancel_requested = True
-        self.cancel_reason = reason
-        self.requested_at = time.time()
-        return effective
+                return False
+        # No loop or not running; cannot safely cancel
+        return False
 
     def clear(self) -> None:
         self.top_task = None
-        self.top_coro_ref = None
         self.top_loop = None
         self.cancel_requested = False
         self.cancel_reason = None
