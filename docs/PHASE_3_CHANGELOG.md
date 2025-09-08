@@ -123,3 +123,26 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
     - Avoid relying on side effects within the same cell where functions are defined and used.
   - The optional AST transforms (def→async and lambda helper) do not reintroduce hoisting; they are
     independent and remain OFF by default.
+
+## PR 4 — Coroutine Lifecycle + Cancellation Management
+
+- Scope:
+  - Introduced an internal, lightweight coroutine manager to track the AsyncExecutor's top-level coroutine and wrapping task, enabling cooperative cancellation without touching user-launched background tasks.
+
+- Key changes:
+  - Top-level coroutine/task registration: when TLA (eval/exec) yields a coroutine or when executing the AST wrapper, the executor wraps it in an `asyncio.Task`, registers it as the current top-level, and also weakref-tracks the coroutine for leak guards.
+  - Added `AsyncExecutor.cancel_current(reason: str | None = None) -> bool` to cancel only the registered top-level task. Idempotent; returns False when nothing is running.
+  - Cancellation and timeout notes: `CancelledError` and `TimeoutError` are annotated with `execution_id`, `mode`, optional `cancel_reason`, an optional timestamp, and the first ~160 chars of code. AST fallback timeout path annotated for parity.
+  - Telemetry: added counters `cancels_requested`, `cancels_effective`, `cancels_noop`, `cancelled_errors`, and `coroutines_closed_on_cleanup`.
+  - Cleanup reliability: executor always clears the top-level registration and runs `cleanup_coroutines()` in `finally`. Cleanup now discards refs post-close so subsequent calls return 0.
+  - Thread-safety and responsiveness: off-loop cancellation uses `loop.call_soon_threadsafe(task.cancel)` without blocking the caller; if the loop is not running, `cancel_current()` is a no-op.
+
+- Tests (unit):
+  - TLA cancellation interrupts promptly (<100ms), raises `CancelledError` with notes, and does not increment `errors`.
+  - AST fallback cancellation mirrors TLA behavior under a forced fallback.
+  - No-op cancellation returns False and increments `cancels_noop` without affecting other counters.
+  - Background user tasks are not cancelled by `cancel_current()`; tests create a user task first, then cancel a long-running TLA.
+  - Cleanup still works on error paths; no coroutine weakrefs leak across executions.
+
+- Success criteria met:
+  - Cancelling an in-flight TLA/AST wrapper run interrupts promptly; `cleanup_coroutines()` returns 0 afterward; telemetry reflects requested/effective/no-op accurately.

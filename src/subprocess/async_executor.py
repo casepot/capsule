@@ -25,11 +25,13 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
-from typing import Any, Set
+from typing import Any, Set, Coroutine, Optional
+import concurrent.futures as _futures
 import weakref
 import linecache
 import re
@@ -61,6 +63,67 @@ class ExecutionMode(Enum):
     SIMPLE_SYNC = "simple_sync"
     UNKNOWN = "unknown"
 
+
+@dataclass
+class _CoroutineManager:
+    """Lightweight tracker for the executor's top-level coroutine/task.
+
+    Tracks exactly one top-level execution (the coroutine produced by TLA or the
+    AST wrapper) and provides a cooperative cancel() API. Never cancels or
+    enumerates user-created background tasks.
+    """
+
+    top_task: Optional[asyncio.Task] = None
+    top_loop: Optional[asyncio.AbstractEventLoop] = None
+    cancel_requested: bool = False
+    cancel_reason: Optional[str] = None
+    requested_at: Optional[float] = None
+
+    def set_top(self, task: asyncio.Task, coro: Coroutine[Any, Any, Any]) -> None:
+        self.top_task = task
+        try:
+            self.top_loop = task.get_loop()
+        except Exception:
+            self.top_loop = None
+        self.cancel_requested = False
+        self.cancel_reason = None
+        self.requested_at = None
+
+    def cancel(self, reason: str | None = None) -> bool:
+        task = self.top_task
+        loop = self.top_loop
+        if task is None or task.done():
+            return False
+
+        # Record cancel request metadata early for consistent visibility
+        self.cancel_requested = True
+        self.cancel_reason = reason
+        self.requested_at = time.time()
+
+        # If we're on the same running loop, cancel directly to get accurate bool
+        try:
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
+
+        if loop is not None and current is loop:
+            return bool(task.cancel())
+        # Off-loop: schedule thread-safely only if loop is running
+        if loop is not None and getattr(loop, "is_running", lambda: False)():
+            try:
+                loop.call_soon_threadsafe(task.cancel)
+                return True
+            except Exception:
+                return False
+        # No loop or not running; cannot safely cancel
+        return False
+
+    def clear(self) -> None:
+        self.top_task = None
+        self.top_loop = None
+        self.cancel_requested = False
+        self.cancel_reason = None
+        self.requested_at = None
 
 @dataclass
 class _DetectionPolicy:
@@ -220,6 +283,17 @@ class AsyncExecutor:
         }
         self.mode_counts = {mode: 0 for mode in ExecutionMode}
 
+        # Cancellation + cleanup telemetry
+        self.stats.update(
+            {
+                "cancels_requested": 0,
+                "cancels_effective": 0,
+                "cancels_noop": 0,
+                "cancelled_errors": 0,
+                "coroutines_closed_on_cleanup": 0,
+            }
+        )
+
         # Fallback AST transform policy flags (default OFF)
         # Allow env override only if args left at defaults (mirror cache style)
         # Resolve flags: explicit constructor args win; otherwise allow env override; default False
@@ -277,6 +351,9 @@ class AsyncExecutor:
         logger.info(
             "AsyncExecutor initialized", execution_id=execution_id, has_loop=self.loop is not None
         )
+
+        # Top-level coroutine manager
+        self._coro_manager = _CoroutineManager()
 
     def analyze_execution_mode(self, code: str) -> ExecutionMode:
         """
@@ -552,7 +629,16 @@ class AsyncExecutor:
             else:
                 # UNKNOWN: prefer native simple path to surface SyntaxError naturally
                 return await self._execute_simple_sync(code)
-
+        except asyncio.CancelledError:
+            # Cancellation is not an error; record and propagate
+            self.stats["cancelled_errors"] += 1
+            logger.debug(
+                "execute_cancelled",
+                execution_id=self.execution_id,
+                mode=mode.value,
+                cancel_reason=self._coro_manager.cancel_reason,
+            )
+            raise
         except Exception as e:
             self.stats["errors"] += 1
             logger.error(
@@ -561,7 +647,12 @@ class AsyncExecutor:
             raise
         finally:
             # Always cleanup coroutines after execution
+            try:
+                self._coro_manager.clear()
+            except Exception:
+                pass
             cleaned = self.cleanup_coroutines()
+            self.stats["coroutines_closed_on_cleanup"] = cleaned
             if cleaned > 0:
                 logger.debug(
                     "Cleaned coroutines after execution",
@@ -764,8 +855,15 @@ class AsyncExecutor:
 
             if is_coro_eval and asyncio.iscoroutine(value):
                 self._track_coroutine(value)
-                async with asyncio.timeout(self.tla_timeout):
-                    result = await value
+                task = asyncio.create_task(value)
+                self._coro_manager.set_top(task, value)
+                try:
+                    async with asyncio.timeout(self.tla_timeout):
+                        result = await task
+                except asyncio.CancelledError as e:
+                    # Annotate and propagate
+                    self._annotate_cancellation(e, code, mode="tla_eval")
+                    raise
             else:
                 result = value
 
@@ -802,8 +900,14 @@ class AsyncExecutor:
 
                 if is_coro_exec and asyncio.iscoroutine(value):
                     self._track_coroutine(value)
-                    async with asyncio.timeout(self.tla_timeout):
-                        result = await value
+                    task = asyncio.create_task(value)
+                    self._coro_manager.set_top(task, value)
+                    try:
+                        async with asyncio.timeout(self.tla_timeout):
+                            result = await task
+                    except asyncio.CancelledError as e:
+                        self._annotate_cancellation(e, code, mode="tla_exec")
+                        raise
                 else:
                     result = value
 
@@ -928,8 +1032,9 @@ class AsyncExecutor:
         # The function will have access to global_ns as its globals
         # Execute wrapper and merge results
         try:
-            async with asyncio.timeout(self.tla_timeout):
-                result = await self._run_wrapper_and_merge(async_func, global_ns, pre_globals, is_expression, code)
+            result = await self._run_wrapper_and_merge(
+                async_func, global_ns, pre_globals, is_expression, code
+            )
         except asyncio.TimeoutError as e:
             self._annotate_timeout(e, code)
             raise
@@ -1064,7 +1169,17 @@ class AsyncExecutor:
         results across all statement paths. If we adopt that policy, update the tests and
         document the trade-off in the spec.
         """
-        result = await async_func()
+        # Create and track the top-level coroutine produced by the wrapper
+        coro = async_func()
+        self._track_coroutine(coro)
+        task = asyncio.create_task(coro)
+        self._coro_manager.set_top(task, coro)
+        try:
+            async with asyncio.timeout(self.tla_timeout):
+                result = await task
+        except asyncio.CancelledError as e:
+            self._annotate_cancellation(e, code, mode="ast_wrapper")
+            raise
 
         if not is_expression:
             if isinstance(result, dict):
@@ -1142,6 +1257,22 @@ class AsyncExecutor:
                 add_note(f"Code snippet: {snippet}")
         except Exception:
             # Never fail on annotation
+            pass
+
+    def _annotate_cancellation(self, e: BaseException, code: str, *, mode: str) -> None:
+        """Annotate a CancelledError with execution context for observability."""
+        try:
+            add_note = getattr(e, "add_note", None)
+            if callable(add_note):
+                add_note(f"execution_id={self.execution_id}")
+                add_note(f"mode={mode}")
+                if self._coro_manager.cancel_reason:
+                    add_note(f"cancel_reason={self._coro_manager.cancel_reason}")
+                if self._coro_manager.requested_at:
+                    add_note(f"cancel_requested_at={self._coro_manager.requested_at}")
+                snippet = code[:160] + ("..." if len(code) > 160 else "")
+                add_note(f"code_snippet={snippet}")
+        except Exception:
             pass
 
     def _collect_safe_assigned_names(self, body: list[ast.stmt]) -> set[str]:
@@ -1289,6 +1420,26 @@ class AsyncExecutor:
             execution_id=self.execution_id,
         )
 
+    def cancel_current(self, *, reason: str | None = None) -> bool:
+        """Cancel the current top-level coroutine/task cooperatively.
+
+        Returns:
+            bool: True if a cancellation was issued to an active top-level task; False otherwise.
+        """
+        self.stats["cancels_requested"] += 1
+        effective = self._coro_manager.cancel(reason)
+        if effective:
+            self.stats["cancels_effective"] += 1
+        else:
+            self.stats["cancels_noop"] += 1
+        logger.info(
+            "cancel_current",
+            execution_id=self.execution_id,
+            effective=effective,
+            reason=reason,
+        )
+        return effective
+
     def cleanup_coroutines(self) -> int:
         """
         Close any tracked coroutines (best‑effort) and return the number cleaned.
@@ -1302,24 +1453,26 @@ class AsyncExecutor:
             int: Count of coroutines closed during cleanup.
         """
         cleaned = 0
-        dead_refs = []
+        to_discard: list[weakref.ReferenceType[Any]] = []
 
-        for coro_ref in self._pending_coroutines:
+        for coro_ref in list(self._pending_coroutines):
             coro = coro_ref()
             if coro is None:
-                # Reference is dead
-                dead_refs.append(coro_ref)
-            else:
-                try:
-                    close = getattr(coro, "close", None)
-                    if callable(close):
-                        close()
-                    cleaned += 1
-                except Exception:
-                    pass  # Already closed or running
+                to_discard.append(coro_ref)
+                continue
+            try:
+                close = getattr(coro, "close", None)
+                if callable(close):
+                    close()
+                cleaned += 1
+            except Exception:
+                # Already closed or running; still discard to avoid double-work later
+                pass
+            finally:
+                # We only track top-level coroutines; discard after cleanup attempt
+                to_discard.append(coro_ref)
 
-        # Remove dead references
-        for ref in dead_refs:
+        for ref in to_discard:
             self._pending_coroutines.discard(ref)
 
         return cleaned
