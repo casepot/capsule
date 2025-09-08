@@ -218,3 +218,34 @@ await boom()
 
         # No leaks
         assert ex.cleanup_coroutines() == 0
+
+    @pytest.mark.asyncio
+    async def test_concurrent_cross_thread_cancels(self):
+        ns = NamespaceManager()
+        ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="cancel-race-1")
+
+        # Start long-running top-level await
+        task = asyncio.create_task(ex.execute("await asyncio.sleep(10)"))
+        await asyncio.sleep(0.02)
+
+        # Issue many concurrent cancels from separate threads
+        N = 10
+        threads: list[threading.Thread] = []
+        for _ in range(N):
+            t = threading.Thread(target=lambda: ex.cancel_current(reason="race"))
+            t.start()
+            threads.append(t)
+        for t in threads:
+            t.join(timeout=1.0)
+
+        # Execution should be cancelled
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Telemetry should reflect all requests and sum to N (effective + noop)
+        assert ex.stats["cancels_requested"] >= N
+        total = ex.stats["cancels_effective"] + ex.stats["cancels_noop"]
+        assert total >= N
+
+        # No coroutine leaks
+        assert ex.cleanup_coroutines() == 0

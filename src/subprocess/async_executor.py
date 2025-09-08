@@ -1426,6 +1426,11 @@ class AsyncExecutor:
         Returns:
             bool: True if a cancellation was issued to an active top-level task; False otherwise.
         """
+        # Off-loop semantics: When called from a non-event-loop thread, we enqueue
+        # task.cancel() via loop.call_soon_threadsafe and return immediately (best-effort).
+        # In that case the return value indicates that scheduling was enqueued, not that
+        # cancellation has already taken effect. On the loop thread, we return the actual
+        # boolean from task.cancel().
         self.stats["cancels_requested"] += 1
         effective = self._coro_manager.cancel(reason)
         if effective:
