@@ -8,6 +8,7 @@ no coroutine leaks remain after execution.
 import asyncio
 import time
 import pytest
+import threading
 
 from src.subprocess.async_executor import AsyncExecutor
 from src.subprocess.namespace import NamespaceManager
@@ -39,10 +40,11 @@ class TestAsyncCancellation:
         assert any("execution_id=cancel-tla-1" in n for n in notes)
         assert any("cancel_reason=user_request" in n for n in notes)
 
-        # Telemetry: requested/effective incremented; errors unchanged
+        # Telemetry: requested/effective incremented; errors unchanged; cancelled_errors incremented
         assert ex.stats["cancels_requested"] == 1
         assert ex.stats["cancels_effective"] == 1
         assert ex.stats["errors"] == 0
+        assert ex.stats["cancelled_errors"] == 1
 
         # No coroutine leaks
         assert ex.cleanup_coroutines() == 0
@@ -79,6 +81,9 @@ class TestAsyncCancellation:
         notes = getattr(exc.value, "__notes__", [])
         assert any("execution_id=cancel-ast-1" in n for n in notes)
         assert any("cancel_reason=ast_fallback_cancel" in n for n in notes)
+
+        # Telemetry: cancelled_errors incremented
+        assert ex.stats["cancelled_errors"] == 1
 
         # No leaks
         assert ex.cleanup_coroutines() == 0
@@ -117,11 +122,12 @@ class TestAsyncCancellation:
         # Cleanup background task to avoid leaks in tests
         try:
             await asyncio.wait_for(bg, timeout=1.0)
-        except Exception:
-            try:
-                bg.cancel()
-            except Exception:
-                pass
+        except asyncio.TimeoutError:
+            bg.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await bg
+        except asyncio.CancelledError:
+            pass
 
         assert ex.cleanup_coroutines() == 0
 
@@ -142,4 +148,37 @@ await boom()
             await ex.execute(code)
 
         # Ensure cleanup leaves no pending refs
+        assert ex.cleanup_coroutines() == 0
+
+    @pytest.mark.asyncio
+    async def test_cross_thread_cancellation_is_thread_safe(self):
+        ns = NamespaceManager()
+        ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="cancel-xthread-1")
+
+        # Start a long-running top-level await
+        task = asyncio.create_task(ex.execute("await asyncio.sleep(10)"))
+        await asyncio.sleep(0.02)
+
+        # Issue cancel from a different thread
+        t0 = time.perf_counter()
+        th = threading.Thread(target=lambda: ex.cancel_current(reason="xthread"))
+        th.start()
+        th.join(timeout=1.0)
+
+        with pytest.raises(asyncio.CancelledError) as exc:
+            await task
+
+        latency = time.perf_counter() - t0
+        assert latency < 0.6, f"Cross-thread cancellation latency {latency:.3f}s exceeds 600ms"
+
+        # Notes include reason
+        notes = getattr(exc.value, "__notes__", [])
+        assert any("cancel_reason=xthread" in n for n in notes)
+
+        # Telemetry
+        assert ex.stats["cancels_requested"] >= 1
+        assert ex.stats["cancels_effective"] >= 1
+        assert ex.stats["cancelled_errors"] >= 1
+
+        # No leaks
         assert ex.cleanup_coroutines() == 0

@@ -364,7 +364,7 @@ class AsyncExecutor:
 - CoroutineManager (internal):
   - The executor maintains a lightweight internal manager that tracks exactly one “top‑level” execution at a time — the coroutine produced by TLA (eval/exec with `PyCF_ALLOW_TOP_LEVEL_AWAIT`) or by the AST wrapper (`__async_exec__`).
   - The coroutine is wrapped in an `asyncio.Task` and registered when execution begins; registration is cleared in `finally` regardless of success, error, or cancel.
-  - The manager exposes a cooperative `cancel()` that calls `task.cancel()` only on this top‑level task. It does not enumerate or cancel user‑created background tasks.
+  - The manager exposes a cooperative `cancel()` that targets only this top‑level task. It performs thread‑safe cancellation by scheduling `task.cancel()` via `loop.call_soon_threadsafe(...)` when invoked off the event‑loop thread. It does not enumerate or cancel user‑created background tasks.
 
 - Public cancel API:
   - `AsyncExecutor.cancel_current(reason: str | None = None) -> bool` cancels the in‑flight top‑level task if present and not done; returns True when a cancel was issued, otherwise False (idempotent/no‑op when idle).

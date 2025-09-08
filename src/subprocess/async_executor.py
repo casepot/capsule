@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 from typing import Any, Set, Coroutine, Optional
+import concurrent.futures as _futures
 import weakref
 import linecache
 import re
@@ -74,32 +75,79 @@ class _CoroutineManager:
 
     top_task: Optional[asyncio.Task] = None
     top_coro_ref: Optional[weakref.ReferenceType[Any]] = None
+    top_loop: Optional[asyncio.AbstractEventLoop] = None
     cancel_requested: bool = False
     cancel_reason: Optional[str] = None
     requested_at: Optional[float] = None
 
-    def set_top(self, task: asyncio.Task, coro: Coroutine[Any, Any, Any], reason: str | None = None) -> None:
+    def set_top(self, task: asyncio.Task, coro: Coroutine[Any, Any, Any]) -> None:
         self.top_task = task
         self.top_coro_ref = weakref.ref(coro)
+        try:
+            self.top_loop = task.get_loop()
+        except Exception:
+            self.top_loop = None
         self.cancel_requested = False
-        self.cancel_reason = reason
+        self.cancel_reason = None
         self.requested_at = None
 
     def cancel(self, reason: str | None = None) -> bool:
         task = self.top_task
+        loop = self.top_loop
         if task is None or task.done():
             return False
+
+        # Default outcome if scheduling fails
+        effective = False
+
+        # If we're on the same running loop, cancel directly to get accurate bool
         try:
-            task.cancel()
-        finally:
-            self.cancel_requested = True
-            self.cancel_reason = reason
-            self.requested_at = time.time()
-        return True
+            current = asyncio.get_running_loop()
+        except RuntimeError:
+            current = None
+
+        if loop is not None and current is loop:
+            effective = bool(task.cancel())
+        elif loop is not None:
+            # Schedule cancellation thread-safely and capture return value
+            result_future: _futures.Future[bool] = _futures.Future()
+
+            def _do_cancel() -> None:
+                try:
+                    result_future.set_result(bool(task.cancel()))
+                except Exception as _e:
+                    # Capture failure; treat as no-op
+                    try:
+                        result_future.set_result(False)
+                    except Exception:
+                        pass
+
+            try:
+                loop.call_soon_threadsafe(_do_cancel)
+                # Wait briefly for scheduling to run and set result
+                effective = bool(result_future.result(timeout=0.5))
+            except _futures.TimeoutError:
+                # Assume cancellation scheduled; treat as effective
+                effective = True
+            except Exception:
+                effective = False
+        else:
+            # No recorded loop; fall back to direct call (best-effort)
+            try:
+                effective = bool(task.cancel())
+            except Exception:
+                effective = False
+
+        # Record cancel request metadata
+        self.cancel_requested = True
+        self.cancel_reason = reason
+        self.requested_at = time.time()
+        return effective
 
     def clear(self) -> None:
         self.top_task = None
         self.top_coro_ref = None
+        self.top_loop = None
         self.cancel_requested = False
         self.cancel_reason = None
         self.requested_at = None
@@ -608,18 +656,9 @@ class AsyncExecutor:
             else:
                 # UNKNOWN: prefer native simple path to surface SyntaxError naturally
                 return await self._execute_simple_sync(code)
-        except asyncio.CancelledError as e:
-            # Cancellation is not an error; annotate and propagate
+        except asyncio.CancelledError:
+            # Cancellation is not an error; record and propagate
             self.stats["cancelled_errors"] += 1
-            if hasattr(e, "add_note"):
-                snippet = code[:160] + ("..." if len(code) > 160 else "")
-                e.add_note(f"execution_id={self.execution_id}")
-                e.add_note(f"mode={mode.value}")
-                if self._coro_manager.cancel_reason:
-                    e.add_note(f"cancel_reason={self._coro_manager.cancel_reason}")
-                if self._coro_manager.requested_at:
-                    e.add_note(f"cancel_requested_at={self._coro_manager.requested_at}")
-                e.add_note(f"code_snippet={snippet}")
             logger.debug(
                 "execute_cancelled",
                 execution_id=self.execution_id,
