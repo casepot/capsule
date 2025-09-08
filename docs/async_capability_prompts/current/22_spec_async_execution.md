@@ -359,6 +359,27 @@ class AsyncExecutor:
 
 ### Top-Level Await Implementation
 
+#### Coroutine Lifecycle and Cancellation (PR 4)
+
+- CoroutineManager (internal):
+  - The executor maintains a lightweight internal manager that tracks exactly one “top‑level” execution at a time — the coroutine produced by TLA (eval/exec with `PyCF_ALLOW_TOP_LEVEL_AWAIT`) or by the AST wrapper (`__async_exec__`).
+  - The coroutine is wrapped in an `asyncio.Task` and registered when execution begins; registration is cleared in `finally` regardless of success, error, or cancel.
+  - The manager exposes a cooperative `cancel()` that calls `task.cancel()` only on this top‑level task. It does not enumerate or cancel user‑created background tasks.
+
+- Public cancel API:
+  - `AsyncExecutor.cancel_current(reason: str | None = None) -> bool` cancels the in‑flight top‑level task if present and not done; returns True when a cancel was issued, otherwise False (idempotent/no‑op when idle).
+  - Cancellation is treated distinctly from errors. `CancelledError` is re‑raised after annotation and does not increment general error counters.
+
+- Exception notes and telemetry:
+  - On cancel/timeout, exceptions are annotated via `add_note` with keys: `execution_id`, `mode` (e.g., `tla_eval`, `tla_exec`, `ast_wrapper`), optional `cancel_reason`, optional `cancel_requested_at` timestamp, and a short `code_snippet` (≈160 chars).
+  - Stats include: `cancels_requested`, `cancels_effective`, `cancels_noop`, `cancelled_errors`, and `coroutines_closed_on_cleanup` (last cleanup count).
+
+- Cleanup semantics:
+  - All top‑level executions exit through a `finally` that clears the manager and runs weakref‑based `cleanup_coroutines()`.
+  - Cleanup closes any tracked coroutines (best‑effort) and discards references to ensure steady‑state `cleanup_coroutines() == 0` (helps detect leaks in tests).
+
+Policy: cooperative cancellation is scoped strictly to the executor‑owned top‑level task. User code that spawns background tasks (e.g., via `asyncio.create_task`) is not cancelled or enumerated by the executor and remains the user’s responsibility to manage or clean up.
+
 ```python
     async def _execute_top_level_await(self, code: str) -> Any:
         """
