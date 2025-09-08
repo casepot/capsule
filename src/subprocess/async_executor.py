@@ -107,13 +107,20 @@ class _CoroutineManager:
             current = None
 
         if loop is not None and current is loop:
-            return bool(task.cancel())
+            # If loop stopped in the window, treat as no-op
+            if getattr(loop, "is_running", lambda: False)():
+                return bool(task.cancel())
+            return False
         # Off-loop: schedule thread-safely only if loop is running
         if loop is not None and getattr(loop, "is_running", lambda: False)():
             try:
                 loop.call_soon_threadsafe(task.cancel)
                 return True
-            except Exception:
+            except Exception as _e:
+                try:
+                    logger.debug("cancel_schedule_failed", error=str(_e))
+                except Exception:
+                    pass
                 return False
         # No loop or not running; cannot safely cancel
         return False
@@ -1426,6 +1433,11 @@ class AsyncExecutor:
         Returns:
             bool: True if a cancellation was issued to an active top-level task; False otherwise.
         """
+        # Off-loop semantics: When called from a non-event-loop thread, we enqueue
+        # task.cancel() via loop.call_soon_threadsafe and return immediately (best-effort).
+        # In that case the return value indicates that scheduling was enqueued, not that
+        # cancellation has already taken effect. On the loop thread, we return the actual
+        # boolean from task.cancel().
         self.stats["cancels_requested"] += 1
         effective = self._coro_manager.cancel(reason)
         if effective:
