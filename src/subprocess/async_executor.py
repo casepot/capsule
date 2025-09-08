@@ -107,13 +107,20 @@ class _CoroutineManager:
             current = None
 
         if loop is not None and current is loop:
-            return bool(task.cancel())
+            # If loop stopped in the window, treat as no-op
+            if getattr(loop, "is_running", lambda: False)():
+                return bool(task.cancel())
+            return False
         # Off-loop: schedule thread-safely only if loop is running
         if loop is not None and getattr(loop, "is_running", lambda: False)():
             try:
                 loop.call_soon_threadsafe(task.cancel)
                 return True
-            except Exception:
+            except Exception as _e:
+                try:
+                    logger.debug("cancel_schedule_failed", error=str(_e))
+                except Exception:
+                    pass
                 return False
         # No loop or not running; cannot safely cancel
         return False
