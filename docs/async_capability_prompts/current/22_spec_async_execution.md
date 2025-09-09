@@ -381,6 +381,10 @@ class AsyncExecutor:
 
 Policy: cooperative cancellation is scoped strictly to the executor‑owned top‑level task. User code that spawns background tasks (e.g., via `asyncio.create_task`) is not cancelled or enumerated by the executor and remains the user’s responsibility to manage or clean up.
 
+Input and Hard‑Cancel Notes:
+- When cancellation occurs during `input()`, the thread‑based executor unblocks input waiters with an EOF (raising `EOFError`) and also cooperatively cancels traced code paths. Depending on timing, user code may observe either an `EOFError` or a `KeyboardInterrupt` and print different cancellation messages; both indicate successful cancellation.
+- For truly blocking synchronous operations (e.g., `time.sleep()`), cooperative cancellation cannot interrupt the system call. After a short grace window, the worker performs a hard cancel by exiting, and the session pool is expected to restart the worker. Feature tests validate that pool recovery provides a usable session after such a restart.
+
 ```python
     async def _execute_top_level_await(self, code: str) -> Any:
         """
