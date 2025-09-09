@@ -48,7 +48,10 @@ from .namespace import NamespaceManager
 
 logger = structlog.get_logger()
 
-# Max depth guard while resolving attribute/call/subscript chains
+# Max depth guard while resolving attribute/call/subscript chains.
+# Prevents infinite loops in pathological or adversarial ASTs (e.g., deeply nested
+# Attribute/Call/Subscript constructs). Typical chains are shallow (<= 5). A limit of 50
+# is generous for real code while keeping traversal bounded and predictable.
 _MAX_ATTRIBUTE_CHAIN_DEPTH = 50
 
 
@@ -728,7 +731,7 @@ class AsyncExecutor:
                 return
             if isinstance(t, ast.Name):
                 add_name(t.id, lineno)
-            elif isinstance(t, (ast.Tuple, ast.List)):  # noqa: UP038 keep tuple form for clarity
+            elif isinstance(t, (ast.Tuple, ast.List)):  # noqa: UP038 tuple form is standard
                 for elt in t.elts:
                     walk_target(elt, lineno)
             # Attributes/Subscripts do not bind simple names at module scope

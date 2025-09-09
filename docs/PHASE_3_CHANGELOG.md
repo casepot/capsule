@@ -180,3 +180,6 @@ Merge: PR #20 (`feat/phase3-pr5-blocking-io-detection`) merged into `master`.
 Future Improvements (not in PR 5):
 - Order-aware binding: Track the most-recent binding per name (including imports) and apply the overshadow guard only when the latest pre-call binding is a user binding. This would avoid cases where a later `import` rebinds the same name and should re-enable blocking classification for calls that follow the import.
 - Light provenance: Consider minimal origin tracking for names assigned from blocked modules (e.g., `x = requests.Session()`), enabling detection of `x.get(...)` patterns. Any approach must weigh performance and false-positive risks carefully and should remain opt-in or guarded by policy flags.
+
+Security considerations:
+- The overshadow guard reduces false positives but is not intended to resist deliberate evasion. Malicious code can shadow names or use dynamic imports/eval to bypass static heuristics. In security‑sensitive contexts, disable the guard and rely on subprocess isolation, timeouts, and resource limits; consider future strict modes that validate `sys.modules`.
