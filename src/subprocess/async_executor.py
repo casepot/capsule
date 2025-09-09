@@ -200,12 +200,12 @@ class AsyncExecutor:
 
     # Top-level await compile flag from Python's ast module
     # This flag enables top-level await in Python 3.8+
-    PyCF_ALLOW_TOP_LEVEL_AWAIT = getattr(ast, "PyCF_ALLOW_TOP_LEVEL_AWAIT", 0x2000)
+    PyCF_ALLOW_TOP_LEVEL_AWAIT: int = getattr(ast, "PyCF_ALLOW_TOP_LEVEL_AWAIT", 0x2000)
 
     # Blocking I/O indicators for execution mode detection
     # Deprecated: kept for backward-compatibility; superseded by _DetectionPolicy
-    BLOCKING_IO_MODULES = _DetectionPolicy().blocking_modules
-    BLOCKING_IO_CALLS = _DetectionPolicy().blocking_name_calls | {
+    BLOCKING_IO_MODULES: set[str] = _DetectionPolicy().blocking_modules
+    BLOCKING_IO_CALLS: set[str] = _DetectionPolicy().blocking_name_calls | {
         "sleep",
         "wait",
         "read",
@@ -261,14 +261,14 @@ class AsyncExecutor:
             - AST fallback transforms run only on the fallback path (after TLA compile fails).
             - Both transforms are disabled by default to preserve user code semantics.
         """
-        self.namespace = namespace_manager
-        self.transport = transport
-        self.execution_id = execution_id
-        self.tla_timeout = float(tla_timeout)
+        self.namespace: NamespaceManager = namespace_manager
+        self.transport: MessageTransport | None = transport
+        self.execution_id: str = execution_id
+        self.tla_timeout: float = float(tla_timeout)
 
         # Event loop management - never modify global loop
         # Don't try to get loop during init; get it when needed in execute()
-        self.loop = None  # Will be set when needed in async context
+        self.loop: asyncio.AbstractEventLoop | None = None  # Will be set when needed in async context
 
         # Coroutine tracking for cleanup (weakref-based)
         self._pending_coroutines: Set[weakref.ReferenceType[Any]] = set()
@@ -277,6 +277,7 @@ class AsyncExecutor:
         self._ast_cache: OrderedDict[str, ast.AST] = OrderedDict()
         # Cache size is configurable; None disables caching entirely
         # Allow env override if arg not explicitly provided
+        self._ast_cache_max_size: int | None
         if ast_cache_max_size is None:
             self._ast_cache_max_size = None
         else:
@@ -290,7 +291,7 @@ class AsyncExecutor:
                 self._ast_cache_max_size = int(ast_cache_max_size)
 
         # Execution statistics
-        self.stats = {
+        self.stats: dict[str, int] = {
             "executions": 0,
             "errors": 0,
             # Telemetry counters for detection
@@ -298,7 +299,7 @@ class AsyncExecutor:
             "detected_blocking_call": 0,
             "missed_attribute_chain": 0,
         }
-        self.mode_counts = {mode: 0 for mode in ExecutionMode}
+        self.mode_counts: dict[ExecutionMode, int] = {mode: 0 for mode in ExecutionMode}
 
         # Cancellation + cleanup telemetry
         self.stats.update(
@@ -312,7 +313,7 @@ class AsyncExecutor:
         )
 
         # Thread-safe updates for cancellation telemetry (cancel_current may be called off-loop)
-        self._stats_lock = threading.Lock()
+        self._stats_lock: threading.Lock = threading.Lock()
 
         # Fallback AST transform policy flags (default OFF)
         # Allow env override only if args left at defaults (mirror cache style)
@@ -320,13 +321,17 @@ class AsyncExecutor:
 
         if enable_def_await_rewrite is None:
             env_def = _os.getenv("ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE")
-            self._enable_def_await_rewrite = bool(env_def and env_def.lower() in {"1", "true", "yes"})
+            self._enable_def_await_rewrite: bool = bool(
+                env_def and env_def.lower() in {"1", "true", "yes"}
+            )
         else:
             self._enable_def_await_rewrite = bool(enable_def_await_rewrite)
 
         if enable_async_lambda_helper is None:
             env_lambda = _os.getenv("ASYNC_EXECUTOR_ENABLE_ASYNC_LAMBDA_HELPER")
-            self._enable_async_lambda_helper = bool(env_lambda and env_lambda.lower() in {"1", "true", "yes"})
+            self._enable_async_lambda_helper: bool = bool(
+                env_lambda and env_lambda.lower() in {"1", "true", "yes"}
+            )
         else:
             self._enable_async_lambda_helper = bool(enable_async_lambda_helper)
 
@@ -336,6 +341,7 @@ class AsyncExecutor:
         # Resolve fallback linecache capacity: when arg is None, use env
         # (ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX) or default 128; 0 retains no entries;
         # entries are cleaned up on close().
+        self._fallback_linecache_max_size: int
         if fallback_linecache_max_size is None:
             env_cap = _os.getenv("ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX")
             if env_cap is not None:
@@ -365,15 +371,15 @@ class AsyncExecutor:
             for k, v in blocking_methods_by_module.items():
                 merged[k] = set(v)
             policy.blocking_methods_by_module = merged
-        self._policy = policy
-        self._warn_on_blocking = bool(warn_on_blocking)
+        self._policy: _DetectionPolicy = policy
+        self._warn_on_blocking: bool = bool(warn_on_blocking)
 
         logger.info(
             "AsyncExecutor initialized", execution_id=execution_id, has_loop=self.loop is not None
         )
 
         # Top-level coroutine manager
-        self._coro_manager = _CoroutineManager()
+        self._coro_manager: _CoroutineManager = _CoroutineManager()
 
     def analyze_execution_mode(self, code: str) -> ExecutionMode:
         """
