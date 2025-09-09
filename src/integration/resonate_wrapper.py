@@ -51,6 +51,8 @@ def async_executor_factory(
     blocking_modules: set[str] | None = None,
     blocking_methods_by_module: dict[str, set[str]] | None = None,
     warn_on_blocking: bool | None = None,
+    enable_overshadow_guard: bool | None = None,
+    require_import_for_module_calls: bool | None = None,
     enable_def_await_rewrite: bool | None = None,
     enable_async_lambda_helper: bool | None = None,
     fallback_linecache_max_size: int | None = None,
@@ -69,6 +71,8 @@ def async_executor_factory(
         tla_timeout: Override timeout for awaited top-level coroutines.
         ast_cache_max_size: Optional AST cache size used by analysis.
         blocking_modules, blocking_methods_by_module, warn_on_blocking: Detection policy overrides.
+        enable_overshadow_guard: If False, disables the module‑scope overshadow guard.
+        require_import_for_module_calls: If False, does not require imports to flag module‑based attribute calls.
         enable_def_await_rewrite: If True, enables the AST fallback pre-transform that rewrites
             top-level `def` whose body contains `await` into `async def`. If False, disabled. If None
             (default), environment variable ASYNC_EXECUTOR_ENABLE_DEF_AWAIT_REWRITE ("1"/"true"/"yes")
@@ -112,6 +116,14 @@ def async_executor_factory(
         blocking_methods_by_module = getattr(cfg, "blocking_methods_by_module", None)
     if warn_on_blocking is None and cfg is not None:
         warn_on_blocking = getattr(cfg, "warn_on_blocking", True)
+    if enable_overshadow_guard is None and cfg is not None and hasattr(cfg, "enable_overshadow_guard"):
+        enable_overshadow_guard = bool(cfg.enable_overshadow_guard)
+    if (
+        require_import_for_module_calls is None
+        and cfg is not None
+        and hasattr(cfg, "require_import_for_module_calls")
+    ):
+        require_import_for_module_calls = bool(cfg.require_import_for_module_calls)
     # Thread fallback_linecache_max_size from config if not explicitly provided
     if (
         fallback_linecache_max_size is None
@@ -148,6 +160,12 @@ def async_executor_factory(
         blocking_modules=blocking_modules,
         blocking_methods_by_module=blocking_methods_by_module,
         warn_on_blocking=True if warn_on_blocking is None else bool(warn_on_blocking),
+        enable_overshadow_guard=enable_overshadow_guard
+        if enable_overshadow_guard is not None
+        else True,
+        require_import_for_module_calls=require_import_for_module_calls
+        if require_import_for_module_calls is not None
+        else True,
         enable_def_await_rewrite=enable_def_await_rewrite,
         enable_async_lambda_helper=enable_async_lambda_helper,
         fallback_linecache_max_size=fallback_linecache_max_size,

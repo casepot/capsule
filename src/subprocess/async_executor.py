@@ -512,26 +512,28 @@ class AsyncExecutor:
         return False
 
     def _contains_blocking_io(self, tree: ast.AST) -> bool:
-        """
-        Detect likely blocking synchronous I/O from the AST.
+        """Detect likely blocking synchronous I/O via static AST heuristics.
 
-        Heuristics:
-        - Maps import aliases to base modules (first segment) and flags direct imports
-          of configured blocking modules.
-        - Flags direct name calls such as ``open()``/``input()``.
-        - Resolves simple attribute/call/subscript chains to a base name (e.g., ``time.sleep``,
-          ``requests.get``, ``socket.socket().recv``) and checks the per‑module method allowlist.
+        Detects:
+        - Blocking imports: importing a base module in the policy marks code as blocking.
+        - Blocking name calls: direct calls such as ``open()`` and ``input()``.
+        - Aliased import calls: calls through imported names (e.g., ``from urllib.request import urlopen``).
+        - Attribute calls on blocked modules: resolves the leftmost base name of attribute chains
+          (e.g., ``time.sleep``, ``requests.get``, ``socket.socket().recv``, ``Path(...).read_text``)
+          and checks per‑module allowlists.
 
-        Configuration:
-        - Base modules, per‑module methods, and name‑calls are supplied by ``_DetectionPolicy``,
-          which may be overridden via constructor parameters.
+        Guards and configuration:
+        - Overshadow guard (module scope): when enabled, if a name (direct, alias, or base) was
+          rebound at module scope on an earlier line, the corresponding call is skipped from
+          blocking classification. Nodes missing ``lineno`` skip this comparison (unknown ordering).
+        - Import requirement for module calls: when enabled, attribute‑based calls are only
+          considered blocking if the base module (or its alias) was imported somewhere in the code.
 
         Limitations:
-        - Dynamic/importlib usage and complex expressions may be missed.
-        - Heuristic may produce false positives/negatives; intended for coarse routing.
-
-        Args:
-            tree: AST tree to analyze
+        - Module scope only: function‑scope rebindings are not tracked by the guard.
+        - Unknown locations: AST nodes with missing ``lineno`` skip overshadow comparison.
+        - Heuristic breadth: does not track object provenance (e.g., ``x = requests.Session(); x.get``)
+          and may miss patterns beyond the base‑name rule.
 
         Returns:
             bool: True if any blocking import/call is detected; otherwise False.
@@ -706,7 +708,9 @@ class AsyncExecutor:
             ):
                 bindings[name] = lineno
 
-        def walk_target(t: ast.AST, lineno: int) -> None:
+        def walk_target(t: ast.AST, lineno: int | None) -> None:
+            if lineno is None:
+                return
             if isinstance(t, ast.Name):
                 add_name(t.id, lineno)
             elif isinstance(t, (ast.Tuple, ast.List)):  # noqa: UP038 keep tuple form for clarity
@@ -718,15 +722,16 @@ class AsyncExecutor:
         # Only consider top-level statements in order
         if isinstance(tree, ast.Module):
             for stmt in tree.body:
-                # Use explicit default; no need for second fallback
-                lineno = getattr(stmt, "lineno", 0)
+                # Determine line; if missing, skip overshadow accounting for this binding
+                lineno: int | None = getattr(stmt, "lineno", None)
                 if isinstance(stmt, ast.Assign):
                     for tgt in stmt.targets:
                         walk_target(tgt, lineno)
                 elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):  # noqa: UP038 tuple form
                     walk_target(stmt.target, lineno)
                 elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # noqa: UP038
-                    add_name(stmt.name, lineno)
+                    if lineno is not None:
+                        add_name(stmt.name, lineno)
                 elif isinstance(stmt, (ast.For, ast.AsyncFor)):  # noqa: UP038 tuple form
                     walk_target(stmt.target, lineno)
                 elif isinstance(stmt, (ast.With, ast.AsyncWith)):  # noqa: UP038 tuple form
@@ -739,7 +744,11 @@ class AsyncExecutor:
                     for handler in stmt.handlers:
                         name = getattr(handler, "name", None)
                         if isinstance(name, str) and name:
-                            add_name(name, getattr(handler, "lineno", lineno))
+                            nlineno: int | None = getattr(handler, "lineno", None)
+                            if nlineno is None:
+                                nlineno = lineno
+                            if nlineno is not None:
+                                add_name(name, nlineno)
         return bindings
 
     async def execute(self, code: str) -> Any:

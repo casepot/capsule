@@ -104,11 +104,11 @@ def f():
         assert ex.analyze_execution_mode(code) == ExecutionMode.BLOCKING_SYNC
 
     def test_non_module_base_chain_not_flagged(self):
-        # Assigning a session to a name does not mark the name as module-derived; heuristic remains conservative
+        # Assigning a non-module object to a name and calling an attribute is not flagged
+        # (require_import_for_module_calls=True by default; and base name is not a blocking module)
         ex = self.make_executor()
         code = """
-import requests
-client = requests.Session()
+client = object()
 client.get('http://example.com')
 """
         assert ex.analyze_execution_mode(code) == ExecutionMode.SIMPLE_SYNC
