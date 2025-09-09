@@ -22,6 +22,27 @@ Promise‑first integration: The durable layer MUST prefer promise flows (`ctx.p
 - Error semantics: the bridge rejects on `ErrorMessage` with structured JSON; durable functions raise with `add_note` context.
 - Timeout semantics: bridge rejections include context (`capability`, `execution_id`, `request_id`, `timeout`).
 
+## Phase 3 Updates (PR 5)
+
+Blocking I/O detection was refined to reduce false positives and expose observability/config controls.
+
+- Constructor flags (new):
+  - `enable_overshadow_guard: bool = True`
+    - If a name that matches a blocking module/function is rebound at module scope before a call (e.g., `requests = object(); requests.get(...)`), the call is not classified as blocking.
+    - Limitation: guard operates at module scope only; function‑scope rebindings are not tracked.
+  - `require_import_for_module_calls: bool = True`
+    - Attribute‑based calls are only considered blocking if the base module (or its alias) was imported somewhere in the code. Prevents accidental matches on unrelated names.
+  - `warn_on_blocking: bool = True` (existing)
+    - Info/warning logs for detected blocking imports/calls are gated by this flag.
+
+- Telemetry (counters):
+  - Existing: `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain`.
+  - New: `overshadow_guard_skips` — increments when a would‑be blocking call is skipped by the overshadow guard.
+
+- Detection notes:
+  - Alias resolution and deep attribute chains continue to be supported (e.g., `socket.socket().recv`, `Path('f').read_text`).
+  - Import of a blocked module alone still classifies as `BLOCKING_SYNC` (coarse routing heuristic).
+
 ## Technical Foundation
 
 ### Core Discovery: PyCF_ALLOW_TOP_LEVEL_AWAIT
