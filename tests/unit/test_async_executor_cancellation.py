@@ -187,6 +187,27 @@ await boom()
         assert ex.cleanup_coroutines() == 0
 
     @pytest.mark.asyncio
+    async def test_double_cancel_idempotent(self):
+        ns = NamespaceManager()
+        ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="cancel-idem-1")
+
+        task = asyncio.create_task(ex.execute("await asyncio.sleep(10)"))
+        await asyncio.sleep(0.01)
+        first = ex.cancel_current(reason="first")
+        second = ex.cancel_current(reason="second")
+
+        assert first is True
+        assert second is False
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        # Telemetry should reflect 2 requests == effective + noop
+        total = ex.stats["cancels_effective"] + ex.stats["cancels_noop"]
+        assert ex.stats["cancels_requested"] == 2
+        assert total == 2
+
+    @pytest.mark.asyncio
     async def test_cross_thread_cancellation_is_thread_safe(self):
         ns = NamespaceManager()
         ex = AsyncExecutor(namespace_manager=ns, transport=None, execution_id="cancel-xthread-1")
@@ -244,9 +265,10 @@ await boom()
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        # Telemetry: at least one effective or noop recorded
+        # Telemetry: requested equals sum of effective + noop and covers all threads
         total = ex.stats["cancels_effective"] + ex.stats["cancels_noop"]
-        assert total >= 1
+        assert ex.stats["cancels_requested"] >= N
+        assert total == ex.stats["cancels_requested"]
 
         # No coroutine leaks
         assert ex.cleanup_coroutines() == 0
