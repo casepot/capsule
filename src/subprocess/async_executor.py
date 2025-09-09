@@ -31,7 +31,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
 from typing import Any, Set, Coroutine, Optional
-import concurrent.futures as _futures
 import weakref
 import linecache
 import re
@@ -43,7 +42,7 @@ import threading
 from .executor import ThreadedExecutor
 from .namespace import NamespaceManager
 from ..protocol.transport import MessageTransport
-from types import TracebackType
+from types import TracebackType, CodeType
 
 logger = structlog.get_logger()
 
@@ -74,13 +73,13 @@ class _CoroutineManager:
     enumerates user-created background tasks.
     """
 
-    top_task: Optional[asyncio.Task] = None
+    top_task: Optional[asyncio.Task[Any]] = None
     top_loop: Optional[asyncio.AbstractEventLoop] = None
     cancel_requested: bool = False
     cancel_reason: Optional[str] = None
     requested_at: Optional[float] = None
 
-    def set_top(self, task: asyncio.Task, coro: Coroutine[Any, Any, Any]) -> None:
+    def set_top(self, task: asyncio.Task[Any], coro: Coroutine[Any, Any, Any]) -> None:
         self.top_task = task
         try:
             self.top_loop = task.get_loop()
@@ -791,7 +790,7 @@ class AsyncExecutor:
             return value
         else:
             compiled = compile(code, "<session>", "exec", dont_inherit=False, optimize=0)
-            local_ns: dict[str, Any] = {}
+            local_ns = {}
             exec(compiled, global_ns, local_ns)
 
             if local_ns:
@@ -1142,8 +1141,8 @@ class AsyncExecutor:
             origin = expr_node.value if hasattr(expr_node, "value") else expr_node
             ast.copy_location(ret, origin)
             if hasattr(origin, "end_lineno"):
-                ret.end_lineno = origin.end_lineno  # type: ignore[attr-defined]
-                ret.end_col_offset = getattr(origin, "end_col_offset", 0)  # type: ignore[attr-defined]
+                ret.end_lineno = origin.end_lineno
+                ret.end_col_offset = getattr(origin, "end_col_offset", 0)
             return [ret], True
         else:
             body = list(tree.body)
@@ -1154,12 +1153,12 @@ class AsyncExecutor:
             if origin_stmt is not None:
                 ast.copy_location(ret_stmt, origin_stmt)
                 if hasattr(origin_stmt, "end_lineno"):
-                    ret_stmt.end_lineno = origin_stmt.end_lineno  # type: ignore[attr-defined]
-                    ret_stmt.end_col_offset = getattr(origin_stmt, "end_col_offset", 0)  # type: ignore[attr-defined]
+                    ret_stmt.end_lineno = origin_stmt.end_lineno
+                    ret_stmt.end_col_offset = getattr(origin_stmt, "end_col_offset", 0)
             body.append(ret_stmt)
             return body, False
 
-    def _compile_and_register(self, code: str, module: ast.Module, filename: str):
+    def _compile_and_register(self, code: str, module: ast.Module, filename: str) -> CodeType:
         """Fix locations, compile with filename, and register source in linecache (LRU-managed)."""
         ast.fix_missing_locations(module)
         compiled = compile(module, filename, "exec")
@@ -1259,7 +1258,8 @@ class AsyncExecutor:
                 error=str(_e),
                 execution_id=self.execution_id,
             )
-            _engine_internals = set()
+            from typing import cast
+            _engine_internals = cast(set[str], set())
 
         for key, value in after.items():
             if key in skip or key in _engine_internals:
@@ -1310,7 +1310,8 @@ class AsyncExecutor:
                 error=str(_e),
                 execution_id=self.execution_id,
             )
-            _engine_internals = set()
+            from typing import cast
+            _engine_internals = cast(set[str], set())
 
         names: set[str] = set()
         for node in body:
@@ -1599,7 +1600,7 @@ class AsyncExecutor:
             else:
                 self._fallback_linecache_keys[filename] = None
             cap = self._fallback_linecache_max_size
-            if isinstance(cap, int) and cap >= 0:
+            if cap >= 0:
                 while len(self._fallback_linecache_keys) > cap:
                     old, _ = self._fallback_linecache_keys.popitem(last=False)
                     try:
