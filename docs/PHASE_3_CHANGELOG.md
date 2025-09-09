@@ -146,3 +146,40 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
 
 - Success criteria met:
   - Cancelling an in-flight TLA/AST wrapper run interrupts promptly; `cleanup_coroutines()` returns 0 afterward; telemetry reflects requested/effective/no-op accurately.
+
+## PR 5 — Blocking I/O Detection Refinements + Telemetry
+
+- Scope:
+  - Broaden blocking I/O detection while reducing false positives via overshadowing guards and an import requirement for module-based calls.
+  - Keep alias and deep attribute-chain resolution; expose config toggles and structured counters.
+
+- Key changes (src/subprocess/async_executor.py):
+  - Added `enable_overshadow_guard: bool = True`:
+    - Skips blocking classification when a base/alias/direct name has been rebound at module scope before the call (e.g., `requests = object(); requests.get(...)`).
+    - Guard applies to direct name calls, aliased calls, and attribute chains.
+  - Added `require_import_for_module_calls: bool = True`:
+    - Attribute-based calls (e.g., `mod.func()`) only considered blocking if the base module or alias was imported in the code. Prevents false positives from coincidental names.
+  - Telemetry: retained `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain` and added `overshadow_guard_skips` for observability.
+  - Implementation details:
+    - Collect earliest top-level bindings with `_collect_top_level_bindings(tree)` to power overshadow line checks (lineno-based heuristic, module scope). When an AST node has no line number, the guard skips overshadow comparison (treated as unknown position) rather than using a sentinel.
+    - Continue to resolve alias maps for `import`/`from ... import ... as ...` and resolve attribute-chain bases.
+    - Import presence still marks BLOCKING_SYNC when base module is in the policy, preserving existing behavior.
+
+- Tests (unit):
+  - Added `tests/unit/test_async_executor_detection_breadth.py` covering:
+    - Overshadowing skip cases that should not detect blocking (bare name matches and deep chains), and overshadow after import where import-based detection remains.
+    - Positive controls: requests/socket/urllib/os/pathlib calls and deep attribute chains remain detected.
+    - Telemetry counters for `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain`; `overshadow_guard_skips` observed when applicable.
+    - Config validation: default `require_import_for_module_calls=True` suppresses unimported `requests.get(...)`; overriding `blocking_methods_by_module` is respected (e.g., `os.stat`).
+
+- Success criteria:
+  - Detection continues to cover common patterns with fewer false positives, overshadowing guards are effective, config toggles work, and counters increment as expected.
+
+Merge: PR #20 (`feat/phase3-pr5-blocking-io-detection`) merged into `master`.
+
+Future Improvements (not in PR 5):
+- Order-aware binding: Track the most-recent binding per name (including imports) and apply the overshadow guard only when the latest pre-call binding is a user binding. This would avoid cases where a later `import` rebinds the same name and should re-enable blocking classification for calls that follow the import.
+- Light provenance: Consider minimal origin tracking for names assigned from blocked modules (e.g., `x = requests.Session()`), enabling detection of `x.get(...)` patterns. Any approach must weigh performance and false-positive risks carefully and should remain opt-in or guarded by policy flags.
+
+Security considerations:
+- The overshadow guard reduces false positives but is not intended to resist deliberate evasion. Malicious code can shadow names or use dynamic imports/eval to bypass static heuristics. In security‑sensitive contexts, disable the guard and rely on subprocess isolation, timeouts, and resource limits; consider future strict modes that validate `sys.modules`.

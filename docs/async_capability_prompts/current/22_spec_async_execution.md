@@ -22,6 +22,41 @@ Promise‑first integration: The durable layer MUST prefer promise flows (`ctx.p
 - Error semantics: the bridge rejects on `ErrorMessage` with structured JSON; durable functions raise with `add_note` context.
 - Timeout semantics: bridge rejections include context (`capability`, `execution_id`, `request_id`, `timeout`).
 
+## Phase 3 Updates (PR 5)
+
+Blocking I/O detection was refined to reduce false positives and expose observability/config controls.
+
+- Constructor flags (new):
+  - `enable_overshadow_guard: bool = True`
+    - If a name that matches a blocking module/function is rebound at module scope before a call (e.g., `requests = object(); requests.get(...)`), the call is not classified as blocking.
+    - Limitation: guard operates at module scope only; function‑scope rebindings are not tracked.
+  - `require_import_for_module_calls: bool = True`
+    - Attribute‑based calls are only considered blocking if the base module (or its alias) was imported somewhere in the code. Prevents accidental matches on unrelated names.
+  - `warn_on_blocking: bool = True` (existing)
+    - Info/warning logs for detected blocking imports/calls are gated by this flag.
+
+- Telemetry (counters):
+  - Existing: `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain`.
+  - New: `overshadow_guard_skips` — increments when a would‑be blocking call is skipped by the overshadow guard.
+
+- Detection notes:
+  - Alias resolution and deep attribute chains continue to be supported (e.g., `socket.socket().recv`, `Path('f').read_text`).
+  - Import of a blocked module alone still classifies as `BLOCKING_SYNC` (coarse routing heuristic).
+  - Line‑number heuristic: if an AST call node has no `lineno`, overshadow comparison is skipped (treated as unknown ordering).
+
+### Known Limitations and Possible Extensions
+
+- Module scope only: Overshadowing is tracked at module scope; function‑scope rebindings are not considered. This is a conscious trade‑off for simplicity and performance.
+- Base‑name heuristic only: The detector does not currently track object provenance. Calls on variables that were assigned from blocked modules (e.g., `s = requests.Session(); s.get(...)`) are not flagged by the base‑name rule.
+- Future—Order‑aware binding (rebindings): Consider tracking the most‑recent binding per name (including imports) and applying the overshadow guard only when the latest pre‑call binding is a user binding. This would avoid guard suppression when a later `import` should reclassify the name as module‑derived.
+- Future—Light provenance: Consider minimal origin tracking to mark names assigned from blocked modules (e.g., `x = requests.Session()`), allowing detection of `x.get(...)` patterns. Any approach must balance precision and performance, and should likely be guarded behind a configurable policy toggle.
+
+### Security Considerations
+
+- The overshadow guard is designed to reduce false positives for ordinary code and is not a security boundary. Malicious code can intentionally shadow names (e.g., `requests = object()`) or use dynamic imports/eval/exec to evade static heuristics.
+- In security‑sensitive contexts, consider disabling the overshadow guard (`enable_overshadow_guard=False`) and rely on isolation, resource limits, and cancellation timeouts provided by the Subprocess‑Isolated Execution Service.
+- Future strict mode options could validate module authenticity at runtime (e.g., via `sys.modules`) or disable all name‑based allowances at the cost of more false positives.
+
 ## Technical Foundation
 
 ### Core Discovery: PyCF_ALLOW_TOP_LEVEL_AWAIT

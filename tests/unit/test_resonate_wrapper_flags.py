@@ -38,6 +38,50 @@ def test_factory_threads_transform_flags():
 
 
 @pytest.mark.unit
+def test_factory_threads_detection_flags_from_config():
+    class Cfg:
+        def __init__(self):
+            self.enable_overshadow_guard = False
+            self.require_import_for_module_calls = False
+
+    class Ctx:
+        def __init__(self):
+            self.execution_id = "factory-detect-flags-config"
+            self.config = Cfg()
+
+    ns = NamespaceManager()
+    ex = async_executor_factory(ctx=Ctx(), namespace_manager=ns, transport=None)
+
+    assert getattr(ex, "_enable_overshadow_guard") is False
+    assert getattr(ex, "_require_import_for_module_calls") is False
+
+
+@pytest.mark.unit
+def test_factory_param_overrides_detection_flags():
+    class Cfg:
+        def __init__(self):
+            self.enable_overshadow_guard = True
+            self.require_import_for_module_calls = True
+
+    class Ctx:
+        def __init__(self):
+            self.execution_id = "factory-detect-flags-param"
+            self.config = Cfg()
+
+    ns = NamespaceManager()
+    ex = async_executor_factory(
+        ctx=Ctx(),
+        namespace_manager=ns,
+        transport=None,
+        enable_overshadow_guard=False,
+        require_import_for_module_calls=False,
+    )
+
+    assert getattr(ex, "_enable_overshadow_guard") is False
+    assert getattr(ex, "_require_import_for_module_calls") is False
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_factory_flags_trigger_fallback_and_counters(monkeypatch):
     class Cfg2:
