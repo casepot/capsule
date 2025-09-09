@@ -42,6 +42,7 @@ Blocking I/O detection was refined to reduce false positives and expose observab
 - Detection notes:
   - Alias resolution and deep attribute chains continue to be supported (e.g., `socket.socket().recv`, `Path('f').read_text`).
   - Import of a blocked module alone still classifies as `BLOCKING_SYNC` (coarse routing heuristic).
+  - Line‑number heuristic: if an AST call node has no `lineno`, overshadow comparison is skipped (treated as unknown ordering).
 
 ## Technical Foundation
 

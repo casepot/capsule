@@ -72,9 +72,16 @@ time.sleep(0.01)
         # Ensure logger warnings/infos are not emitted when warn_on_blocking=False
         ex = AsyncExecutor(namespace_manager=NamespaceManager(), transport=None, execution_id="det-logs", warn_on_blocking=False)
         from src.subprocess import async_executor as ae_mod
-        mocked_logger = type("L", (), {"warning": lambda *a, **k: (_ for _ in ()).throw(AssertionError("warning called")),
-                                         "info": lambda *a, **k: (_ for _ in ()).throw(AssertionError("info called")),
-                                         "debug": lambda *a, **k: None})()
+        import pytest
+        mocked_logger = type(
+            "L",
+            (),
+            {
+                "warning": lambda *a, **k: pytest.fail("warning called"),
+                "info": lambda *a, **k: pytest.fail("info called"),
+                "debug": lambda *a, **k: None,
+            },
+        )()
         monkeypatch.setattr(ae_mod, "logger", mocked_logger, raising=True)
         # This includes both import and attribute call paths; neither should log when disabled
         code = """
@@ -83,6 +90,28 @@ requests.get('http://example.com')
 """
         # Should still detect BLOCKING_SYNC but not emit logs
         assert ex.analyze_execution_mode(code) == ExecutionMode.BLOCKING_SYNC
+
+    def test_function_scope_overshadow_does_not_suppress(self):
+        # Overshadowing inside a function is not considered by the module-scope guard
+        ex = self.make_executor()
+        code = """
+import requests
+def f():
+    requests = object()
+    requests.get('http://example.com')
+"""
+        # Even though the function rebinds 'requests', import presence + inner call still classify
+        assert ex.analyze_execution_mode(code) == ExecutionMode.BLOCKING_SYNC
+
+    def test_non_module_base_chain_not_flagged(self):
+        # Assigning a session to a name does not mark the name as module-derived; heuristic remains conservative
+        ex = self.make_executor()
+        code = """
+import requests
+client = requests.Session()
+client.get('http://example.com')
+"""
+        assert ex.analyze_execution_mode(code) == ExecutionMode.SIMPLE_SYNC
 
     # ----------------- Positive controls: should detect blocking -----------------
     def test_attribute_calls_on_blocking_modules(self):

@@ -161,7 +161,7 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
     - Attribute-based calls (e.g., `mod.func()`) only considered blocking if the base module or alias was imported in the code. Prevents false positives from coincidental names.
   - Telemetry: retained `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain` and added `overshadow_guard_skips` for observability.
   - Implementation details:
-    - Collect earliest top-level bindings with `_collect_top_level_bindings(tree)` to power overshadow line checks (lineno-based heuristic, module scope).
+    - Collect earliest top-level bindings with `_collect_top_level_bindings(tree)` to power overshadow line checks (lineno-based heuristic, module scope). When an AST node has no line number, the guard skips overshadow comparison (treated as unknown position) rather than using a sentinel.
     - Continue to resolve alias maps for `import`/`from ... import ... as ...` and resolve attribute-chain bases.
     - Import presence still marks BLOCKING_SYNC when base module is in the policy, preserving existing behavior.
 

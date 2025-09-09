@@ -581,8 +581,13 @@ class AsyncExecutor:
                         # Overshadow guard: if name was rebound before this call, skip
                         if self._enable_overshadow_guard:
                             bind_line = binding_lineno_by_name.get(fn)
-                            call_line = getattr(node, "lineno", 10**9)
-                            if bind_line is not None and bind_line < call_line:
+                            call_line = getattr(node, "lineno", None)
+                            # If call has no line number, skip overshadow check
+                            if (
+                                bind_line is not None
+                                and call_line is not None
+                                and bind_line < call_line
+                            ):
                                 self.stats["overshadow_guard_skips"] += 1
                                 logger.debug(
                                     "overshadow_skip_name_call",
@@ -606,8 +611,12 @@ class AsyncExecutor:
                         # Overshadow guard for alias names
                         if self._enable_overshadow_guard:
                             bind_line = binding_lineno_by_name.get(fn)
-                            call_line = getattr(node, "lineno", 10**9)
-                            if bind_line is not None and bind_line < call_line:
+                            call_line = getattr(node, "lineno", None)
+                            if (
+                                bind_line is not None
+                                and call_line is not None
+                                and bind_line < call_line
+                            ):
                                 self.stats["overshadow_guard_skips"] += 1
                                 logger.debug(
                                     "overshadow_skip_alias_call",
@@ -635,8 +644,12 @@ class AsyncExecutor:
                         # Overshadow guard: if base rebinding occurred before call, skip
                         if self._enable_overshadow_guard:
                             bind_line = binding_lineno_by_name.get(base_name)
-                            call_line = getattr(node, "lineno", 10**9)
-                            if bind_line is not None and bind_line < call_line:
+                            call_line = getattr(node, "lineno", None)
+                            if (
+                                bind_line is not None
+                                and call_line is not None
+                                and bind_line < call_line
+                            ):
                                 self.stats["overshadow_guard_skips"] += 1
                                 logger.debug(
                                     "overshadow_skip_attr_call",
@@ -687,6 +700,7 @@ class AsyncExecutor:
         """
 
         def add_name(name: str, lineno: int) -> None:
+            # Skip dunder names (engine/system internals), not user overshadowing
             if name and not name.startswith("__") and (
                 name not in bindings or lineno < bindings[name]
             ):
@@ -695,7 +709,7 @@ class AsyncExecutor:
         def walk_target(t: ast.AST, lineno: int) -> None:
             if isinstance(t, ast.Name):
                 add_name(t.id, lineno)
-            elif isinstance(t, ast.Tuple | ast.List):
+            elif isinstance(t, (ast.Tuple, ast.List)):  # noqa: UP038 keep tuple form for clarity
                 for elt in t.elts:
                     walk_target(elt, lineno)
             # Attributes/Subscripts do not bind simple names at module scope
@@ -704,17 +718,18 @@ class AsyncExecutor:
         # Only consider top-level statements in order
         if isinstance(tree, ast.Module):
             for stmt in tree.body:
-                lineno = getattr(stmt, "lineno", 0) or 0
+                # Use explicit default; no need for second fallback
+                lineno = getattr(stmt, "lineno", 0)
                 if isinstance(stmt, ast.Assign):
                     for tgt in stmt.targets:
                         walk_target(tgt, lineno)
-                elif isinstance(stmt, ast.AnnAssign | ast.AugAssign):
+                elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):  # noqa: UP038 tuple form
                     walk_target(stmt.target, lineno)
-                elif isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):  # noqa: UP038
                     add_name(stmt.name, lineno)
-                elif isinstance(stmt, ast.For | ast.AsyncFor):
+                elif isinstance(stmt, (ast.For, ast.AsyncFor)):  # noqa: UP038 tuple form
                     walk_target(stmt.target, lineno)
-                elif isinstance(stmt, ast.With | ast.AsyncWith):
+                elif isinstance(stmt, (ast.With, ast.AsyncWith)):  # noqa: UP038 tuple form
                     for item in stmt.items:
                         opt = getattr(item, "optional_vars", None)
                         if opt is not None:
