@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Resonate durable function registrations.
 
 Provides a minimal durable_execute function wired for local mode using
@@ -7,9 +5,14 @@ AsyncExecutor via DI factory. The function follows generator-style
 durable function semantics expected by the Resonate SDK.
 """
 
-from typing import Any, Generator
-import time
+from __future__ import annotations
+
+import contextlib
 import json
+import time
+from collections.abc import Generator
+from typing import Any
+
 from ..protocol.messages import ExecuteMessage
 from .types import DurableResult
 
@@ -75,12 +78,12 @@ def register_executor_functions(resonate: Any) -> Any:
                     err.add_note(str(e))
                 except Exception:
                     pass
-            raise err
+            raise err from e
 
         result_value: Any = None
         # Normalize raw into a Python object if JSON-like; otherwise leave as-is
         payload: Any
-        if isinstance(raw, (bytes, bytearray)):
+        if isinstance(raw, bytes | bytearray):
             try:
                 payload = json.loads(raw.decode("utf-8", errors="replace"))
             except Exception:
@@ -130,9 +133,7 @@ def register_executor_functions(resonate: Any) -> Any:
         return {"result": result_value, "execution_id": execution_id}
 
     # Expose handle for tests and local callers
-    try:
-        setattr(resonate, "capsule_durable_execute", durable_execute)
-    except Exception:
-        pass
+    with contextlib.suppress(Exception):
+        resonate.capsule_durable_execute = durable_execute
     # Return the decorated function (supports .run() on real SDKs)
     return durable_execute

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import ast
 import copy
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, Optional
+from typing import Any
 
 import structlog
 
@@ -20,10 +21,10 @@ class NamespaceManager:
     # See constants.py for the complete list and documentation
 
     def __init__(self) -> None:
-        self._namespace: Dict[str, Any] = {}
-        self._snapshots: Dict[str, Dict[str, Any]] = {}
-        self._function_sources: Dict[str, str] = {}
-        self._class_sources: Dict[str, str] = {}
+        self._namespace: dict[str, Any] = {}
+        self._snapshots: dict[str, dict[str, Any]] = {}
+        self._function_sources: dict[str, str] = {}
+        self._class_sources: dict[str, str] = {}
         self._imports: list[str] = []
 
         # Initialize with builtins
@@ -62,16 +63,16 @@ class NamespaceManager:
                     self._namespace[key] = None
 
     @property
-    def namespace(self) -> Dict[str, Any]:
+    def namespace(self) -> dict[str, Any]:
         """Get the current namespace."""
         return self._namespace
 
     def update_namespace(
         self,
-        updates: Dict[str, Any],
+        updates: dict[str, Any],
         source_context: str = "user",
         merge_strategy: str = "overwrite",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Update namespace with merge-only policy.
 
         CRITICAL: This method MERGES updates, never replaces the namespace.
@@ -87,7 +88,7 @@ class NamespaceManager:
         if not updates:
             return {}
 
-        changes: Dict[str, Any] = {}
+        changes: dict[str, Any] = {}
 
         for key, value in updates.items():
             # Skip protected keys unless from engine context
@@ -158,12 +159,12 @@ class NamespaceManager:
             self.update_namespace({"_": result}, source_context="engine")
 
     @property
-    def function_sources(self) -> Dict[str, str]:
+    def function_sources(self) -> dict[str, str]:
         """Get tracked function sources."""
         return self._function_sources
 
     @property
-    def class_sources(self) -> Dict[str, str]:
+    def class_sources(self) -> dict[str, str]:
         """Get tracked class sources."""
         return self._class_sources
 
@@ -181,7 +182,7 @@ class NamespaceManager:
         try:
             # Deep copy the namespace
             # Note: Some objects may not be deep-copyable
-            snapshot: Dict[str, Any] = {}
+            snapshot: dict[str, Any] = {}
 
             for key, value in self._namespace.items():
                 try:
@@ -276,9 +277,8 @@ class NamespaceManager:
 
         except Exception:
             # Handle failed execution
-            if policy == TransactionPolicy.ROLLBACK_ON_FAILURE:
-                if transaction_id in self._snapshots:
-                    self.restore_snapshot(transaction_id)
+            if policy == TransactionPolicy.ROLLBACK_ON_FAILURE and transaction_id in self._snapshots:
+                self.restore_snapshot(transaction_id)
 
             # Clean up snapshot
             if transaction_id in self._snapshots:
@@ -340,7 +340,7 @@ class NamespaceManager:
         self,
         code: str,
         track_sources: bool = True,
-        transaction_id: Optional[str] = None,
+        transaction_id: str | None = None,
         policy: TransactionPolicy = TransactionPolicy.COMMIT_ALWAYS,
     ) -> Any:
         """Execute code in the namespace with optional transaction support.
@@ -400,7 +400,7 @@ class NamespaceManager:
             exec(compiled, self._namespace)
             return None
 
-    def update_function_sources(self, sources: Dict[str, str]) -> None:
+    def update_function_sources(self, sources: dict[str, str]) -> None:
         """Update function sources.
 
         Args:
@@ -408,7 +408,7 @@ class NamespaceManager:
         """
         self._function_sources.update(sources)
 
-    def update_class_sources(self, sources: Dict[str, str]) -> None:
+    def update_class_sources(self, sources: dict[str, str]) -> None:
         """Update class sources.
 
         Args:
@@ -432,7 +432,7 @@ class NamespaceManager:
         Preserves engine internals while clearing user-defined content.
         """
         # Save engine internals before clearing
-        saved_internals: Dict[str, Any] = {}
+        saved_internals: dict[str, Any] = {}
         for key in ENGINE_INTERNALS:
             if key in self._namespace:
                 saved_internals[key] = self._namespace[key]
@@ -451,7 +451,7 @@ class NamespaceManager:
         for key, value in saved_internals.items():
             self._namespace[key] = value
 
-    def _should_update_smart(self, key: str, new_value: Any, old_value: Any) -> bool:
+    def _should_update_smart(self, _key: str, new_value: Any, old_value: Any) -> bool:
         """Determine if a value should be updated using smart merge strategy.
 
         Smart merge rules:
@@ -472,13 +472,13 @@ class NamespaceManager:
             return False
 
         # Don't update with empty containers if old value exists
-        if isinstance(new_value, (list, dict, set)) and not new_value and old_value:
+        if isinstance(new_value, list | dict | set) and not new_value and old_value:
             return False
 
         # Update if values differ
         return bool(old_value != new_value)
 
-    def get_serializable_namespace(self) -> Dict[str, Any]:
+    def get_serializable_namespace(self) -> dict[str, Any]:
         """Get a serializable version of the namespace.
 
         Returns:
@@ -486,7 +486,7 @@ class NamespaceManager:
         """
         import json
 
-        serializable: Dict[str, Any] = {}
+        serializable: dict[str, Any] = {}
 
         for key, value in self._namespace.items():
             # Skip special attributes
@@ -503,7 +503,7 @@ class NamespaceManager:
 
         return serializable
 
-    def get_namespace_info(self) -> Dict[str, Any]:
+    def get_namespace_info(self) -> dict[str, Any]:
         """Get information about the namespace.
 
         Returns:

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import io
 import sys
 import threading
 import time
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Union, Literal
+from typing import Any, Literal
 
 import structlog
 
@@ -63,7 +65,7 @@ def _create_cancel_tracer(
     event_count = 0
     checked_count = 0
 
-    def tracer(frame: Any, event: str, arg: Any) -> Any:
+    def tracer(_frame: Any, event: str, _arg: Any) -> Any:
         nonlocal event_count, checked_count
 
         # ALWAYS return the tracer to ensure it's installed in new frames
@@ -111,7 +113,7 @@ class _StopSentinel:
 
 
 # Union type for queue items
-OutputOrSentinel = Union[_OutputItem, _FlushSentinel, _StopSentinel]
+OutputOrSentinel = _OutputItem | _FlushSentinel | _StopSentinel
 
 
 # Custom exceptions
@@ -251,15 +253,15 @@ class ThreadedExecutor:
         self,
         transport: MessageTransport,
         execution_id: str,
-        namespace: Dict[str, Any],
+        namespace: dict[str, Any],
         loop: asyncio.AbstractEventLoop,
         *,
         output_queue_maxsize: int = 1024,
         output_backpressure: Literal["block", "drop_new", "drop_oldest", "error"] = "block",
         line_chunk_size: int = 64 * 1024,
-        drain_timeout_ms: Optional[int] = 2000,
+        drain_timeout_ms: int | None = 2000,
         input_send_timeout: float = 5.0,
-        input_wait_timeout: Optional[float] = 300.0,
+        input_wait_timeout: float | None = 300.0,
         cancel_check_interval: int = 100,
         enable_cooperative_cancel: bool = True,
     ) -> None:
@@ -267,9 +269,9 @@ class ThreadedExecutor:
         self._execution_id = execution_id
         self._namespace = namespace
         self._loop = loop  # Main async loop for coordination
-        self._input_waiters: Dict[str, tuple[threading.Event, Optional[str]]] = {}
+        self._input_waiters: dict[str, tuple[threading.Event, str | None]] = {}
         self._result: Any = None
-        self._error: Optional[BaseException] = None
+        self._error: BaseException | None = None
         self._input_send_timeout = input_send_timeout
         self._input_wait_timeout = input_wait_timeout
 
@@ -280,8 +282,8 @@ class ThreadedExecutor:
 
         # Event-driven output handling with asyncio.Queue
         self._aq: asyncio.Queue[OutputOrSentinel] = asyncio.Queue(maxsize=output_queue_maxsize)
-        self._drain_event: Optional[asyncio.Event] = None
-        self._pump_task: Optional[asyncio.Task[None]] = None
+        self._drain_event: asyncio.Event | None = None
+        self._pump_task: asyncio.Task[None] | None = None
         self._shutdown = False
         self._pending_sends = 0
 
@@ -291,7 +293,7 @@ class ThreadedExecutor:
         self._drain_timeout = drain_timeout_ms / 1000.0 if drain_timeout_ms else None
 
         # Backpressure management
-        self._capacity: Optional[threading.Semaphore] = (
+        self._capacity: threading.Semaphore | None = (
             threading.Semaphore(output_queue_maxsize) if self._backpressure == "block" else None
         )
 
@@ -337,7 +339,7 @@ class ThreadedExecutor:
                 try:
                     future.result(timeout=self._input_send_timeout)
                 except Exception as e:
-                    raise RuntimeError(f"Failed to send input request: {e}")
+                    raise RuntimeError(f"Failed to send input request: {e}") from e
 
                 # Block thread until response arrives
                 if not event.wait(timeout=self._input_wait_timeout):
@@ -414,10 +416,8 @@ class ThreadedExecutor:
                 elif self._backpressure == "drop_oldest":
                     # Try to remove one item (best effort)
                     def try_drop_oldest() -> None:
-                        try:
+                        with contextlib.suppress(asyncio.QueueEmpty):
                             self._aq.get_nowait()
-                        except asyncio.QueueEmpty:
-                            pass
 
                     self._loop.call_soon_threadsafe(try_drop_oldest)
         elif self._backpressure == "error":
@@ -468,9 +468,12 @@ class ThreadedExecutor:
                     try:
                         if isinstance(item, _FlushSentinel):
                             # Flush barrier - signal completion if all sent
-                            if self._pending_sends == 0 and self._aq.empty():
-                                if self._drain_event:
-                                    self._drain_event.set()
+                            if (
+                                self._pending_sends == 0
+                                and self._aq.empty()
+                                and self._drain_event
+                            ):
+                                self._drain_event.set()
                             if not item.future.done():
                                 item.future.set_result(None)
                             continue
@@ -488,9 +491,12 @@ class ThreadedExecutor:
                             if self._capacity:
                                 self._capacity.release()
                             # Check if we're drained
-                            if self._pending_sends == 0 and self._aq.empty():
-                                if self._drain_event:
-                                    self._drain_event.set()
+                            if (
+                                self._pending_sends == 0
+                                and self._aq.empty()
+                                and self._drain_event
+                            ):
+                                self._drain_event.set()
                     finally:
                         self._aq.task_done()
             finally:
@@ -500,7 +506,7 @@ class ThreadedExecutor:
 
         self._pump_task = asyncio.create_task(pump())
 
-    async def drain_outputs(self, timeout: Optional[float] = None) -> None:
+    async def drain_outputs(self, timeout: float | None = None) -> None:
         """Wait for all pending outputs to be sent using flush sentinel."""
         if timeout is None:
             timeout = self._drain_timeout
@@ -511,7 +517,7 @@ class ThreadedExecutor:
 
         try:
             await asyncio.wait_for(fut, timeout=timeout)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             # Provide diagnostics on timeout
             pending = self._pending_sends
             try:
@@ -538,7 +544,7 @@ class ThreadedExecutor:
         self._loop.call_soon_threadsafe(self._aq.put_nowait, _StopSentinel())
         try:
             await asyncio.wait_for(self._pump_task, timeout=2.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             self._pump_task.cancel()
         finally:
             self._pump_task = None
@@ -586,6 +592,7 @@ class ThreadedExecutor:
         not within the Python interpreter.
         """
         import builtins
+
         import structlog
 
         logger = structlog.get_logger()
@@ -616,6 +623,7 @@ class ThreadedExecutor:
             # Only create protocol input if not already overridden
             if "input" not in self._namespace or not callable(self._namespace.get("input")):
                 from typing import cast
+
                 protocol_input = self.create_protocol_input()
                 builtins.input = cast(Any, protocol_input)
                 self._namespace["input"] = protocol_input
@@ -653,10 +661,8 @@ class ThreadedExecutor:
                 self._result = eval(compiled, self._namespace, self._namespace)
                 # Record last expression result for REPL underscore semantics
                 if self._result is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         self._namespace["_"] = self._result
-                    except Exception:
-                        pass
             else:
                 # Statements: execute; attempt to capture value of a trailing expression
                 logger.info(f"Executing statements for {self._execution_id}")
@@ -678,10 +684,8 @@ class ThreadedExecutor:
                         )
                         self._result = eval(compiled_expr, self._namespace, self._namespace)
                         if self._result is not None:
-                            try:
+                            with contextlib.suppress(Exception):
                                 self._namespace["_"] = self._result
-                            except Exception:
-                                pass
                 except Exception:
                     # Ignore capture failures; keep None result
                     pass
@@ -727,7 +731,7 @@ class ThreadedExecutor:
         return self._execution_id
 
     @property
-    def error(self) -> Optional[BaseException]:
+    def error(self) -> BaseException | None:
         """Get the execution error if any."""
         return self._error
 
@@ -737,7 +741,7 @@ class ThreadedExecutor:
         return self._result
 
     @property
-    def pump_task(self) -> Optional[asyncio.Task[None]]:
+    def pump_task(self) -> asyncio.Task[None] | None:
         """Get the output pump task."""
         return self._pump_task
 
@@ -790,7 +794,7 @@ class ThreadedExecutor:
             # masking real transport ordering issues in production.
             try:
                 await self.drain_outputs(timeout=self._drain_timeout)
-            except (OutputDrainTimeout, asyncio.TimeoutError) as e:
+            except (TimeoutError, OutputDrainTimeout) as e:
                 # Drain policy note: In the async wrapper (test path), we do not fail
                 # the execution on drain timeout. The real worker enforces ordering
                 # and emits an ErrorMessage instead. This suppression is intentional

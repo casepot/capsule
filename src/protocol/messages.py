@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -42,7 +42,7 @@ class BaseMessage(BaseModel):
 class ExecuteMessage(BaseMessage):
     type: Literal[MessageType.EXECUTE] = Field(default=MessageType.EXECUTE)
     code: str = Field(description="Python code to execute")
-    transaction_id: Optional[str] = Field(
+    transaction_id: str | None = Field(
         default=None, description="Transaction ID for rollback support"
     )
     transaction_policy: TransactionPolicy = Field(
@@ -65,9 +65,7 @@ class InputMessage(BaseMessage):
     type: Literal[MessageType.INPUT] = Field(default=MessageType.INPUT)
     prompt: str = Field(description="Input prompt to display")
     execution_id: str = Field(description="ID of the execution requesting input")
-    timeout: Optional[float] = Field(
-        default=None, description="Timeout in seconds for input response"
-    )
+    timeout: float | None = Field(default=None, description="Timeout in seconds for input response")
 
 
 class InputResponseMessage(BaseMessage):
@@ -89,7 +87,7 @@ class ErrorMessage(BaseMessage):
     traceback: str = Field(description="Full traceback string")
     exception_type: str = Field(description="Exception class name")
     exception_message: str = Field(description="Exception message")
-    execution_id: Optional[str] = Field(
+    execution_id: str | None = Field(
         default=None, description="ID of the execution that caused the error"
     )
 
@@ -97,23 +95,21 @@ class ErrorMessage(BaseMessage):
 class CheckpointMessage(BaseMessage):
     type: Literal[MessageType.CHECKPOINT] = Field(default=MessageType.CHECKPOINT)
     # Creation trigger fields (local-mode slice):
-    checkpoint_id: Optional[str] = Field(default=None, description="Checkpoint identifier")
-    name: Optional[str] = Field(default=None, description="Checkpoint human-readable name")
+    checkpoint_id: str | None = Field(default=None, description="Checkpoint identifier")
+    name: str | None = Field(default=None, description="Checkpoint human-readable name")
     # Data fields (when sending a snapshot):
-    data: Optional[bytes] = Field(default=None, description="Serialized checkpoint data")
-    namespace_size: Optional[int] = Field(default=None, description="Number of items in namespace")
-    function_count: Optional[int] = Field(default=None, description="Number of tracked functions")
-    class_count: Optional[int] = Field(default=None, description="Number of tracked classes")
-    checkpoint_size: Optional[int] = Field(default=None, description="Size of checkpoint in bytes")
+    data: bytes | None = Field(default=None, description="Serialized checkpoint data")
+    namespace_size: int | None = Field(default=None, description="Number of items in namespace")
+    function_count: int | None = Field(default=None, description="Number of tracked functions")
+    class_count: int | None = Field(default=None, description="Number of tracked classes")
+    checkpoint_size: int | None = Field(default=None, description="Size of checkpoint in bytes")
 
 
 class RestoreMessage(BaseMessage):
     type: Literal[MessageType.RESTORE] = Field(default=MessageType.RESTORE)
     # Reference by ID (local slice) or inline data
-    checkpoint_id: Optional[str] = Field(
-        default=None, description="Checkpoint identifier to restore"
-    )
-    data: Optional[bytes] = Field(default=None, description="Checkpoint data to restore")
+    checkpoint_id: str | None = Field(default=None, description="Checkpoint identifier to restore")
+    data: bytes | None = Field(default=None, description="Checkpoint data to restore")
     clear_existing: bool = Field(
         default=True, description="Whether to clear existing namespace before restore"
     )
@@ -145,7 +141,7 @@ class ShutdownMessage(BaseMessage):
 class CancelMessage(BaseMessage):
     type: Literal[MessageType.CANCEL] = Field(default=MessageType.CANCEL)
     execution_id: str = Field(description="ID of the execution to cancel")
-    grace_timeout_ms: Optional[int] = Field(
+    grace_timeout_ms: int | None = Field(
         default=500, description="Grace period in milliseconds before hard cancel"
     )
 
@@ -156,21 +152,21 @@ class InterruptMessage(BaseMessage):
     force_restart: bool = Field(default=False, description="Force worker restart after interrupt")
 
 
-Message = Union[
-    ExecuteMessage,
-    OutputMessage,
-    InputMessage,
-    InputResponseMessage,
-    ResultMessage,
-    ErrorMessage,
-    CheckpointMessage,
-    RestoreMessage,
-    ReadyMessage,
-    HeartbeatMessage,
-    ShutdownMessage,
-    CancelMessage,
-    InterruptMessage,
-]
+Message = (
+    ExecuteMessage
+    | OutputMessage
+    | InputMessage
+    | InputResponseMessage
+    | ResultMessage
+    | ErrorMessage
+    | CheckpointMessage
+    | RestoreMessage
+    | ReadyMessage
+    | HeartbeatMessage
+    | ShutdownMessage
+    | CancelMessage
+    | InterruptMessage
+)
 
 
 def parse_message(data: dict[str, Any]) -> Message:

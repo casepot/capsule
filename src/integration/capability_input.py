@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """HITL Input capability using Resonate promises in local mode."""
 
-from typing import Any
+from __future__ import annotations
+
+import json
 import time
 import uuid
-import json
+from typing import Any
 
 from ..protocol.messages import InputMessage
 
@@ -35,7 +35,7 @@ class InputCapability:
             data = json.loads(result)
         except Exception:
             return ""
-        # Protocol uses InputResponseMessage with field 'data'; 
+        # Protocol uses InputResponseMessage with field 'data';
         # support legacy key 'input' for compatibility in tests.
         value = data.get("data") if isinstance(data, dict) else None
         if value is None and isinstance(data, dict):

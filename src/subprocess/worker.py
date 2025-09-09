@@ -2,16 +2,38 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
 import logging
 import sys
 import threading
 import time
 import traceback
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
 
 import psutil
 import structlog
+
+from ..protocol.messages import (
+    CancelMessage,
+    CheckpointMessage,
+    ErrorMessage,
+    ExecuteMessage,
+    HeartbeatMessage,
+    InputMessage,
+    InputResponseMessage,
+    InterruptMessage,
+    MessageType,
+    ReadyMessage,
+    RestoreMessage,
+    ResultMessage,
+    ShutdownMessage,
+)
+from ..protocol.transport import MessageTransport
+from .checkpoint import Checkpoint, CheckpointManager
+from .constants import ENGINE_INTERNALS
+from .executor import OutputDrainTimeout, ThreadedExecutor
+from .namespace import NamespaceManager
 
 # Configure logger to use stderr, not stdout
 structlog.configure(
@@ -24,27 +46,6 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-from ..protocol.messages import (
-    CancelMessage,
-    CheckpointMessage,
-    ErrorMessage,
-    ExecuteMessage,
-    HeartbeatMessage,
-    InterruptMessage,
-    InputMessage,
-    InputResponseMessage,
-    MessageType,
-    RestoreMessage,
-    ReadyMessage,
-    ResultMessage,
-    ShutdownMessage,
-)
-from ..protocol.transport import MessageTransport
-from .checkpoint import Checkpoint, CheckpointManager
-from .namespace import NamespaceManager
-from .executor import ThreadedExecutor, OutputDrainTimeout
-from .constants import ENGINE_INTERNALS
-
 logger = structlog.get_logger()
 
 
@@ -55,7 +56,7 @@ class InputHandler:
         self._transport = transport
         self._execution_id = execution_id
 
-    async def request_input(self, prompt: str = "", timeout: Optional[float] = None) -> str:
+    async def request_input(self, prompt: str = "", timeout: float | None = None) -> str:
         """Request input from the client.
 
         Args:
@@ -89,11 +90,12 @@ class InputHandler:
 
             try:
                 message = await self._transport.receive_message(timeout=remaining)
-            except asyncio.TimeoutError:
-                raise TimeoutError("Input timeout exceeded")
+            except TimeoutError as err:
+                raise TimeoutError("Input timeout exceeded") from err
 
             if message.type == "input_response":
                 from typing import cast
+
                 response = cast(InputResponseMessage, message)
                 if response.input_id == input_msg.id:
                     return response.data
@@ -115,16 +117,16 @@ class SubprocessWorker:
     ) -> None:
         self._transport = transport
         self._session_id = session_id
-        self._namespace: Dict[str, Any] = {}
-        self._function_sources: Dict[str, str] = {}
-        self._class_sources: Dict[str, str] = {}
+        self._namespace: dict[str, Any] = {}
+        self._function_sources: dict[str, str] = {}
+        self._class_sources: dict[str, str] = {}
         self._imports: list[str] = []
         self._running = False
         self._process = psutil.Process()
-        self._active_executor: Optional[ThreadedExecutor] = None
-        self._active_thread: Optional[threading.Thread] = None
+        self._active_executor: ThreadedExecutor | None = None
+        self._active_thread: threading.Thread | None = None
         # Simple in-memory checkpoint store for local mode
-        self._checkpoint_store: Dict[str, bytes] = {}
+        self._checkpoint_store: dict[str, bytes] = {}
 
         # Initialize namespace with builtins
         self._setup_namespace()
@@ -423,10 +425,8 @@ class SubprocessWorker:
             # Shutdown output pump and clean up
             executor.shutdown_pump()
             if executor.pump_task:
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(executor.pump_task, timeout=1.0)
-                except asyncio.TimeoutError:
-                    pass  # Force continue if pump doesn't stop
 
             # Clear active executor and thread
             logger.debug("Clearing active executor", execution_id=execution_id)
@@ -461,7 +461,7 @@ class SubprocessWorker:
             tree = ast.parse(code)
 
             for node in ast.walk(tree):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.Import | ast.ImportFrom):
                     import_str = ast.unparse(node)
                     if import_str not in self._imports:
                         self._imports.append(import_str)
@@ -530,7 +530,7 @@ class SubprocessWorker:
                         await self._transport.send_message(err)
                     else:
                         # Don't await - let it run in background so we can process INPUT_RESPONSE
-                        exec_task = asyncio.create_task(self.execute(message))  # type: ignore
+                        asyncio.create_task(self.execute(message))  # type: ignore
                         logger.info(f"Created execution task for {message.id}")
 
                 elif msg_type == "input_response" or message.type == MessageType.INPUT_RESPONSE:
@@ -551,6 +551,7 @@ class SubprocessWorker:
                 elif msg_type == "checkpoint" or message.type == MessageType.CHECKPOINT:
                     # Minimal checkpoint create handler (local mode)
                     from typing import cast
+
                     cp_msg = cast(CheckpointMessage, message)
                     # Build a temporary NamespaceManager mirroring current state
                     nm = NamespaceManager()
@@ -602,6 +603,7 @@ class SubprocessWorker:
                 elif msg_type == "restore" or message.type == MessageType.RESTORE:
                     # Minimal restore handler (local mode)
                     from typing import cast
+
                     rs_msg = cast(RestoreMessage, message)
                     data = None
                     if rs_msg.data is not None:
@@ -665,6 +667,7 @@ class SubprocessWorker:
                 elif msg_type == "cancel" or message.type == MessageType.CANCEL:
                     # Handle cancellation request
                     from typing import cast
+
                     cancel_msg = cast(CancelMessage, message)
                     logger.info(
                         "Cancel requested",
@@ -690,6 +693,7 @@ class SubprocessWorker:
                 elif msg_type == "interrupt" or message.type == MessageType.INTERRUPT:
                     # Handle interrupt request (immediate)
                     from typing import cast
+
                     interrupt_msg = cast(InterruptMessage, message)
                     logger.info(
                         "Interrupt requested",
@@ -713,6 +717,7 @@ class SubprocessWorker:
 
                 elif msg_type == "shutdown" or message.type == MessageType.SHUTDOWN:
                     from typing import cast
+
                     shutdown_msg = cast(ShutdownMessage, message)
                     logger.info("Shutdown requested", reason=shutdown_msg.reason)
                     self._running = False
@@ -731,10 +736,8 @@ class SubprocessWorker:
                     execution_id=None,
                 )
 
-                try:
+                with contextlib.suppress(Exception):
                     await self._transport.send_message(error_msg)
-                except:
-                    pass  # Failed to send error
 
     async def stop(self) -> None:
         """Stop the worker."""

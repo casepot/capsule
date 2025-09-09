@@ -6,11 +6,11 @@ AsyncExecutor instances without temporal coupling.
 
 from __future__ import annotations
 
-from typing import Optional, Any
 import asyncio
+from typing import Any
 
-from ..subprocess.async_executor import AsyncExecutor
 from ..protocol.transport import MessageTransport
+from ..subprocess.async_executor import AsyncExecutor
 from ..subprocess.namespace import NamespaceManager
 
 
@@ -18,7 +18,7 @@ class AwaitablePromise:
     """Adapter to make promises awaitable in async contexts."""
 
     def __init__(self) -> None:
-        self._future: Optional[asyncio.Future[Any]] = None
+        self._future: asyncio.Future[Any] | None = None
 
     def _ensure_future(self) -> asyncio.Future[Any]:
         if self._future is None:
@@ -42,11 +42,11 @@ class AwaitablePromise:
 
 def async_executor_factory(
     ctx: Any | None = None,
-    namespace_manager: Optional[NamespaceManager] = None,
+    namespace_manager: NamespaceManager | None = None,
     transport: MessageTransport | None = None,
-    execution_id: Optional[str] = None,
+    execution_id: str | None = None,
     *,
-    tla_timeout: Optional[float] = None,
+    tla_timeout: float | None = None,
     ast_cache_max_size: int | None = None,
     blocking_modules: set[str] | None = None,
     blocking_methods_by_module: dict[str, set[str]] | None = None,
@@ -81,7 +81,7 @@ def async_executor_factory(
             in `linecache`. If None, the executor resolves capacity via the environment variable
             `ASYNC_EXECUTOR_FALLBACK_LINECACHE_MAX` or defaults to 128. A value of 0 retains no entries
             (evicts immediately). Entries are always cleaned up on `AsyncExecutor.close()`.
-        
+
         TODO(follow-up): Thread `fallback_linecache_max_size` from `ctx.config` if present
         to allow configuring LRU retention from DI. Also consider exposing a mode
         to skip `close()` cleanup for post-mortem retention.
@@ -113,18 +113,28 @@ def async_executor_factory(
     if warn_on_blocking is None and cfg is not None:
         warn_on_blocking = getattr(cfg, "warn_on_blocking", True)
     # Thread fallback_linecache_max_size from config if not explicitly provided
-    if fallback_linecache_max_size is None and cfg is not None and hasattr(cfg, "fallback_linecache_max_size"):
+    if (
+        fallback_linecache_max_size is None
+        and cfg is not None
+        and hasattr(cfg, "fallback_linecache_max_size")
+    ):
         try:
-            fallback_linecache_max_size = int(getattr(cfg, "fallback_linecache_max_size"))
+            fallback_linecache_max_size = int(cfg.fallback_linecache_max_size)
         except Exception:
             fallback_linecache_max_size = None
     # New flags for AST fallback policy (default OFF)
-    if enable_def_await_rewrite is None and cfg is not None:
-        if hasattr(cfg, "enable_def_await_rewrite"):
-            enable_def_await_rewrite = bool(getattr(cfg, "enable_def_await_rewrite"))
-    if enable_async_lambda_helper is None and cfg is not None:
-        if hasattr(cfg, "enable_async_lambda_helper"):
-            enable_async_lambda_helper = bool(getattr(cfg, "enable_async_lambda_helper"))
+    if (
+        enable_def_await_rewrite is None
+        and cfg is not None
+        and hasattr(cfg, "enable_def_await_rewrite")
+    ):
+        enable_def_await_rewrite = bool(cfg.enable_def_await_rewrite)
+    if (
+        enable_async_lambda_helper is None
+        and cfg is not None
+        and hasattr(cfg, "enable_async_lambda_helper")
+    ):
+        enable_async_lambda_helper = bool(cfg.enable_async_lambda_helper)
     # TODO(loop-ownership): Ensure the executor receives the loop that owns the
     # transport. The durable layer must not create or run event loops; if a sync
     # submit() facade is needed for ctx.lfc, implement it by posting to this loop

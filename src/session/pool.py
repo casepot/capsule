@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 import structlog
 
@@ -19,7 +20,7 @@ class PoolConfig:
     min_idle: int = 2
     max_sessions: int = 10
     session_timeout: float = 300.0  # 5 minutes idle timeout
-    warmup_code: Optional[str] = None
+    warmup_code: str | None = None
     health_check_interval: float = 30.0
     pre_warm_on_start: bool = True
     recycle_after_executions: int = 100
@@ -30,18 +31,18 @@ class SessionPool:
 
     def __init__(
         self,
-        config: Optional[PoolConfig] = None,
+        config: PoolConfig | None = None,
         *,
-        min_idle: Optional[int] = None,
-        max_sessions: Optional[int] = None,
-        session_timeout: Optional[float] = None,
-        warmup_code: Optional[str] = None,
-        health_check_interval: Optional[float] = None,
-        pre_warm_on_start: Optional[bool] = None,
-        recycle_after_executions: Optional[int] = None,
+        min_idle: int | None = None,
+        max_sessions: int | None = None,
+        session_timeout: float | None = None,
+        warmup_code: str | None = None,
+        health_check_interval: float | None = None,
+        pre_warm_on_start: bool | None = None,
+        recycle_after_executions: int | None = None,
         # Support legacy parameter names for compatibility
-        min_size: Optional[int] = None,
-        max_size: Optional[int] = None,
+        min_size: int | None = None,
+        max_size: int | None = None,
     ) -> None:
         if config:
             self._config = config
@@ -69,14 +70,14 @@ class SessionPool:
             if recycle_after_executions is not None:
                 self._config.recycle_after_executions = recycle_after_executions
         self._idle_sessions: asyncio.Queue[Session] = asyncio.Queue()
-        self._active_sessions: Set[Session] = set()
-        self._all_sessions: Dict[str, Session | None] = {}
+        self._active_sessions: set[Session] = set()
+        self._all_sessions: dict[str, Session | None] = {}
         self._lock = asyncio.Lock()
         self._shutdown = False
         self._warmup_needed = asyncio.Event()  # Event-driven warmup trigger
         self._health_needed = asyncio.Event()  # Event-driven health check trigger
-        self._warmup_task: Optional[asyncio.Task[None]] = None
-        self._health_check_task: Optional[asyncio.Task[None]] = None
+        self._warmup_task: asyncio.Task[None] | None = None
+        self._health_check_task: asyncio.Task[None] | None = None
         self._metrics = PoolMetrics()
 
     async def start(self) -> None:
@@ -105,17 +106,13 @@ class SessionPool:
         # Cancel background tasks
         if self._warmup_task:
             self._warmup_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._warmup_task
-            except asyncio.CancelledError:
-                pass
 
         if self._health_check_task:
             self._health_check_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._health_check_task
-            except asyncio.CancelledError:
-                pass
 
         # Shutdown all sessions
         tasks: list[asyncio.Task[None]] = []
@@ -130,7 +127,7 @@ class SessionPool:
         self._all_sessions.clear()
         self._active_sessions.clear()
 
-    async def acquire(self, timeout: Optional[float] = None) -> Session:
+    async def acquire(self, timeout: float | None = None) -> Session:
         """Acquire a session from the pool.
 
         Args:
@@ -218,9 +215,9 @@ class SessionPool:
 
                 try:
                     session = await asyncio.wait_for(self._idle_sessions.get(), timeout=remaining)
-                except asyncio.TimeoutError:
+                except TimeoutError as err:
                     self._metrics.acquisition_timeouts += 1
-                    raise TimeoutError("Session acquisition timeout")
+                    raise TimeoutError("Session acquisition timeout") from err
             else:
                 # Wait indefinitely
                 session = await self._idle_sessions.get()
@@ -513,9 +510,7 @@ class SessionPool:
                         task = asyncio.create_task(self._create_and_add_session())
                         tasks.append(task)
 
-                    results: list[object] = await asyncio.gather(
-                        *tasks, return_exceptions=True
-                    )
+                    results: list[object] = await asyncio.gather(*tasks, return_exceptions=True)
 
                     created = 0
                     for result in results:
@@ -648,10 +643,8 @@ class SessionPool:
                 # Cancel pending tasks
                 for task in pending:
                     task.cancel()
-                    try:
+                    with contextlib.suppress(asyncio.CancelledError):
                         await task
-                    except asyncio.CancelledError:
-                        pass
 
                 # Run health check
                 await self._run_health_check_once()
@@ -701,7 +694,7 @@ class SessionPool:
 
         return self._metrics
 
-    def get_info(self) -> Dict[str, Any]:
+    def get_info(self) -> dict[str, Any]:
         """Get pool information.
 
         Returns:

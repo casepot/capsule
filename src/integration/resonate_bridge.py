@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Resonate protocol bridge for local-mode durable promises.
 
 Maps protocol requests to durable promises and routes responses back to
@@ -7,15 +5,18 @@ resolve those promises. This is a minimal local-mode adapter sufficient
 for unit testing and single-process development.
 """
 
-from typing import Any, Optional
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import json
+from typing import Any
 
 from ..protocol.messages import (
     ErrorMessage,
     InputResponseMessage,
-    ResultMessage,
     Message,
+    ResultMessage,
 )
 from .constants import execution_promise_id, input_promise_id
 
@@ -61,7 +62,7 @@ class ResonateProtocolBridge:
         message: Message,
         timeout: float | None = None,
         *,
-        promise_id: Optional[str] = None,
+        promise_id: str | None = None,
     ) -> Any:
         """Create a durable promise and send a protocol message.
 
@@ -71,7 +72,7 @@ class ResonateProtocolBridge:
         truth for this mapping to keep durable correlation deterministic.
         """
         created_promise = None
-        corr_key: Optional[str] = None
+        corr_key: str | None = None
 
         if capability_id == "execute":
             # Promise should already be created by durable function via ctx.promise
@@ -87,7 +88,9 @@ class ResonateProtocolBridge:
                 pid = promise_id or input_promise_id(execution_id, getattr(message, "id", "req"))
             else:
                 # Generic, but still deterministic fallback for future caps
-                pid = promise_id or f"{execution_id}:{capability_id}:{getattr(message, 'id', 'req')}"
+                pid = (
+                    promise_id or f"{execution_id}:{capability_id}:{getattr(message, 'id', 'req')}"
+                )
             timeout_ms = int((timeout or 30.0) * 1000)
             created_promise = self._resonate.promises.create(
                 id=pid,
@@ -130,18 +133,16 @@ class ResonateProtocolBridge:
         corr = self._extract_correlation_key(message)
         if not corr:
             return False
-        promise_id: Optional[str]
-        timeout_task: Optional[asyncio.Task[None]] = None
+        promise_id: str | None
+        timeout_task: asyncio.Task[None] | None = None
         async with self._lock:
             promise_id = self._pending.pop(corr, None)
             # Cancel and forget any timeout task for this correlation
             timeout_task = self._timeouts.pop(corr, None)
         if timeout_task is not None:
             timeout_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await timeout_task
-            except asyncio.CancelledError:
-                pass
         if not promise_id:
             return False
         try:
@@ -172,14 +173,13 @@ class ResonateProtocolBridge:
             # Swallow to avoid breaking receive loop, but log for diagnostics
             try:
                 import structlog
-                structlog.get_logger().debug(
-                    "bridge_route_response_exception", error=str(e)
-                )
+
+                structlog.get_logger().debug("bridge_route_response_exception", error=str(e))
             except Exception:
                 pass
             return False
 
-    def _extract_correlation_key(self, message: Message) -> Optional[str]:
+    def _extract_correlation_key(self, message: Message) -> str | None:
         """Return the request-side message.id used to create the promise.
 
         For InputResponseMessage, the correlation is `input_id` which is the

@@ -25,24 +25,26 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import contextlib
+import hashlib
+import linecache
+import os as _os
+import re
+import threading
 import time
+import weakref
 from collections import OrderedDict
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from enum import Enum
-import hashlib
-from typing import Any, Set, Coroutine, Optional
-import weakref
-import linecache
-import re
-import os as _os
+from types import CodeType, TracebackType
+from typing import Any
 
 import structlog
-import threading
 
+from ..protocol.transport import MessageTransport
 from .executor import ThreadedExecutor
 from .namespace import NamespaceManager
-from ..protocol.transport import MessageTransport
-from types import TracebackType, CodeType
 
 logger = structlog.get_logger()
 
@@ -73,13 +75,13 @@ class _CoroutineManager:
     enumerates user-created background tasks.
     """
 
-    top_task: Optional[asyncio.Task[Any]] = None
-    top_loop: Optional[asyncio.AbstractEventLoop] = None
+    top_task: asyncio.Task[Any] | None = None
+    top_loop: asyncio.AbstractEventLoop | None = None
     cancel_requested: bool = False
-    cancel_reason: Optional[str] = None
-    requested_at: Optional[float] = None
+    cancel_reason: str | None = None
+    requested_at: float | None = None
 
-    def set_top(self, task: asyncio.Task[Any], coro: Coroutine[Any, Any, Any]) -> None:
+    def set_top(self, task: asyncio.Task[Any], _coro: Coroutine[Any, Any, Any]) -> None:
         self.top_task = task
         try:
             self.top_loop = task.get_loop()
@@ -115,10 +117,8 @@ class _CoroutineManager:
                 try:
                     return bool(task.cancel())
                 except Exception as _e:
-                    try:
+                    with contextlib.suppress(Exception):
                         logger.debug("cancel_direct_failed", error=str(_e))
-                    except Exception:
-                        pass
                     return False
             return False
         # Off-loop: schedule thread-safely only if loop is running
@@ -127,10 +127,8 @@ class _CoroutineManager:
                 loop.call_soon_threadsafe(task.cancel)
                 return True
             except Exception as _e:
-                try:
+                with contextlib.suppress(Exception):
                     logger.debug("cancel_schedule_failed", error=str(_e))
-                except Exception:
-                    pass
                 return False
         # No loop or not running; cannot safely cancel
         return False
@@ -141,6 +139,7 @@ class _CoroutineManager:
         self.cancel_requested = False
         self.cancel_reason = None
         self.requested_at = None
+
 
 @dataclass
 class _DetectionPolicy:
@@ -268,10 +267,12 @@ class AsyncExecutor:
 
         # Event loop management - never modify global loop
         # Don't try to get loop during init; get it when needed in execute()
-        self.loop: asyncio.AbstractEventLoop | None = None  # Will be set when needed in async context
+        self.loop: asyncio.AbstractEventLoop | None = (
+            None  # Will be set when needed in async context
+        )
 
         # Coroutine tracking for cleanup (weakref-based)
-        self._pending_coroutines: Set[weakref.ReferenceType[Any]] = set()
+        self._pending_coroutines: set[weakref.ReferenceType[Any]] = set()
 
         # AST cache with LRU limit to prevent unbounded growth
         self._ast_cache: OrderedDict[str, ast.AST] = OrderedDict()
@@ -284,7 +285,9 @@ class AsyncExecutor:
             try:
                 env_val = _os.getenv("ASYNC_EXECUTOR_AST_CACHE_SIZE")
                 self._ast_cache_max_size = (
-                    int(env_val) if env_val and ast_cache_max_size == 100 else int(ast_cache_max_size)
+                    int(env_val)
+                    if env_val and ast_cache_max_size == 100
+                    else int(ast_cache_max_size)
                 )
             except Exception:
                 # ast_cache_max_size is not None in this branch; coerce to int directly
@@ -299,7 +302,7 @@ class AsyncExecutor:
             "detected_blocking_call": 0,
             "missed_attribute_chain": 0,
         }
-        self.mode_counts: dict[ExecutionMode, int] = {mode: 0 for mode in ExecutionMode}
+        self.mode_counts: dict[ExecutionMode, int] = dict.fromkeys(ExecutionMode, 0)
 
         # Cancellation + cleanup telemetry
         self.stats.update(
@@ -468,29 +471,28 @@ class AsyncExecutor:
             True if contains top-level await
         """
         # Direct await/async node
-        if isinstance(node, (ast.Await, ast.AsyncFor, ast.AsyncWith)):
+        if isinstance(node, ast.Await | ast.AsyncFor | ast.AsyncWith):
             return True
 
         # Don't recurse into function definitions
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
             return False
 
         # For assignments, check the value
-        if isinstance(node, ast.Assign):
-            if self._contains_await_at_top_level(node.value):
-                return True
+        if isinstance(node, ast.Assign) and self._contains_await_at_top_level(node.value):
+            return True
 
         # For expressions, check the value
-        if isinstance(node, ast.Expr):
-            if self._contains_await_at_top_level(node.value):
-                return True
+        if isinstance(node, ast.Expr) and self._contains_await_at_top_level(node.value):
+            return True
 
         # Check all child nodes recursively
         for child in ast.iter_child_nodes(node):
             # Skip function definitions
-            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-                if self._contains_await_at_top_level(child):
-                    return True
+            if not isinstance(
+                child, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda
+            ) and self._contains_await_at_top_level(child):
+                return True
 
         return False
 
@@ -532,14 +534,13 @@ class AsyncExecutor:
                     alias_to_module[name] = module_name
                     if module_name in self._policy.blocking_modules:
                         found_blocking_import = True
-            elif isinstance(node, ast.ImportFrom):
-                if node.module:
-                    module_name = node.module.split(".")[0]
-                    for alias in node.names:
-                        name = alias.asname or alias.name
-                        alias_to_module[name] = module_name
-                    if module_name in self._policy.blocking_modules:
-                        found_blocking_import = True
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                module_name = node.module.split(".")[0]
+                for alias in node.names:
+                    name = alias.asname or alias.name
+                    alias_to_module[name] = module_name
+                if module_name in self._policy.blocking_modules:
+                    found_blocking_import = True
 
         found_any = False
         if found_blocking_import:
@@ -677,10 +678,8 @@ class AsyncExecutor:
             raise
         finally:
             # Always cleanup coroutines after execution
-            try:
+            with contextlib.suppress(Exception):
                 self._coro_manager.clear()
-            except Exception:
-                pass
             cleaned = self.cleanup_coroutines()
             self.stats["coroutines_closed_on_cleanup"] = cleaned
             if cleaned > 0:
@@ -715,15 +714,13 @@ class AsyncExecutor:
         # Requires a running event loop to integrate the output pump
         try:
             current_loop = asyncio.get_running_loop()
-        except RuntimeError:
+        except RuntimeError as err:
             raise RuntimeError(
                 "AsyncExecutor.execute() must be called from within an async context. "
                 "Use 'await executor.execute(code)' inside an async function."
-            )
+            ) from err
         if self.transport is None:
-            raise RuntimeError(
-                "Cannot delegate to ThreadedExecutor without a MessageTransport"
-            )
+            raise RuntimeError("Cannot delegate to ThreadedExecutor without a MessageTransport")
         executor = ThreadedExecutor(
             transport=self.transport,
             execution_id=self.execution_id,
@@ -791,7 +788,9 @@ class AsyncExecutor:
             self.namespace.record_expression_result(value)
 
             logger.debug(
-                "execute_simple_sync_done", execution_id=self.execution_id, result_type=type(value).__name__
+                "execute_simple_sync_done",
+                execution_id=self.execution_id,
+                result_type=type(value).__name__,
             )
             return value
         else:
@@ -806,7 +805,9 @@ class AsyncExecutor:
             if global_updates:
                 self.namespace.update_namespace(global_updates, source_context="async")
 
-            logger.debug("execute_simple_sync_done", execution_id=self.execution_id, result_type="None")
+            logger.debug(
+                "execute_simple_sync_done", execution_id=self.execution_id, result_type="None"
+            )
             return None
 
     async def _execute_async_definitions(self, code: str) -> Any:
@@ -911,7 +912,7 @@ class AsyncExecutor:
 
             return result
 
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             self._annotate_timeout(e, code)
             raise
         except SyntaxError:
@@ -956,7 +957,7 @@ class AsyncExecutor:
 
                 return result
 
-            except asyncio.TimeoutError as e:
+            except TimeoutError as e:
                 self._annotate_timeout(e, code)
                 raise
             except SyntaxError as exec_syntax_err:
@@ -1065,7 +1066,7 @@ class AsyncExecutor:
             result = await self._run_wrapper_and_merge(
                 async_func, global_ns, pre_globals, is_expression, code
             )
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             self._annotate_timeout(e, code)
             raise
 
@@ -1099,7 +1100,11 @@ class AsyncExecutor:
         """
         transformed_body: list[ast.stmt] = []
         for stmt in tree.body:
-            if self._enable_def_await_rewrite and isinstance(stmt, ast.FunctionDef) and self._contains_await(stmt):
+            if (
+                self._enable_def_await_rewrite
+                and isinstance(stmt, ast.FunctionDef)
+                and self._contains_await(stmt)
+            ):
                 async_def = ast.AsyncFunctionDef(
                     name=stmt.name,
                     args=stmt.args,
@@ -1265,6 +1270,7 @@ class AsyncExecutor:
                 execution_id=self.execution_id,
             )
             from typing import cast
+
             _engine_internals = cast(set[str], set())
 
         for key, value in after.items():
@@ -1317,22 +1323,24 @@ class AsyncExecutor:
                 execution_id=self.execution_id,
             )
             from typing import cast
+
             _engine_internals = cast(set[str], set())
 
         names: set[str] = set()
         for node in body:
             if isinstance(node, ast.Assign):
                 for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        if not target.id.startswith("__") and target.id not in _engine_internals:
-                            names.add(target.id)
+                    if (
+                        isinstance(target, ast.Name)
+                        and not target.id.startswith("__")
+                        and target.id not in _engine_internals
+                    ):
+                        names.add(target.id)
             elif isinstance(node, ast.AnnAssign):
-                if isinstance(node.target, ast.Name):
-                    if not node.target.id.startswith("__"):
-                        names.add(node.target.id)
-            elif isinstance(node, ast.AugAssign):
-                if isinstance(node.target, ast.Name):
+                if isinstance(node.target, ast.Name) and not node.target.id.startswith("__"):
                     names.add(node.target.id)
+            elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+                names.add(node.target.id)
         return names
 
     def _resolve_attribute_base(self, node: ast.AST) -> str | None:
@@ -1371,21 +1379,21 @@ class AsyncExecutor:
         Traversal rules:
         - Search the body of the provided root node (even if it is a scope node itself).
         - Do not recurse into nested FunctionDef, AsyncFunctionDef, Lambda, or ClassDef encountered below.
-        
+
         TODO(perf): If we expand def-rewrite scope or usage, consider a dedicated
         visitor with memoization to avoid repeated traversal patterns that can
         approach O(n^2) on deeply nested code.
         """
+
         def visit(n: ast.AST, barrier_for_scopes: bool) -> bool:
             if isinstance(n, ast.Await):
                 return True
-            if barrier_for_scopes and isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            if barrier_for_scopes and isinstance(
+                n, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
+            ):
                 return False
-            for child in ast.iter_child_nodes(n):
-                # After the root, treat nested scopes as barriers
-                if visit(child, True):
-                    return True
-            return False
+            # After the root, treat nested scopes as barriers
+            return any(visit(child, True) for child in ast.iter_child_nodes(n))
 
         # Start without barriers so we inspect the immediate body of the root node
         return visit(node, False)
@@ -1559,7 +1567,7 @@ class AsyncExecutor:
         if cleaned > 0:
             logger.debug("cleaned_pending_coroutines", cleaned=cleaned)
 
-    async def __aenter__(self) -> "AsyncExecutor":
+    async def __aenter__(self) -> AsyncExecutor:
         """Enter context manager."""
         return self
 

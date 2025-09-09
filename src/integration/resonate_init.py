@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Local-mode Resonate initialization and DI wiring.
 
 This provides a minimal local initializer to wire AsyncExecutor, protocol
@@ -7,20 +5,23 @@ bridge, and HITL input capability using the in-repo DI factory. This module
 REQUIRES the real Resonate SDK (no stub fallback).
 """
 
-from typing import Any, Optional
+from __future__ import annotations
 
-from .resonate_functions import register_executor_functions
-from .resonate_bridge import ResonateProtocolBridge
-from .capability_input import InputCapability
-from .resonate_wrapper import async_executor_factory
-from ..subprocess.namespace import NamespaceManager
-from ..protocol.messages import InputResponseMessage, ResultMessage, ErrorMessage
+from typing import Any
+
 import structlog
+
+from ..protocol.messages import ErrorMessage, InputResponseMessage, ResultMessage
+from ..subprocess.namespace import NamespaceManager
+from .capability_input import InputCapability
+from .resonate_bridge import ResonateProtocolBridge
+from .resonate_functions import register_executor_functions
+from .resonate_wrapper import async_executor_factory
 
 logger = structlog.get_logger()
 
 
-def initialize_resonate_local(session: Any, resonate: Optional[Any] = None) -> Any:
+def initialize_resonate_local(session: Any, resonate: Any | None = None) -> Any:
     """Initialize Resonate in local mode with core dependencies wired.
 
     Args:
@@ -72,11 +73,13 @@ def initialize_resonate_local(session: Any, resonate: Optional[Any] = None) -> A
 
     # Register message interceptor on the session to route responses to the bridge
     def _interceptor(message: Any) -> None:
-        if isinstance(message, (InputResponseMessage, ResultMessage, ErrorMessage)):
+        if isinstance(message, InputResponseMessage | ResultMessage | ErrorMessage):
             try:
                 # Schedule async route to remain non-blocking
                 import asyncio as _asyncio
+
                 task = _asyncio.create_task(bridge.route_response(message))
+
                 def _done(t: _asyncio.Task[object]) -> None:
                     if t.cancelled():
                         return
@@ -87,6 +90,7 @@ def initialize_resonate_local(session: Any, resonate: Optional[Any] = None) -> A
                             error=str(exc),
                             message_type=getattr(message, "type", None),
                         )
+
                 task.add_done_callback(_done)
             except Exception:
                 # Never raise from interceptor

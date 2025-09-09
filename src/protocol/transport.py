@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import struct
-from typing import Optional
 
 import msgpack
 import structlog
@@ -27,7 +27,7 @@ class FrameReader:
         self._buffer = bytearray()
         self._condition = asyncio.Condition()
         self._closed = False
-        self._read_task: Optional[asyncio.Task[None]] = None
+        self._read_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         """Start the background reader task."""
@@ -39,10 +39,8 @@ class FrameReader:
         self._closed = True
         if self._read_task:
             self._read_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._read_task
-            except asyncio.CancelledError:
-                pass
 
     async def _read_loop(self) -> None:
         """Background task that continuously reads from the stream into buffer."""
@@ -63,7 +61,7 @@ class FrameReader:
                         logger.debug(f"FrameReader: buffer now has {len(self._buffer)} bytes")
                         self._condition.notify_all()
 
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     # This is normal - just continue
                     continue
                 except Exception as e:
@@ -76,7 +74,7 @@ class FrameReader:
                 self._closed = True
                 self._condition.notify_all()
 
-    async def read_frame(self, timeout: Optional[float] = None) -> bytes:
+    async def read_frame(self, timeout: float | None = None) -> bytes:
         """Read a complete frame from the buffer.
 
         Frame format: [4 bytes length][data]
@@ -100,7 +98,7 @@ class FrameReader:
                     self._condition.wait_for(lambda: len(self._buffer) >= 4 or self._closed),
                     timeout=timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.debug("Timeout waiting for length prefix")
                 raise
 
@@ -127,7 +125,7 @@ class FrameReader:
                     ),
                     timeout=timeout,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.debug(
                     f"Timeout waiting for frame data (needed {total_needed}, have {len(self._buffer)})"
                 )
@@ -231,7 +229,7 @@ class MessageTransport:
 
         logger.debug("Sent message", type=message.type, id=message.id)
 
-    async def receive_message(self, timeout: Optional[float] = None) -> Message:
+    async def receive_message(self, timeout: float | None = None) -> Message:
         """Receive a message.
 
         Args:
@@ -304,7 +302,7 @@ class PipeTransport:
         """Send a message to the subprocess."""
         await self._transport.send_message(message)
 
-    async def receive_message(self, timeout: Optional[float] = None) -> Message:
+    async def receive_message(self, timeout: float | None = None) -> Message:
         """Receive a message from the subprocess."""
         return await self._transport.receive_message(timeout=timeout)
 
@@ -316,7 +314,7 @@ class PipeTransport:
             self._process.terminate()
             try:
                 await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 self._process.kill()
                 await self._process.wait()
 

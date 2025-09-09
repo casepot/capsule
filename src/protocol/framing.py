@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import struct
 from collections import deque
-from typing import Optional
 
 import structlog
 
@@ -55,7 +54,7 @@ class FrameBuffer:
 
             self._frames.append(frame)
 
-    async def get_frame(self, timeout: Optional[float] = None) -> Optional[bytes]:
+    async def get_frame(self, timeout: float | None = None) -> bytes | None:
         """Get the next complete frame if available.
 
         Args:
@@ -179,7 +178,7 @@ class RateLimiter:
         self._burst_size = burst_size
         self._tokens = float(burst_size)
         # Lazily initialize at first use to avoid requiring a running loop
-        self._last_update: Optional[float] = None
+        self._last_update: float | None = None
         self._lock = asyncio.Lock()
 
         # Optional metrics

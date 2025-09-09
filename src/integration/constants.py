@@ -15,9 +15,10 @@ INPUT_SEGMENT = "input:"
 CHECKPOINT_SEGMENT = "checkpoint:"
 RESTORE_SEGMENT = "restore:"
 
+
 def execution_promise_id(execution_id: str) -> str:
     return f"{EXEC_PREFIX}{execution_id}"
 
+
 def input_promise_id(execution_id: str, input_id: str) -> str:
     return f"{EXEC_PREFIX}{execution_id}:{INPUT_SEGMENT}{input_id}"
-

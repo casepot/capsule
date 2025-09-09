@@ -5,7 +5,7 @@ import base64
 import gzip
 import pickle
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 import dill
 import structlog
@@ -19,11 +19,11 @@ logger = structlog.get_logger()
 class Checkpoint:
     """Represents a complete session checkpoint."""
 
-    namespace: Dict[str, Any]
-    function_sources: Dict[str, str]
-    class_sources: Dict[str, str]
+    namespace: dict[str, Any]
+    function_sources: dict[str, str]
+    class_sources: dict[str, str]
     imports: list[str]
-    metadata: Dict[str, Any]
+    metadata: dict[str, Any]
 
     def to_bytes(self) -> bytes:
         """Serialize checkpoint to bytes.
@@ -32,7 +32,7 @@ class Checkpoint:
             Compressed checkpoint data
         """
         # Create checkpoint dictionary
-        checkpoint_dict: Dict[str, Any] = {
+        checkpoint_dict: dict[str, Any] = {
             "version": "1.0",
             "namespace": self._serialize_namespace(),
             "function_sources": self.function_sources,
@@ -64,7 +64,8 @@ class Checkpoint:
 
         # Deserialize
         from typing import cast
-        checkpoint_dict = cast(Dict[str, Any], dill.loads(decompressed))
+
+        checkpoint_dict = cast(dict[str, Any], dill.loads(decompressed))
 
         # Validate version
         version = checkpoint_dict.get("version")
@@ -80,19 +81,18 @@ class Checkpoint:
             metadata=checkpoint_dict["metadata"],
         )
 
-    def _serialize_namespace(self) -> Dict[str, Any]:
+    def _serialize_namespace(self) -> dict[str, Any]:
         """Serialize namespace for checkpointing.
 
         Returns:
             Serialized namespace
         """
-        serialized: Dict[str, Any] = {}
+        serialized: dict[str, Any] = {}
 
         for key, value in self.namespace.items():
             # Skip built-in attributes
-            if key.startswith("__") and key.endswith("__"):
-                if key not in ["__name__", "__doc__"]:
-                    continue
+            if key.startswith("__") and key.endswith("__") and key not in {"__name__", "__doc__"}:
+                continue
 
             try:
                 # Try to serialize with dill
@@ -112,7 +112,7 @@ class Checkpoint:
         return serialized
 
     @staticmethod
-    def _deserialize_namespace(serialized: Dict[str, Any]) -> Dict[str, Any]:
+    def _deserialize_namespace(serialized: dict[str, Any]) -> dict[str, Any]:
         """Deserialize namespace from checkpoint.
 
         Args:
@@ -121,7 +121,7 @@ class Checkpoint:
         Returns:
             Restored namespace
         """
-        namespace: Dict[str, Any] = {}
+        namespace: dict[str, Any] = {}
 
         for key, item in serialized.items():
             if item["type"] == "value":
@@ -153,7 +153,7 @@ class Checkpoint:
         """
         return len(self.to_bytes())
 
-    def get_info(self) -> Dict[str, Any]:
+    def get_info(self) -> dict[str, Any]:
         """Get checkpoint information.
 
         Returns:
@@ -174,12 +174,12 @@ class CheckpointManager:
 
     def __init__(self, namespace_manager: NamespaceManager) -> None:
         self._namespace_manager = namespace_manager
-        self._checkpoints: Dict[str, Checkpoint] = {}
+        self._checkpoints: dict[str, Checkpoint] = {}
 
     def create_checkpoint(
         self,
-        checkpoint_id: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        checkpoint_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Checkpoint:
         """Create a checkpoint of current state.
 
@@ -325,7 +325,7 @@ class CheckpointManager:
 
         return checkpoint
 
-    def get_checkpoint(self, checkpoint_id: str) -> Optional[Checkpoint]:
+    def get_checkpoint(self, checkpoint_id: str) -> Checkpoint | None:
         """Get stored checkpoint by ID.
 
         Args:
@@ -359,7 +359,7 @@ class CheckpointManager:
             return True
         return False
 
-    def validate_checkpoint(self, checkpoint: Checkpoint) -> Dict[str, Any]:
+    def validate_checkpoint(self, checkpoint: Checkpoint) -> dict[str, Any]:
         """Validate checkpoint integrity.
 
         Args:

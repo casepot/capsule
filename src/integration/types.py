@@ -12,4 +12,3 @@ class DurableResult(TypedDict):
 
     result: Any
     execution_id: str
-
