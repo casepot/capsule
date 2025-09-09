@@ -641,6 +641,7 @@ def cancel_current(self, *, reason: str | None = None) -> bool
 **Behavior:**
 - Scope: Cancels only the task created by the executor for top‑level await or the AST wrapper; it does not enumerate or cancel user tasks.
 - Thread‑safety: If called from a non‑event‑loop thread, cancellation is scheduled via `loop.call_soon_threadsafe(task.cancel)` and returns immediately (non‑blocking). When called on the loop thread, it returns the boolean result of `task.cancel()`.
+- Telemetry: Increments `cancels_requested`; increments `cancels_effective` on success, or `cancels_noop` when nothing is running. Telemetry updates are thread‑safe (internal lock) to ensure deterministic counters under concurrent requests. Off‑loop, “effective” denotes that scheduling was enqueued, not that cancellation has already taken effect.
 - Telemetry: Increments `cancels_requested`; increments `cancels_effective` on success, or `cancels_noop` when nothing is running.
 - Exception notes: If cancellation propagates, `CancelledError` includes `execution_id`, execution mode, `cancel_reason` (when provided), `cancel_requested_at` timestamp, and a short code snippet.
 

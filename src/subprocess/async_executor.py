@@ -38,6 +38,7 @@ import re
 import os as _os
 
 import structlog
+import threading
 
 from .executor import ThreadedExecutor
 from .namespace import NamespaceManager
@@ -92,6 +93,9 @@ class _CoroutineManager:
     def cancel(self, reason: str | None = None) -> bool:
         task = self.top_task
         loop = self.top_loop
+        # Idempotent: if a cancel was already requested, treat as no-op
+        if self.cancel_requested:
+            return False
         if task is None or task.done():
             return False
 
@@ -109,7 +113,14 @@ class _CoroutineManager:
         if loop is not None and current is loop:
             # If loop stopped in the window, treat as no-op
             if getattr(loop, "is_running", lambda: False)():
-                return bool(task.cancel())
+                try:
+                    return bool(task.cancel())
+                except Exception as _e:
+                    try:
+                        logger.debug("cancel_direct_failed", error=str(_e))
+                    except Exception:
+                        pass
+                    return False
             return False
         # Off-loop: schedule thread-safely only if loop is running
         if loop is not None and getattr(loop, "is_running", lambda: False)():
@@ -300,6 +311,9 @@ class AsyncExecutor:
                 "coroutines_closed_on_cleanup": 0,
             }
         )
+
+        # Thread-safe updates for cancellation telemetry (cancel_current may be called off-loop)
+        self._stats_lock = threading.Lock()
 
         # Fallback AST transform policy flags (default OFF)
         # Allow env override only if args left at defaults (mirror cache style)
@@ -638,7 +652,11 @@ class AsyncExecutor:
                 return await self._execute_simple_sync(code)
         except asyncio.CancelledError:
             # Cancellation is not an error; record and propagate
-            self.stats["cancelled_errors"] += 1
+            try:
+                with self._stats_lock:
+                    self.stats["cancelled_errors"] += 1
+            except Exception:
+                self.stats["cancelled_errors"] += 1
             logger.debug(
                 "execute_cancelled",
                 execution_id=self.execution_id,
@@ -1438,12 +1456,26 @@ class AsyncExecutor:
         # In that case the return value indicates that scheduling was enqueued, not that
         # cancellation has already taken effect. On the loop thread, we return the actual
         # boolean from task.cancel().
-        self.stats["cancels_requested"] += 1
+        effective = False
+        try:
+            with self._stats_lock:
+                self.stats["cancels_requested"] += 1
+        except Exception:
+            self.stats["cancels_requested"] += 1
+
         effective = self._coro_manager.cancel(reason)
-        if effective:
-            self.stats["cancels_effective"] += 1
-        else:
-            self.stats["cancels_noop"] += 1
+
+        try:
+            with self._stats_lock:
+                if effective:
+                    self.stats["cancels_effective"] += 1
+                else:
+                    self.stats["cancels_noop"] += 1
+        except Exception:
+            if effective:
+                self.stats["cancels_effective"] += 1
+            else:
+                self.stats["cancels_noop"] += 1
         logger.info(
             "cancel_current",
             execution_id=self.execution_id,
