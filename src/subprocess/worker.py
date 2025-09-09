@@ -203,6 +203,11 @@ class SubprocessWorker:
 
             await asyncio.sleep(0.01)  # Check every 10ms
 
+        # Final check: thread may have finished in the last window
+        if thread and not thread.is_alive():
+            logger.info(f"Thread finished after grace window for {execution_id}")
+            return True
+
         # Grace period expired, need hard cancel
         logger.warning(
             "Grace period expired, hard cancel required",
