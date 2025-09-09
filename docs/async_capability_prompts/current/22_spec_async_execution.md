@@ -44,6 +44,13 @@ Blocking I/O detection was refined to reduce false positives and expose observab
   - Import of a blocked module alone still classifies as `BLOCKING_SYNC` (coarse routing heuristic).
   - Line‑number heuristic: if an AST call node has no `lineno`, overshadow comparison is skipped (treated as unknown ordering).
 
+### Known Limitations and Possible Extensions
+
+- Module scope only: Overshadowing is tracked at module scope; function‑scope rebindings are not considered. This is a conscious trade‑off for simplicity and performance.
+- Base‑name heuristic only: The detector does not currently track object provenance. Calls on variables that were assigned from blocked modules (e.g., `s = requests.Session(); s.get(...)`) are not flagged by the base‑name rule.
+- Future—Order‑aware binding (rebindings): Consider tracking the most‑recent binding per name (including imports) and applying the overshadow guard only when the latest pre‑call binding is a user binding. This would avoid guard suppression when a later `import` should reclassify the name as module‑derived.
+- Future—Light provenance: Consider minimal origin tracking to mark names assigned from blocked modules (e.g., `x = requests.Session()`), allowing detection of `x.get(...)` patterns. Any approach must balance precision and performance, and should likely be guarded behind a configurable policy toggle.
+
 ## Technical Foundation
 
 ### Core Discovery: PyCF_ALLOW_TOP_LEVEL_AWAIT

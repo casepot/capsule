@@ -535,6 +535,13 @@ class AsyncExecutor:
         - Heuristic breadth: does not track object provenance (e.g., ``x = requests.Session(); x.get``)
           and may miss patterns beyond the base‑name rule.
 
+        Future considerations:
+        - Order‑aware binding: track the most‑recent binding per name (including imports) and apply
+          the overshadow guard only when the latest pre‑call binding is a user binding.
+        - Light provenance: consider marking names assigned from blocked modules (e.g.,
+          ``x = requests.Session()``) to enable detection of ``x.get(...)`` patterns under a guarded
+          policy.
+
         Returns:
             bool: True if any blocking import/call is detected; otherwise False.
         """
@@ -699,6 +706,14 @@ class AsyncExecutor:
 
         Import bindings are intentionally ignored; imports are tracked separately
         via the alias map for detection and do not count as user overshadowing.
+
+        Notes:
+        - Only module‑scope statements are considered (no function/class scope). This matches the
+          overshadow guard’s scope and keeps the analysis efficient.
+        - If a statement (or handler) lacks a ``lineno``, it is skipped for overshadow accounting
+          (unknown ordering).
+        - Potential extension: track most‑recent bindings per name to enable order‑aware decisions
+          when a later import or assignment should supersede an earlier binding.
         """
 
         def add_name(name: str, lineno: int) -> None:
