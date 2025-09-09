@@ -224,6 +224,8 @@ class AsyncExecutor:
         blocking_modules: set[str] | None = None,
         blocking_methods_by_module: dict[str, set[str]] | None = None,
         warn_on_blocking: bool = True,
+        enable_overshadow_guard: bool = True,
+        require_import_for_module_calls: bool = True,
         enable_def_await_rewrite: bool | None = None,
         enable_async_lambda_helper: bool | None = None,
         fallback_linecache_max_size: int | None = None,
@@ -240,6 +242,12 @@ class AsyncExecutor:
             blocking_modules: Override for blocking I/O detection policy.
             blocking_methods_by_module: Override per-module blocking method names.
             warn_on_blocking: Emit logs on blocking patterns when True.
+            enable_overshadow_guard: When True, skip blocking classification if the base
+                name (e.g., "requests" in requests.get) or direct callable name has been
+                rebound at module scope before the call site (e.g., "requests = object()").
+            require_import_for_module_calls: When True, only consider attribute-based calls
+                (e.g., mod.func()) as blocking if the base module name or an alias was
+                imported anywhere in the source (guards against coincidental name matches).
             enable_def_await_rewrite: When True, the AST fallback pre-transform rewrites
                 top-level "def" whose body contains an await into "async def". When False,
                 this rewrite is disabled. When None (default), environment variable
@@ -301,6 +309,8 @@ class AsyncExecutor:
             "detected_blocking_import": 0,
             "detected_blocking_call": 0,
             "missed_attribute_chain": 0,
+            # Optional: skips due to overshadowing guard
+            "overshadow_guard_skips": 0,
         }
         self.mode_counts: dict[ExecutionMode, int] = dict.fromkeys(ExecutionMode, 0)
 
@@ -376,6 +386,8 @@ class AsyncExecutor:
             policy.blocking_methods_by_module = merged
         self._policy: _DetectionPolicy = policy
         self._warn_on_blocking: bool = bool(warn_on_blocking)
+        self._enable_overshadow_guard: bool = bool(enable_overshadow_guard)
+        self._require_import_for_module_calls: bool = bool(require_import_for_module_calls)
 
         logger.info(
             "AsyncExecutor initialized", execution_id=execution_id, has_loop=self.loop is not None
@@ -523,6 +535,8 @@ class AsyncExecutor:
         """
         # Extended detection with alias tracking and configurable policy
         alias_to_module: dict[str, str] = {}
+        imported_base_modules: set[str] = set()
+        imported_aliases: set[str] = set()
 
         # First pass: map import aliases, and flag direct blocking imports
         found_blocking_import = False
@@ -532,6 +546,8 @@ class AsyncExecutor:
                     module_name = alias.name.split(".")[0]
                     name = alias.asname or module_name
                     alias_to_module[name] = module_name
+                    imported_aliases.add(name)
+                    imported_base_modules.add(module_name)
                     if module_name in self._policy.blocking_modules:
                         found_blocking_import = True
             elif isinstance(node, ast.ImportFrom) and node.module:
@@ -539,8 +555,13 @@ class AsyncExecutor:
                 for alias in node.names:
                     name = alias.asname or alias.name
                     alias_to_module[name] = module_name
+                    imported_aliases.add(name)
+                imported_base_modules.add(module_name)
                 if module_name in self._policy.blocking_modules:
                     found_blocking_import = True
+
+        # Collect earliest binding line numbers at module scope to guard overshadowing.
+        binding_lineno_by_name = self._collect_top_level_bindings(tree)
 
         found_any = False
         if found_blocking_import:
@@ -557,6 +578,20 @@ class AsyncExecutor:
                     fn = node.func.id
                     # Direct name calls like open(), input(), or aliased import funcs
                     if fn in self._policy.blocking_name_calls:
+                        # Overshadow guard: if name was rebound before this call, skip
+                        if self._enable_overshadow_guard:
+                            bind_line = binding_lineno_by_name.get(fn)
+                            if bind_line is not None and bind_line < getattr(node, "lineno", 10**9):
+                                self.stats["overshadow_guard_skips"] += 1
+                                logger.debug(
+                                    "overshadow_skip_name_call",
+                                    name=fn,
+                                    bind_line=bind_line,
+                                    call_line=getattr(node, "lineno", -1),
+                                    execution_id=self.execution_id,
+                                )
+                                # Skip classification for this call
+                                continue
                         self.stats["detected_blocking_call"] += 1
                         if self._warn_on_blocking:
                             logger.warning(
@@ -567,6 +602,20 @@ class AsyncExecutor:
                         return True
                     resolved_mod = alias_to_module.get(fn)
                     if resolved_mod and resolved_mod in self._policy.blocking_modules:
+                        # Overshadow guard for alias names
+                        if self._enable_overshadow_guard:
+                            bind_line = binding_lineno_by_name.get(fn)
+                            if bind_line is not None and bind_line < getattr(node, "lineno", 10**9):
+                                self.stats["overshadow_guard_skips"] += 1
+                                logger.debug(
+                                    "overshadow_skip_alias_call",
+                                    alias=fn,
+                                    module=resolved_mod,
+                                    bind_line=bind_line,
+                                    call_line=getattr(node, "lineno", -1),
+                                    execution_id=self.execution_id,
+                                )
+                                continue
                         # If a direct name maps to a blocking module, consider it blocking
                         self.stats["detected_blocking_call"] += 1
                         logger.info(
@@ -580,8 +629,29 @@ class AsyncExecutor:
                 elif isinstance(node.func, ast.Attribute):
                     base_name = self._resolve_attribute_base(node.func.value)
                     if base_name:
+                        # Overshadow guard: if base rebinding occurred before call, skip
+                        if self._enable_overshadow_guard:
+                            bind_line = binding_lineno_by_name.get(base_name)
+                            if bind_line is not None and bind_line < getattr(node, "lineno", 10**9):
+                                self.stats["overshadow_guard_skips"] += 1
+                                logger.debug(
+                                    "overshadow_skip_attr_call",
+                                    base=base_name,
+                                    attr=node.func.attr,
+                                    bind_line=bind_line,
+                                    call_line=getattr(node, "lineno", -1),
+                                    execution_id=self.execution_id,
+                                )
+                                continue
+
                         mod = alias_to_module.get(base_name, base_name)
                         if mod in self._policy.blocking_modules:
+                            # Optional requirement: proceed only if imported
+                            if self._require_import_for_module_calls:
+                                imported = (base_name in alias_to_module) or (mod in imported_base_modules)
+                                if not imported:
+                                    # Skip classification; acts as false-positive guard
+                                    continue
                             methods = self._policy.blocking_methods_by_module.get(mod, set())
                             if node.func.attr in methods:
                                 self.stats["detected_blocking_call"] += 1
@@ -596,6 +666,61 @@ class AsyncExecutor:
                         # Could not resolve base of attribute chain (e.g., complex expr)
                         self.stats["missed_attribute_chain"] += 1
         return found_any
+
+    def _collect_top_level_bindings(self, tree: ast.AST) -> dict[str, int]:
+        """Collect earliest line numbers for names bound at module scope.
+
+        Considers simple name bindings introduced by:
+        - Assign / AnnAssign / AugAssign targets (Name, Tuple/List destructuring)
+        - FunctionDef / AsyncFunctionDef / ClassDef
+        - For / AsyncFor targets
+        - With / AsyncWith `as` targets
+        - ExceptHandler names
+
+        Import bindings are intentionally ignored; imports are tracked separately
+        via the alias map for detection and do not count as user overshadowing.
+        """
+
+        def add_name(name: str, lineno: int) -> None:
+            if name and not name.startswith("__") and (
+                name not in bindings or lineno < bindings[name]
+            ):
+                bindings[name] = lineno
+
+        def walk_target(t: ast.AST, lineno: int) -> None:
+            if isinstance(t, ast.Name):
+                add_name(t.id, lineno)
+            elif isinstance(t, ast.Tuple | ast.List):
+                for elt in t.elts:
+                    walk_target(elt, lineno)
+            # Attributes/Subscripts do not bind simple names at module scope
+
+        bindings: dict[str, int] = {}
+        # Only consider top-level statements in order
+        if isinstance(tree, ast.Module):
+            for stmt in tree.body:
+                lineno = getattr(stmt, "lineno", 0) or 0
+                if isinstance(stmt, ast.Assign):
+                    for tgt in stmt.targets:
+                        walk_target(tgt, lineno)
+                elif isinstance(stmt, ast.AnnAssign | ast.AugAssign):
+                    walk_target(stmt.target, lineno)
+                elif isinstance(stmt, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                    add_name(stmt.name, lineno)
+                elif isinstance(stmt, ast.For | ast.AsyncFor):
+                    walk_target(stmt.target, lineno)
+                elif isinstance(stmt, ast.With | ast.AsyncWith):
+                    for item in stmt.items:
+                        opt = getattr(item, "optional_vars", None)
+                        if opt is not None:
+                            walk_target(opt, lineno)
+                elif isinstance(stmt, ast.Try):
+                    # Except handler names
+                    for handler in stmt.handlers:
+                        name = getattr(handler, "name", None)
+                        if isinstance(name, str) and name:
+                            add_name(name, getattr(handler, "lineno", lineno))
+        return bindings
 
     async def execute(self, code: str) -> Any:
         """

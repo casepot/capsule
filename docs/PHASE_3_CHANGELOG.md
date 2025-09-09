@@ -146,3 +146,33 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
 
 - Success criteria met:
   - Cancelling an in-flight TLA/AST wrapper run interrupts promptly; `cleanup_coroutines()` returns 0 afterward; telemetry reflects requested/effective/no-op accurately.
+
+## PR 5 — Blocking I/O Detection Refinements + Telemetry
+
+- Scope:
+  - Broaden blocking I/O detection while reducing false positives via overshadowing guards and an import requirement for module-based calls.
+  - Keep alias and deep attribute-chain resolution; expose config toggles and structured counters.
+
+- Key changes (src/subprocess/async_executor.py):
+  - Added `enable_overshadow_guard: bool = True`:
+    - Skips blocking classification when a base/alias/direct name has been rebound at module scope before the call (e.g., `requests = object(); requests.get(...)`).
+    - Guard applies to direct name calls, aliased calls, and attribute chains.
+  - Added `require_import_for_module_calls: bool = True`:
+    - Attribute-based calls (e.g., `mod.func()`) only considered blocking if the base module or alias was imported in the code. Prevents false positives from coincidental names.
+  - Telemetry: retained `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain` and added `overshadow_guard_skips` for observability.
+  - Implementation details:
+    - Collect earliest top-level bindings with `_collect_top_level_bindings(tree)` to power overshadow line checks (lineno-based heuristic, module scope).
+    - Continue to resolve alias maps for `import`/`from ... import ... as ...` and resolve attribute-chain bases.
+    - Import presence still marks BLOCKING_SYNC when base module is in the policy, preserving existing behavior.
+
+- Tests (unit):
+  - Added `tests/unit/test_async_executor_detection_breadth.py` covering:
+    - Overshadowing skip cases that should not detect blocking (bare name matches and deep chains), and overshadow after import where import-based detection remains.
+    - Positive controls: requests/socket/urllib/os/pathlib calls and deep attribute chains remain detected.
+    - Telemetry counters for `detected_blocking_import`, `detected_blocking_call`, `missed_attribute_chain`; `overshadow_guard_skips` observed when applicable.
+    - Config validation: default `require_import_for_module_calls=True` suppresses unimported `requests.get(...)`; overriding `blocking_methods_by_module` is respected (e.g., `os.stat`).
+
+- Success criteria:
+  - Detection continues to cover common patterns with fewer false positives, overshadowing guards are effective, config toggles work, and counters increment as expected.
+
+Merge: PR #NN (`feat/phase3-pr5-blocking-io-detection`) merged into `master`.
