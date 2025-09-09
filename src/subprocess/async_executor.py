@@ -48,6 +48,9 @@ from .namespace import NamespaceManager
 
 logger = structlog.get_logger()
 
+# Max depth guard while resolving attribute/call/subscript chains
+_MAX_ATTRIBUTE_CHAIN_DEPTH = 50
+
 
 class ExecutionMode(Enum):
     """Execution modes for code analysis and routing.
@@ -536,7 +539,6 @@ class AsyncExecutor:
         # Extended detection with alias tracking and configurable policy
         alias_to_module: dict[str, str] = {}
         imported_base_modules: set[str] = set()
-        imported_aliases: set[str] = set()
 
         # First pass: map import aliases, and flag direct blocking imports
         found_blocking_import = False
@@ -546,7 +548,6 @@ class AsyncExecutor:
                     module_name = alias.name.split(".")[0]
                     name = alias.asname or module_name
                     alias_to_module[name] = module_name
-                    imported_aliases.add(name)
                     imported_base_modules.add(module_name)
                     if module_name in self._policy.blocking_modules:
                         found_blocking_import = True
@@ -555,7 +556,6 @@ class AsyncExecutor:
                 for alias in node.names:
                     name = alias.asname or alias.name
                     alias_to_module[name] = module_name
-                    imported_aliases.add(name)
                 imported_base_modules.add(module_name)
                 if module_name in self._policy.blocking_modules:
                     found_blocking_import = True
@@ -581,13 +581,14 @@ class AsyncExecutor:
                         # Overshadow guard: if name was rebound before this call, skip
                         if self._enable_overshadow_guard:
                             bind_line = binding_lineno_by_name.get(fn)
-                            if bind_line is not None and bind_line < getattr(node, "lineno", 10**9):
+                            call_line = getattr(node, "lineno", 10**9)
+                            if bind_line is not None and bind_line < call_line:
                                 self.stats["overshadow_guard_skips"] += 1
                                 logger.debug(
                                     "overshadow_skip_name_call",
                                     name=fn,
                                     bind_line=bind_line,
-                                    call_line=getattr(node, "lineno", -1),
+                                    call_line=call_line,
                                     execution_id=self.execution_id,
                                 )
                                 # Skip classification for this call
@@ -605,25 +606,27 @@ class AsyncExecutor:
                         # Overshadow guard for alias names
                         if self._enable_overshadow_guard:
                             bind_line = binding_lineno_by_name.get(fn)
-                            if bind_line is not None and bind_line < getattr(node, "lineno", 10**9):
+                            call_line = getattr(node, "lineno", 10**9)
+                            if bind_line is not None and bind_line < call_line:
                                 self.stats["overshadow_guard_skips"] += 1
                                 logger.debug(
                                     "overshadow_skip_alias_call",
                                     alias=fn,
                                     module=resolved_mod,
                                     bind_line=bind_line,
-                                    call_line=getattr(node, "lineno", -1),
+                                    call_line=call_line,
                                     execution_id=self.execution_id,
                                 )
                                 continue
                         # If a direct name maps to a blocking module, consider it blocking
                         self.stats["detected_blocking_call"] += 1
-                        logger.info(
-                            "Detected blocking aliased call",
-                            alias=fn,
-                            module=resolved_mod,
-                            execution_id=self.execution_id,
-                        )
+                        if self._warn_on_blocking:
+                            logger.info(
+                                "Detected blocking aliased call",
+                                alias=fn,
+                                module=resolved_mod,
+                                execution_id=self.execution_id,
+                            )
                         return True
                 # Attribute calls like time.sleep(), requests.get()
                 elif isinstance(node.func, ast.Attribute):
@@ -632,14 +635,15 @@ class AsyncExecutor:
                         # Overshadow guard: if base rebinding occurred before call, skip
                         if self._enable_overshadow_guard:
                             bind_line = binding_lineno_by_name.get(base_name)
-                            if bind_line is not None and bind_line < getattr(node, "lineno", 10**9):
+                            call_line = getattr(node, "lineno", 10**9)
+                            if bind_line is not None and bind_line < call_line:
                                 self.stats["overshadow_guard_skips"] += 1
                                 logger.debug(
                                     "overshadow_skip_attr_call",
                                     base=base_name,
                                     attr=node.func.attr,
                                     bind_line=bind_line,
-                                    call_line=getattr(node, "lineno", -1),
+                                    call_line=call_line,
                                     execution_id=self.execution_id,
                                 )
                                 continue
@@ -655,12 +659,13 @@ class AsyncExecutor:
                             methods = self._policy.blocking_methods_by_module.get(mod, set())
                             if node.func.attr in methods:
                                 self.stats["detected_blocking_call"] += 1
-                                logger.info(
-                                    "Detected blocking attribute call",
-                                    module=mod,
-                                    method=node.func.attr,
-                                    execution_id=self.execution_id,
-                                )
+                                if self._warn_on_blocking:
+                                    logger.info(
+                                        "Detected blocking attribute call",
+                                        module=mod,
+                                        method=node.func.attr,
+                                        execution_id=self.execution_id,
+                                    )
                                 found_any = True
                     else:
                         # Could not resolve base of attribute chain (e.g., complex expr)
@@ -1480,7 +1485,7 @@ class AsyncExecutor:
         visited = 0
         while True:
             visited += 1
-            if visited > 50:
+            if visited > _MAX_ATTRIBUTE_CHAIN_DEPTH:
                 # Safety guard to avoid pathological loops
                 return None
             if isinstance(node, ast.Attribute):

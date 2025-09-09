@@ -68,6 +68,22 @@ time.sleep(0.01)
 """
         assert ex.analyze_execution_mode(code) == ExecutionMode.SIMPLE_SYNC
 
+    def test_warn_on_blocking_disables_logs(self, monkeypatch):
+        # Ensure logger warnings/infos are not emitted when warn_on_blocking=False
+        ex = AsyncExecutor(namespace_manager=NamespaceManager(), transport=None, execution_id="det-logs", warn_on_blocking=False)
+        from src.subprocess import async_executor as ae_mod
+        mocked_logger = type("L", (), {"warning": lambda *a, **k: (_ for _ in ()).throw(AssertionError("warning called")),
+                                         "info": lambda *a, **k: (_ for _ in ()).throw(AssertionError("info called")),
+                                         "debug": lambda *a, **k: None})()
+        monkeypatch.setattr(ae_mod, "logger", mocked_logger, raising=True)
+        # This includes both import and attribute call paths; neither should log when disabled
+        code = """
+import requests
+requests.get('http://example.com')
+"""
+        # Should still detect BLOCKING_SYNC but not emit logs
+        assert ex.analyze_execution_mode(code) == ExecutionMode.BLOCKING_SYNC
+
     # ----------------- Positive controls: should detect blocking -----------------
     def test_attribute_calls_on_blocking_modules(self):
         ex = self.make_executor()
@@ -111,3 +127,33 @@ time.sleep(0.01)
     def test_override_blocking_methods(self):
         ex = self.make_executor(blocking_methods_by_module={"os": {"stat"}})
         assert ex.analyze_execution_mode("import os\nos.stat('x')") == ExecutionMode.BLOCKING_SYNC
+
+    def test_require_import_for_module_calls_disabled(self):
+        # When disabled, unimported module-looking attribute calls are treated as blocking
+        ex = self.make_executor(require_import_for_module_calls=False)
+        assert ex.analyze_execution_mode("requests.get('http://x')") == ExecutionMode.BLOCKING_SYNC
+
+    # ----------------- Ordering: overshadow AFTER call does not suppress -----------------
+    def test_overshadowing_after_call_still_detects_imported(self):
+        ex = self.make_executor()
+        cases = [
+            ("import requests\nrequests.get('http://x')\nrequests = object()", ExecutionMode.BLOCKING_SYNC),
+            ("import requests as rq\nrq.get('http://x')\nrq = object()", ExecutionMode.BLOCKING_SYNC),
+            ("from requests import get as g\ng('http://x')\ng = None", ExecutionMode.BLOCKING_SYNC),
+        ]
+        for code, expected in cases:
+            assert ex.analyze_execution_mode(code) == expected
+
+    # ----------------- Complex attribute chains -----------------
+    def test_requests_session_chain(self):
+        ex = self.make_executor()
+        code1 = """
+import requests
+requests.Session().get('http://example.com')
+"""
+        code2 = """
+from requests import Session
+Session().get('http://example.com')
+"""
+        assert ex.analyze_execution_mode(code1) == ExecutionMode.BLOCKING_SYNC
+        assert ex.analyze_execution_mode(code2) == ExecutionMode.BLOCKING_SYNC

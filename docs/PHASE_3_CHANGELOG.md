@@ -175,4 +175,4 @@ Merge: PR #13 (`feat/phase3-pr1-async-tla-compile-first`) merged into `master`.
 - Success criteria:
   - Detection continues to cover common patterns with fewer false positives, overshadowing guards are effective, config toggles work, and counters increment as expected.
 
-Merge: PR #NN (`feat/phase3-pr5-blocking-io-detection`) merged into `master`.
+Merge: PR #20 (`feat/phase3-pr5-blocking-io-detection`) merged into `master`.
