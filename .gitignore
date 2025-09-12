@@ -178,7 +178,6 @@ $RECYCLE.BIN/
 
 # UV
 .uv/
-uv.lock
 
 # Project specific
 *.session
