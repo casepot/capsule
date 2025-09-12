@@ -34,6 +34,7 @@ This repository keeps main (master) focused on production code, tests, and core 
   - PDFs → workspace
 
 ## Kept On main
+- CI/Review config: `.reviewrc.json` (project review pipeline config)
 - Code & tests: `src/`, `tests/`, `typings/`, `.github/`
 - Tooling: `pyproject.toml`, `uv.lock` (tracked)
 - Docs: `README.md`, `CONTRIBUTING.md`, `AGENTS.md`, `CHANGELOG.md`
