@@ -183,8 +183,8 @@ uv run pytest -m integration   # Integration tests
 uv run mypy src/
 uv run basedpyright src/
 
-# Formatting
-uv run black src/
+# Linting & Formatting (configured in pyproject.toml)
+uv run ruff check src/
 uv run ruff format src/
 
 # Test with coverage

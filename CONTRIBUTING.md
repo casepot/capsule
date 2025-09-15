@@ -46,14 +46,14 @@ mypy src/
 basedpyright
 ```
 
-### Code Formatting
+### Linting & Formatting (pyproject.toml)
 
 ```bash
-# Format code with black
-black src/ tests/
-
-# Check linting with ruff
+# Lint code with ruff
 ruff check src/ tests/
+
+# Format code with ruff
+ruff format src/ tests/
 ```
 
 ## Code Style
