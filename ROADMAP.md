@@ -22,6 +22,21 @@
 ### Integration
 - ResonateProtocolBridge (local mode) correlates durable promises and returns structured timeout rejections; it tracks a pending high‑water mark. Surfacing lifecycle metrics via `Session.info()` is planned (BRIDGE‑010).
 
+## Completed Phases (0–2c)
+
+- Phase 0 — Stabilization
+  - ThreadedExecutor async wrapper for test compatibility
+  - Merge‑only namespace policy; event loop handling fixes
+  - Complete message schemas (protocol)
+- Phase 1 — AsyncExecutor Foundation
+  - Execution‑mode analysis (AST); TLA compile‑first path
+  - Blocking I/O detection heuristics; DI factory wiring
+  - Initial caches/timeouts (AST/linecache)
+- Phase 2 — Promise‑First Integration
+  - Durable Execute/Input correlation (local mode)
+  - Passive interceptors; worker output ordering
+  - Checkpoint/Restore (local mode)
+
 ## Workstreams & Open Issues
 
 ### Executor & Worker (EW)
@@ -55,6 +70,27 @@
 - OBS‑010 (#40): Distributed execution trace.
 - OBS‑011 (#41): Introspection (pending promises, namespace summary, pool status) with redaction.
 
+## Vision & Targets
+
+- Performance (directional targets)
+  - Simple execution latency: < 5 ms
+  - Top‑level await latency: < 10 ms
+  - Promise resolution (local): < 1 ms
+  - Session acquisition: < 100 ms
+  - Throughput: ≥ 1,000 ops/sec sustained
+- Reliability & operability
+  - Output‑before‑result ordering verified in CI
+  - Pool breaker prevents thundering herds; warmup efficiency > 0.8
+  - P95 cancel latency SLO for worker/bridge paths
+- Security/compliance
+  - Capability registry with allowlists and caps; audit‑friendly logs/metrics
+
+## Quality Targets
+
+- Test coverage: ≥ 70% core modules; grow to ≥ 80% alongside bridge/providers work
+- CI: add perf “smoke” baselines post‑FrameBuffer refactor; introduce regression gates where practical
+- Tests: event‑driven waits (no sleeps), clear filenames/fixtures, deterministic timing
+
 ## Sequencing & Rollout
 
 - Enable First (low risk, unlocks downstream):
@@ -67,6 +103,19 @@
   - CAP‑011 after BRIDGE‑010; BRIDGE‑011 after lifecycle with budgets and a P95 cancel latency SLO.
 - Providers:
   - PROV‑020 (SDK/contracts) before provider implementations.
+
+## Risk Assessment
+
+- Technical
+  - Event loop complexity → executor/transport own loops; use `get_running_loop()`; avoid loop creation in durable layers
+  - Ordering regressions → worker strict drain enforcement; pump remains event‑driven; add CI checks
+  - Protocol compatibility → additive schemas; negotiate/ack; staged rollouts
+  - Pool churn/health → breaker backoff; hybrid health; observability of removals and efficiency
+  - FrameBuffer polling → prioritize PROTO‑010 to reduce idle CPU/latency variance
+- Adoption
+  - Capability coverage → land registry/policy and core providers early; contract tests
+  - Observability gap → ship trace + introspection with redaction rules
+  - Remote mode missing → outline handshake/auth/retry; stage behind flags
 
 ## Invariants & Risks
 
@@ -86,6 +135,32 @@
 ## Medium/Long‑Term
 
 - Capability registry & providers; remote/distributed mode; production hardening (limits/backpressure); observability (OTel, metrics, profiling); future multi‑language workers.
+
+### Capability System Direction
+
+- Registry & SecurityPolicy: namespaced injection; allowlists; size/time caps; structured observability; audit logging
+- Directional list:
+  - Files: read/write/list (path allowlists; traversal prevention)
+  - HTTP: fetch with host allowlists; body size/redirect limits
+  - Shell: allowlisted commands; output caps
+  - System: environment/time/process (scoped; optional)
+- Acceptance: pass contract tests; clear error semantics; redaction where needed
+
+### Remote Mode Direction
+
+- Connection management; authN/Z; distributed promise resolution; retry with backoff; circuit breakers; version negotiation
+- Stage rollout behind flags; additive schemas
+
+### Benchmarks & CI Gates
+
+- Establish baselines for exec/await latency and throughput on dev hardware
+- CI smoke checks to catch major regressions; progressively tighten thresholds
+
+### Future Exploration
+
+- Multi‑language workers (JS/TS, Go, Rust) with a common protocol
+- Advanced features: GPU execution; distributed data structures; time‑travel debugging; notebook kernel
+- AI integration: LLM‑optimized patterns, streaming UX, semantic checkpoints, agent framework interop
 
 ### Phase 5 Completion
 - Remote mode functional
