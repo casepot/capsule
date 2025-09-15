@@ -1,62 +1,52 @@
 # Repository Guidelines
 
-Capsule is a Python execution environment implementing a Subprocess‑Isolated Execution Service (SIES). This guide summarizes how to work effectively in this repo during the transition from ThreadedExecutor to AsyncExecutor.
+This guide helps contributors work effectively in this repository. It covers structure, build/test commands, style, testing, PR etiquette, and the core invariants that must not be broken.
 
 ## Project Structure & Module Organization
-- `src/`: library code
-  - `src/subprocess/`: executors (`ThreadedExecutor`, `AsyncExecutor` skeleton), `worker.py`
-  - `src/session/`: `Session`, `SessionPool`, manager utilities
-  - `src/protocol/`: message models, framing, transports
-- `tests/`: `unit/`, `integration/`, `e2e/`, `fixtures/`
-- `docs/async_capability_prompts/current/`: key specs and implementation notes
+- `src/`
+  - `src/subprocess/` — execution engine: `executor.py` (ThreadedExecutor), `async_executor.py` (native async paths; worker routing pending), `worker.py`, `namespace.py`.
+  - `src/session/` — `Session`, `SessionPool`, lifecycle/orchestration.
+  - `src/protocol/` — message schemas (`messages.py`), framing (`framing.py`), transport (`transport.py`).
+  - `src/integration/` — local Resonate bridge, DI wiring, capabilities.
+- `tests/` — `unit/`, `integration/`, `e2e/`, `fixtures/`.
+- `docs/` — roadmap and process docs (see `docs/PROCESS/ISSUE_CONVENTIONS.md`).
 
 ## Build, Test, and Development Commands
-Note: The project `.venv/` already exists; `uv sync` and `uv run` use it automatically. Activation is optional for editor tooling: `source .venv/bin/activate`.
-```bash
-uv sync                                   # install/sync dependencies
-uv run pytest                             # run all tests
-uv run pytest -m unit|integration|e2e     # run by marker
-uv run pytest --cov=src --cov-report=term-missing  # coverage (term)
-uv run pytest -n auto                     # parallel tests
-uv run mypy src/ && uv run basedpyright src/       # type checks
-uv run ruff check src/ && uv run black src/ && uv run ruff format src/  # lint/format
-uv run pytest --timeout=30                # guard long tests
-```
+- Install/sync deps: `uv sync`
+- Run tests: `uv run pytest` (all), `uv run pytest -m unit|integration|e2e`
+- Coverage: `uv run pytest --cov=src --cov-report=term-missing`
+- Types & lint/format: `uv run mypy src/ && uv run basedpyright src/` and `uv run ruff check src/ && uv run black src/ && uv run ruff format src/`
+- Guard long tests: `uv run pytest --timeout=30`
 
 ## Coding Style & Naming Conventions
-- Python 3.11+, 4‑space indent, type hints for public APIs.
-- Names: modules/functions `snake_case`, classes `PascalCase`, constants `UPPER_SNAKE`.
-- Formatting: `black`; Lint: `ruff` (follow its import and style rules).
-- Namespace rule: never replace dicts; always merge: `self._namespace.update(new)`; preserve `ENGINE_INTERNALS`.
-- Event loop: set/get the loop before creating asyncio objects; coordinate threads via `call_soon_threadsafe`.
+- Python 3.11+, 4‑space indent, type hints on public APIs.
+- Naming: modules/functions `snake_case`; classes `PascalCase`; constants `UPPER_SNAKE`.
+- Formatting: Black. Lint: Ruff (follow import/style rules). Types: mypy + basedpyright.
+- Repository‑critical invariants:
+  - Single‑reader transport (Session is the only reader).
+  - Output‑before‑result (worker drains the output pump before sending Result; timeout → Error and no Result).
+  - Merge‑only namespace (preserve `ENGINE_INTERNALS`; never replace the namespace dict).
+  - Event loop ownership (use `asyncio.get_running_loop()`; coordinate threads with `call_soon_threadsafe`; do not create loops in durable layers).
+  - Pump‑only outputs (stdout/stderr go through the async pump; avoid direct writes).
 
 ## Testing Guidelines
 - Framework: `pytest` with markers (`unit`, `integration`, `e2e`).
-- File naming: `tests/.../test_*.py`; focus tests near the code they validate.
-- During transition, expose an async interface (async wrapper over `ThreadedExecutor` as needed).
-- Protocol fields must be present (e.g., `ResultMessage.execution_time`; heartbeat metrics).
+- Test files: `tests/**/test_*.py`; place tests near the code they validate.
+- Prefer event‑driven waits (Conditions/Events) over sleeps; avoid flaky timing.
+- Coverage target: ≥ 70% on core modules.
+- Examples:
+  - Unit only: `uv run pytest -m unit`
+  - Coverage summary: `uv run pytest --cov=src --cov-report=term-missing`
 
 ## Commit & Pull Request Guidelines
-- Use Conventional Commits: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`; scope optional (e.g., `feat(executor): add async wrapper`).
-- Subject in imperative mood, ≤72 chars; include context in body and breaking changes under `BREAKING CHANGE:`.
-- PRs: clear description, linked issues, tests/fixtures updated, docs touched when behavior changes; ensure lint, type checks, and tests pass.
-
-## Issue Conventions (agents & maintainers)
-- For how we write and manage issues and milestones, see:
-  - `docs/PROCESS/ISSUE_CONVENTIONS.md` — covers milestone naming, issue title format, label taxonomy, required sections, per‑workstream invariants, rollout/flags, and a quality checklist.
-  - `.github/ISSUE_TEMPLATE/` — ready‑to‑use templates for feature/refactor/hardening and meta/process issues.
-  - README “Contributing” — quick links and where to file.
-  
-Use those references when creating/updating issues so titles, labels, and sections stay consistent and reviewable.
+- Conventional Commits (e.g., `feat:`, `fix:`, `refactor:`, `test:`, `docs:`); subject ≤ 72 chars; describe scope and impact.
+- PRs: clear description, linked issues, “Affected Paths” listed, risks/invariants noted; update docs when behavior changes.
+- CI must pass: tests, type checks, Ruff, Black. Use the templates and conventions in `docs/PROCESS/ISSUE_CONVENTIONS.md`.
 
 ## Security & Configuration Tips
-- Each `Session` runs isolated; respect limits (≈512MB memory, 30s timeout, ~100 FDs).
-- Do not use `dont_inherit=True` in `compile()` (cancellation breaks).
-- Maintain message correlation IDs and merge‑only namespace policy.
-
-## Documentation Practices
-- Prefer one canonical document for a topic and link to it from README and here.
-- Avoid duplicating guidance across files; update the canonical doc and keep pointers evergreen.
+- Execution is subprocess‑isolated; respect resource/time limits.
+- Do not set `dont_inherit=True` in `compile()` (breaks cancellation tracing).
+- Keep protocol ordering guarantees; do not add new transport readers.
 
 ## References
-- Issue conventions: `docs/PROCESS/ISSUE_CONVENTIONS.md`
+- Issue conventions and templates: `docs/PROCESS/ISSUE_CONVENTIONS.md`, `.github/ISSUE_TEMPLATE/`
