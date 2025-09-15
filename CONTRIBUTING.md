@@ -98,6 +98,17 @@ ruff check src/ tests/
 6. Push to your fork (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
+## Issue Conventions and Templates
+
+We maintain consistent, high‑quality issues so ownership, risks, sequencing, and acceptance criteria are obvious.
+
+- Read: `docs/PROCESS/ISSUE_CONVENTIONS.md` for titles, labels, required sections, rollout/flags, and core invariants by workstream.
+- Use GitHub templates when filing issues:
+  - Feature / Refactor / Hardening: `.github/ISSUE_TEMPLATE/feature.md`
+  - Meta / Process / Docs: `.github/ISSUE_TEMPLATE/meta.md`
+- Assign the appropriate milestone (e.g., "Executor & Worker (EW) — Native Async, Pump, Messaging").
+- Apply labels for ownership (`touches:*`), risk (`risk:*`), and type (`type:*`). Add `rollout:flagged` for gated features.
+
 ## Pull Request Guidelines
 
 - Provide a clear description of the changes

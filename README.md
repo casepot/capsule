@@ -220,6 +220,15 @@ capsule/
 
 ## Contributing
 
+We welcome contributions! Please read the guidelines and use our issue templates to keep work scoped and reviewable.
+
+- Contributing Guide: see `CONTRIBUTING.md` (development workflow, testing, PR guidance)
+- Issue Conventions (titles, labels, required sections, invariants, rollout/flags): `docs/PROCESS/ISSUE_CONVENTIONS.md`
+- GitHub Issue Templates: `.github/ISSUE_TEMPLATE/`
+
+
+## Contributing
+
 Capsule is in early development. Key areas needing contribution:
 
 - Phase 3: Native AsyncExecutor implementation

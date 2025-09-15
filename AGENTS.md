@@ -41,7 +41,22 @@ uv run pytest --timeout=30                # guard long tests
 - Subject in imperative mood, ≤72 chars; include context in body and breaking changes under `BREAKING CHANGE:`.
 - PRs: clear description, linked issues, tests/fixtures updated, docs touched when behavior changes; ensure lint, type checks, and tests pass.
 
+## Issue Conventions (agents & maintainers)
+- For how we write and manage issues and milestones, see:
+  - `docs/PROCESS/ISSUE_CONVENTIONS.md` — covers milestone naming, issue title format, label taxonomy, required sections, per‑workstream invariants, rollout/flags, and a quality checklist.
+  - `.github/ISSUE_TEMPLATE/` — ready‑to‑use templates for feature/refactor/hardening and meta/process issues.
+  - README “Contributing” — quick links and where to file.
+  
+Use those references when creating/updating issues so titles, labels, and sections stay consistent and reviewable.
+
 ## Security & Configuration Tips
 - Each `Session` runs isolated; respect limits (≈512MB memory, 30s timeout, ~100 FDs).
 - Do not use `dont_inherit=True` in `compile()` (cancellation breaks).
 - Maintain message correlation IDs and merge‑only namespace policy.
+
+## Documentation Practices
+- Prefer one canonical document for a topic and link to it from README and here.
+- Avoid duplicating guidance across files; update the canonical doc and keep pointers evergreen.
+
+## References
+- Issue conventions: `docs/PROCESS/ISSUE_CONVENTIONS.md`
