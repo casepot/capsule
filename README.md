@@ -227,12 +227,12 @@ We welcome contributions! Please read the guidelines and use our issue templates
 - GitHub Issue Templates: `.github/ISSUE_TEMPLATE/`
 
 
-## Contributing
+### Focus Areas
 
-Capsule is in early development. Key areas needing contribution:
+Capsule is in early development. Priority areas for contributions:
 
 - Phase 3: Native AsyncExecutor implementation
-- Phase 4: Capability system development
+- Capability system development
 - Test coverage improvement
 - Documentation
 - Performance optimization
