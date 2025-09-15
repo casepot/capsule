@@ -18,10 +18,11 @@ This guide helps contributors work effectively in this repository. It covers str
 - Types & lint/format: `uv run mypy src/ && uv run basedpyright src/` and `uv run ruff check src/ && uv run black src/ && uv run ruff format src/`
 - Guard long tests: `uv run pytest --timeout=30`
 
-## Coding Style & Naming Conventions
+## Coding Style, Typing & Naming
 - Python 3.11+, 4‑space indent, type hints on public APIs.
+- Typing: strong/strict across the codebase (not just public APIs). Avoid `Any`; prefer `Protocol`, `TypedDict`, and generics. Add minimal local stubs under `typings/` for third‑party gaps. See `docs/TYPING.md`.
 - Naming: modules/functions `snake_case`; classes `PascalCase`; constants `UPPER_SNAKE`.
-- Formatting: Black. Lint: Ruff (follow import/style rules). Types: mypy + basedpyright.
+- Formatting: Black. Lint: Ruff (follow import/style rules). Type checks: mypy (strict) + basedpyright (strict).
 - Repository‑critical invariants:
   - Single‑reader transport (Session is the only reader).
   - Output‑before‑result (worker drains the output pump before sending Result; timeout → Error and no Result).
