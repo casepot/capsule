@@ -119,8 +119,7 @@ We maintain consistent, high‑quality issues so ownership, risks, sequencing, a
 
 ## Debugging and Troubleshooting
 
-- Check `docs/investigations/troubleshooting/investigation_log.json` for historical issues
-- Use the isolated tests in `tests/isolated/` for debugging specific components
+- Use targeted unit/integration tests for the component under investigation
 - Development artifacts are stored in `.dev/` (not tracked by git)
 
 ## Documentation
@@ -128,7 +127,6 @@ We maintain consistent, high‑quality issues so ownership, risks, sequencing, a
 - Update docstrings for API changes
 - Add examples to README.md for new features
 - Document architectural decisions in `docs/architecture/`
-- Keep investigation notes in `docs/investigations/`
 
 ## Getting Help
 
