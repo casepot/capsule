@@ -1,60 +1,75 @@
 # Capsule
 
-> **Development Status**: 🚧 Experimental (v0.1.0-dev) - Phase 2c Complete, Phase 3 In Progress
+> Development Status: 🚧 Experimental (v0.1.0‑dev) — Phase 3 in progress
 
-A Python execution environment implementing subprocess isolation with persistent sessions and promise-based orchestration.
+Capsule is a Python Subprocess‑Isolated Execution Service (SIES). It provides persistent subprocess sessions, a framed async transport for streaming I/O, and durable request correlation to power interactive execution patterns.
 
-## Current State
+## Current Capabilities
 
-Capsule is an experimental **Subprocess-Isolated Execution Service (SIES)** in active development. The project has completed its foundation phases (0-2c) with working subprocess isolation, promise-based message correlation, and local-mode durability through Resonate SDK.
+### Protocol & Transport
+- Messages: Execute, Output, Input, InputResponse, Result, Error, Checkpoint, Restore, Ready, Heartbeat, Shutdown, Cancel, Interrupt.
+- Framed transport over stdin/stdout with MessagePack or JSON encoding.
+- Event‑driven FrameReader (asyncio.Condition). FrameBuffer still uses a small polling loop and is planned to move to Condition.
 
-### ✅ What's Working
-- **Subprocess isolation** with persistent namespace across executions
-- **ThreadedExecutor** for synchronous and blocking I/O code
-- **Promise-based message correlation** via ResonateProtocolBridge
-- **Input capability** for interactive code execution
-- **Local-mode checkpoint/restore** for session state
-- **Session pooling** for subprocess reuse
-- **Single-loop invariant** with message interceptors
+### Session
+- Lifecycle: start, shutdown, terminate, restart; `is_alive`; `Session.info()` updated via heartbeats.
+- Execution: `Session.execute(msg)` yields Output/Result/Error as an async generator; `input_response()` replies to Input; `cancel()`/`interrupt()` supported.
+- Routing: passive message interceptors (non‑blocking); single‑reader invariant (Session is the only transport reader); event‑driven receive loop with cancellable waits.
 
-### 🚧 In Development (Phase 3)
-- Native AsyncExecutor implementation (currently skeletal, delegates to ThreadedExecutor)
-- Full top-level await support via PyCF_ALLOW_TOP_LEVEL_AWAIT
-- Coroutine lifecycle management
-- Execution cancellation
+### Worker
+- Executes code via ThreadedExecutor today. Enforces strict output‑before‑result ordering by draining the event‑driven output pump.
+- If drain times out, emits an ErrorMessage and never a ResultMessage (preserves ordering).
+- Heartbeats (memory/CPU/namespace), Checkpoint/Restore (local mode), busy guard, cancel with grace timeout (escalates to restart if needed), and interrupt handling.
 
-### ❌ Not Yet Implemented
-- Full capability system (only Input capability exists)
-- Remote Resonate mode (distributed execution)
-- Performance optimizations beyond basic caching
-- Production monitoring and observability
-- Resource limits enforcement
-- Multi-language support
+### Executors
+- ThreadedExecutor (production path):
+  - Blocking‑safe via thread execution. Protocol `input()` shim (sends InputMessage, blocks for InputResponse).
+  - Event‑driven output pump (asyncio.Queue, flush sentinel), backpressure modes (block, drop_new, drop_oldest, error), cooperative cancellation via `sys.settrace`.
+  - Captures trailing expression value after exec blocks for REPL UX.
+  - Async wrapper `execute_code_async()` is test‑only — it suppresses drain timeout warnings; the worker remains strict.
+- AsyncExecutor (native paths implemented; worker routing pending):
+  - Compile‑first top‑level await using `PyCF_ALLOW_TOP_LEVEL_AWAIT`, then exec+flags; minimal AST wrapper fallback as last resort.
+  - Executes simple sync and async‑def defining code natively; optional flag‑gated transforms are default‑off.
+  - Bounded AST LRU and fallback linecache LRU; coroutine tracking and `cancel_current()` with counters and cleanup.
+  - Heuristics for BLOCKING_SYNC detection with overshadow/import guards reduce false positives. Used via DI/tests; worker routing is planned behind a flag.
 
-## Test Coverage
-- **Unit Tests**: 164/166 passing (98.8%)
-- **Integration Tests**: 36/40 passing (90%)
-- **Overall Coverage**: ~56%
+### Namespace
+- Merge‑only namespace policy; preserves `ENGINE_INTERNALS` (In/Out history, result slots `_`, `__`, `___`); never replaces the namespace dict.
+- Snapshots (create/restore/delete), serialization helpers, tracked function/class sources and imports.
 
-## Architecture
+### Session Pool
+- Event‑driven warmup (signals, no polling) with watermark checks.
+- Hybrid health check worker (timer baseline + event triggers).
+- Pool metrics and `get_info()` (hit rate, warmup/health metrics, acquisition latency, etc.).
 
-Current implementation follows a three-layer architecture:
+### Integration
+- ResonateProtocolBridge (local mode): durable promises for Execute/Input flows, structured timeout rejection, pending high‑water mark.
+- DI wiring for AsyncExecutor and a HITL Input capability. Lifecycle/metrics surfacing via `Session.info()` planned.
+
+## Design Invariants
+- Single‑reader transport: Session is the only transport reader.
+- Output‑before‑result: Worker drains output pump before Result; timeout → Error (no Result).
+- Merge‑only namespace: Never replace dict; preserve `ENGINE_INTERNALS` keys.
+- Pump‑only outputs: stdout/stderr routed through the async output pump.
+- Event‑driven I/O: Prefer Conditions/Events over polling (FrameBuffer refactor pending).
+
+## Architecture Overview
 
 ```
-Protocol Layer (Working)
-├── Message framing (4-byte prefix)
-├── MessagePack/JSON serialization
-└── Promise correlation
+Protocol Layer
+├── Framed transport (MessagePack/JSON)
+├── Event‑driven FrameReader (asyncio.Condition)
+└── Message schemas (messages.py)
 
-Execution Layer (Partial)
-├── ThreadedExecutor (working)
-├── AsyncExecutor (skeleton only)
-└── NamespaceManager (working)
+Execution Layer
+├── ThreadedExecutor (blocking‑safe, pump/backpressure, input shim)
+├── AsyncExecutor (TLA compile‑first; async‑def/simple sync native; AST fallback; caches; cancel_current)
+└── NamespaceManager (merge‑only; ENGINE_INTERNALS)
 
-Integration Layer (Local Only)
-├── ResonateProtocolBridge
-├── Session interceptors
-└── InputCapability
+Integration Layer (Local)
+├── ResonateProtocolBridge (durable promises)
+├── DI wiring (async executor, HITL capability)
+└── Session interceptors
 ```
 
 ## Installation
@@ -183,7 +198,7 @@ capsule/
 ├── src/
 │   ├── subprocess/       # Executors and namespace management
 │   │   ├── executor.py   # ThreadedExecutor (working)
-│   │   ├── async_executor.py # AsyncExecutor (skeleton)
+│   │   ├── async_executor.py # AsyncExecutor (native paths; worker routing pending)
 │   │   └── namespace.py  # Namespace management
 │   ├── session/          # Session and pool management
 │   ├── protocol/         # Message protocol and transport
@@ -196,34 +211,33 @@ capsule/
     └── development/     # Implementation notes
 ```
 
-## Architectural Decisions
+## Roadmap Highlights
 
-### Completed Decisions
-- **Namespace Merge-Only Policy**: Never replace namespace dict, always merge
-- **Single-Loop Invariant**: Session owns the sole event loop for transport
-- **Promise-First Integration**: Durable functions use ctx.promise pattern
-- **Capability-Based Security**: Security enforced at injection, not code analysis
+Workstreams (see milestones/issues):
+- Executor & Worker (EW): SessionConfig plumbing; AsyncExecutor lifecycle finalize; drain suppression knob; worker native async route (flagged); Display/Progress messages.
+- Protocol & Transport (PROTO): Event‑driven FrameBuffer; Hello/Ack negotiation; idempotency keys; durable streaming channels.
+- Bridge & Capabilities (BRIDGE): lifecycle + metrics via `Session.info()`; priority routing & interceptor quarantine; CapabilityRegistry & SecurityPolicy; input EOF/timeout semantics.
+- Session Pool (POOL): finalize warm imports and memory budgets; circuit breaker + metric safety.
+- Providers (PROV): SDK/contract tests; HTTP/Files/Shell providers with allowlists and caps.
+- Observability (OBS): distributed execution trace; safe introspection (redacted metadata).
 
-### Pending Decisions (Phase 3+)
-- Native async execution strategy (EventLoopCoordinator design)
-- Capability registry architecture
-- Remote mode connection management
-- Performance optimization priorities
-
-## Known Limitations
-
-1. **AsyncExecutor is skeletal** - All code currently executes via ThreadedExecutor
-2. **Local mode only** - No distributed execution yet
-3. **Limited capabilities** - Only Input capability implemented
-4. **No production features** - Missing metrics, monitoring, resource limits
-5. **Test coverage gaps** - Some integration tests still failing
+See `ROADMAP.md` for details.
 
 ## Contributing
 
-Capsule is in early development. Key areas needing contribution:
+We welcome contributions! Please read the guidelines and use our issue templates to keep work scoped and reviewable.
 
-- Phase 3: Native AsyncExecutor implementation
-- Phase 4: Capability system development
+- Contributing Guide: see `CONTRIBUTING.md` (development workflow, testing, PR guidance)
+- Issue Conventions (titles, labels, required sections, invariants, rollout/flags): `docs/PROCESS/ISSUE_CONVENTIONS.md`
+- GitHub Issue Templates: `.github/ISSUE_TEMPLATE/`
+
+
+### Focus Areas
+
+Capsule is in early development. Priority areas for contributions:
+
+- Phase 3: Worker native AsyncExecutor routing (flagged)
+- Capability system development
 - Test coverage improvement
 - Documentation
 - Performance optimization
