@@ -138,12 +138,12 @@
   PR 11 — Documentation + Spec Alignment + Config Knobs
 
   - Scope
-      - Update docs under docs/async_capability_prompts/current/ with final decisions:
+      - Update `docs/async-executor.md`, `docs/architecture-overview.md`, `docs/execution-engine.md`, and `docs/bridge-capabilities.md` with final decisions:
       - Compile-first policy (3.11–3.13), minimal AST fallback, transforms OFF by default.
       - Blocking I/O detection config; caching; loop ownership; interceptor budgets.
   - Update API reference with final AsyncExecutor constructor knobs and behavior.
   - Key changes
-      - Refresh 10/20/22/24/25 docs to reflect implemented behaviors; mark previous TODOs addressed.
+      - Refresh the guides listed above to match the implementation; mark previous TODOs addressed.
   - Tests
       - None (docs only); ensure lint/type/docs checks pass.
   - Success criteria
@@ -208,10 +208,10 @@
   PR 1 — AsyncExecutor: Native TLA Core (compile-first)
   - Read
       - FOUNDATION_FIX_PLAN.md (Phase 3: Full AsyncExecutor Implementation; Research‑Informed Updates)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (TLA compile matrix; CO_COROUTINE checks; eval vs exec; PEP 657)
-      - docs/async_capability_prompts/current/24_spec_namespace_management.md (merge‑only; locals‑first then global diffs; history)
-      - docs/async_capability_prompts/current/20_spec_architecture.md (compile‑first + minimal transform policy; single‑loop invariant)
-      - docs/async_capability_prompts/current/25_spec_api_reference.md (AsyncExecutor API/config notes)
+      - docs/async-executor.md (TLA compile matrix; CO_COROUTINE checks; eval vs exec; PEP 657)
+      - docs/execution-engine.md (merge‑only; locals‑first then global diffs; history)
+      - docs/architecture-overview.md (compile‑first + minimal transform policy; single‑loop invariant)
+      - docs/bridge-capabilities.md (AsyncExecutor API/config notes)
       - Source: src/subprocess/async_executor.py, src/subprocess/namespace.py
       - Tests: tests/unit/test_top_level_await.py; tests/unit/test_async_executor_namespace_binding.py; tests/unit/test_event_loop_handling.py
   - Glean
@@ -220,9 +220,9 @@
   PR 2 — AsyncExecutor: Native Simple Sync + Async Def
   - Read
       - FOUNDATION_FIX_PLAN.md (Phase 3 native async path; delegation reserved for blocking)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (Execution Mode Detection; Core Execution Methods)
-      - docs/async_capability_prompts/current/10_prompt_async_executor.md (design + routing)
-      - docs/async_capability_prompts/current/24_spec_namespace_management.md (merge‑only semantics)
+      - docs/async-executor.md (Execution Mode Detection; Core Execution Methods)
+      - docs/async-executor.md (design + routing)
+      - docs/execution-engine.md (merge‑only semantics)
       - Source: src/subprocess/async_executor.py; reference src/subprocess/executor.py
       - Tests: tests/unit/test_async_executor.py; tests/unit/test_namespace_merge.py
   - Glean
@@ -231,8 +231,8 @@
   PR 3 — Async Fallback Wrapper (minimal)
   - Read
       - FOUNDATION_FIX_PLAN.md (no mass transforms; wrapper only; PEP 657)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (AST Fallback; Location Mapping)
-      - docs/async_capability_prompts/current/24_spec_namespace_management.md (locals‑first then global diffs on fallback)
+      - docs/async-executor.md (AST Fallback; Location Mapping)
+      - docs/execution-engine.md (locals‑first then global diffs on fallback)
       - Source: src/subprocess/async_executor.py (transform site)
       - Tests: tests/unit/test_top_level_await.py; tests/unit/test_async_executor.py (AST)
   - Glean
@@ -241,7 +241,7 @@
   PR 4 — Coroutine Lifecycle + Cancellation
   - Read
       - FOUNDATION_FIX_PLAN.md (CoroutineManager; ExecutionCancellation; metrics)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (Event loop coord; TaskGroup; timeout)
+      - docs/async-executor.md (Event loop coord; TaskGroup; timeout)
       - Source: src/subprocess/async_executor.py; src/session/manager.py (cancel/interrupt); src/subprocess/worker.py (cancel interplay)
       - Tests: tests/features/test_cancellation.py; tests/features/test_event_driven.py; tests/unit/test_executor.py (cancellation components)
   - Glean
@@ -250,7 +250,7 @@
   PR 5 — Blocking I/O Detection + Telemetry
   - Read
       - FOUNDATION_FIX_PLAN.md (detection breadth; telemetry; config)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (blocking indicators; attribute chains)
+      - docs/async-executor.md (blocking indicators; attribute chains)
       - Source: src/subprocess/async_executor.py (_contains_blocking_io; policy)
       - Tests: tests/unit/test_async_executor_detection_breadth.py; tests/unit/test_async_executor.py (telemetry)
   - Glean
@@ -259,7 +259,7 @@
   PR 6 — Code Object LRU Cache
   - Read
       - FOUNDATION_FIX_PLAN.md (code‑object caching keyed by source+mode+flags)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (Caching Strategy)
+      - docs/async-executor.md (Caching Strategy)
       - Source: src/subprocess/async_executor.py
       - Tests: tests/unit/test_async_executor_ast_cache_config.py (pattern); add code‑object cache tests
   - Glean
@@ -268,7 +268,7 @@
   PR 7 — Optional Symtable Hoisting (flagged)
   - Read
       - FOUNDATION_FIX_PLAN.md (symbol‑aware hoisting — optional)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (AST coverage + hoisting cautions)
+      - docs/async-executor.md (AST coverage + hoisting cautions)
       - Source: src/subprocess/async_executor.py
       - Tests: add new ON/OFF hoisting tests
   - Glean
@@ -277,7 +277,7 @@
   PR 8 — Event Loop Coordinator
   - Read
       - FOUNDATION_FIX_PLAN.md (EventLoopCoordinator goals)
-      - docs/async_capability_prompts/current/22_spec_async_execution.md (Event Loop Considerations; asyncio.timeout usage)
+      - docs/async-executor.md (Event Loop Considerations; asyncio.timeout usage)
       - Source: src/subprocess/async_executor.py
       - Tests: tests/unit/test_event_loop_handling.py
   - Glean
@@ -286,7 +286,7 @@
   PR 9 — Session Routing Concurrency + Interceptor Budgets
   - Read
       - FOUNDATION_FIX_PLAN.md (Operational refinements)
-      - docs/async_capability_prompts/current/20_spec_architecture.md (single‑loop; interceptors)
+      - docs/architecture-overview.md (single‑loop; interceptors)
       - Source: src/session/manager.py (_receive_loop; _route_message)
       - Tests: add unit/integration for semaphore + slow interceptor warnings
   - Glean
@@ -295,7 +295,7 @@
   PR 10 — Bridge Lifecycle (close/cancel_all; HWM)
   - Read
       - FOUNDATION_FIX_PLAN.md (bridge lifecycle; DI shutdown; race determinsm)
-      - docs/async_capability_prompts/current/25_spec_api_reference.md (bridge correlation + timeout)
+      - docs/bridge-capabilities.md (bridge correlation + timeout)
       - Source: src/integration/resonate_bridge.py; src/integration/resonate_init.py
       - Tests: tests/unit/test_resonate_protocol_bridge.py; tests/unit/test_resonate_protocol_bridge_race.py
   - Glean
@@ -304,14 +304,14 @@
   PR 11 — Docs + Spec Alignment
   - Read
       - FOUNDATION_FIX_PLAN.md (Phase 3 + Architecture Alignment)
-      - docs/async_capability_prompts/current/{10,20,22,24,25}_*.md
+      - docs/{async-executor,architecture-overview,execution-engine,bridge-capabilities}.md
   - Glean
       - Document compile‑first policy; fallback limits; detection config; caching; loop ownership; routing/budgets; API defaults
 
   PR 12 — Benchmarks + CI Guardrails (optional)
   - Read
       - FOUNDATION_FIX_PLAN.md (Performance & observability)
-      - docs/async_capability_prompts/current/20_spec_architecture.md (performance targets)
+      - docs/architecture-overview.md (performance targets)
       - Source: src/subprocess/async_executor.py; src/session/manager.py
       - Tests/Benches: add opt‑in perf markers (-m perf)
   - Glean

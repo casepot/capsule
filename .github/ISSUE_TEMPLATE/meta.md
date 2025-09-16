@@ -6,6 +6,8 @@ labels: ["type:process"]
 assignees: []
 ---
 
+<!-- Keep this focused on process/docs quality. For structure guidance, see docs/issue-conventions.md. For typing policy, see docs/typing-guidelines.md. -->
+
 ## TL;DR
 - 
 
@@ -28,4 +30,3 @@ assignees: []
 
 ## Dependencies
 - Depends on: #
-

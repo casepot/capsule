@@ -1170,7 +1170,7 @@ class AsyncExecutor:
             Exception: Any exception raised by user code is propagated.
 
         See also:
-            docs/async_capability_prompts/current/ for design notes and rationale.
+            docs/async-executor.md for design notes and rationale.
         """
         # Increment AST transform count for stats and log entry
         self.stats["ast_transforms"] = self.stats.get("ast_transforms", 0) + 1

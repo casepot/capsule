@@ -6,7 +6,14 @@ labels: []
 assignees: []
 ---
 
-<!-- Please read docs/PROCESS/ISSUE_CONVENTIONS.md before filing. Fill all sections. -->
+<!--
+Source of truth for structure & invariants:
+  docs/issue-conventions.md
+Source of truth for typing policy and stubs:
+  docs/typing-guidelines.md
+Use this skeleton and link to the conventions doc instead of duplicating guidance here.
+Fill every section concisely; prefer bullets; add labels (type, touches, risk, rollout:flagged).
+-->
 
 ## TL;DR
 - 
@@ -19,24 +26,24 @@ assignees: []
 - Out:
 
 ## Design Direction
-- Approach:
-- Env flags + defaults (if any):
+- Approach and key decisions (files/components).
+- Env flags + defaults (names + expected defaults).
 
 ## Affected Paths
 - src/.../...
 - src/.../...
 
 ## Core Invariants
-- 
+- See docs/issue-conventions.md#workstream-core-invariants and list those relevant here.
 
 ## Observability
-- Metrics / logs (incl. warn-once policy):
-- Redaction policy (if applicable):
+- Metrics / logs (incl. warn-once policy). Keep counters minimal; add key histograms/HWM where useful.
+- Redaction policy (if applicable).
 
 ## Test Plan
 - Unit:
 - Integration / E2E:
-- Filenames / fixtures:
+- Event-driven sync (no sleeps). Include filenames/fixtures.
 
 ## Acceptance Criteria
 - 
@@ -50,4 +57,3 @@ assignees: []
 
 ## Docs
 - Specs/API/changelog to update:
-

@@ -130,7 +130,7 @@
 
 - Event‑driven tests; avoid sleeps; clear filenames/fixtures.
 - Increase coverage around: AsyncExecutor routing, FrameBuffer refactor, bridge lifecycle surfacing, pool breaker.
-- Use issue templates and conventions (`docs/PROCESS/ISSUE_CONVENTIONS.md`) to keep acceptance criteria testable.
+- Use issue templates and conventions (`docs/issue-conventions.md`) to keep acceptance criteria testable.
 
 ## Medium/Long‑Term
 
