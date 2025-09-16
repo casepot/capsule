@@ -7,7 +7,7 @@ in the subprocess module to ensure consistency and prevent drift.
 # Engine internals that must be preserved during namespace operations
 # These keys are critical for IPython/Python execution state and must
 # never be deleted or overwritten without explicit intent
-# From spec: docs/async_capability_prompts/current/24_spec_namespace_management.md:87-102
+# Reference: docs/execution-engine.md (namespace preservation contracts)
 ENGINE_INTERNALS = {
     "_",  # Last result
     "__",  # Second to last result

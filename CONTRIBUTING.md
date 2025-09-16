@@ -4,21 +4,17 @@ Thank you for your interest in contributing to Capsule! This document provides g
 
 ## Development Setup
 
+We use `uv` for dependency management and running tasks.
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/your-username/capsule.git
    cd capsule
    ```
 
-2. Create a virtual environment:
+2. Install/sync dependencies:
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
-
-3. Install the package in development mode:
-   ```bash
-   pip install -e ".[dev]"
+   uv sync
    ```
 
 ## Development Workflow
@@ -27,66 +23,60 @@ Thank you for your interest in contributing to Capsule! This document provides g
 
 ```bash
 # Run all tests
-pytest
+uv run pytest
 
 # Run specific test file
-pytest tests/test_session.py
+uv run pytest tests/test_session.py
 
 # Run with coverage
-pytest --cov=src --cov-report=term-missing
+uv run pytest --cov=src --cov-report=term-missing
+
+# Guard long tests
+uv run pytest --timeout=30
 ```
 
 ### Type Checking
 
 ```bash
-# Run mypy
-mypy src/
+# mypy (strict)
+uv run mypy src/
 
-# Run basedpyright
-basedpyright
+# basedpyright (strict)
+uv run basedpyright src/
 ```
 
 ### Linting & Formatting (pyproject.toml)
 
 ```bash
 # Lint code with ruff
-ruff check src/ tests/
+uv run ruff check src/ tests/
 
 # Format code with ruff
-ruff format src/ tests/
+uv run ruff format src/ tests/
 ```
 
 ## Code Style
 
-- Follow PEP 8 guidelines
-- Use type hints for all function signatures
-- Maximum line length: 100 characters (configured in pyproject.toml)
-- Use descriptive variable and function names
-- Add docstrings to all public functions and classes
+- Python 3.11+
+- Strong typing across the codebase; avoid `Any` where possible. See `docs/typing-guidelines.md` for tools, policies, and where typing is deliberately loose (with rationale).
+- Respect linters/formatters configured in `pyproject.toml`.
+- Public APIs should have type hints and docstrings.
 
-## Architecture Guidelines
+## Architecture & Invariants
 
-### Core Principles
+For workstream-specific invariants (source of truth), see:
 
-1. **Subprocess Isolation**: Each session runs in a separate subprocess
-2. **Event-Driven**: Prefer event-driven patterns over polling
-3. **Single-Reader Invariant**: Maintain single reader for subprocess stdout
-4. **Thread Safety**: Use proper synchronization for shared resources
+- docs/issue-conventions.md#workstream-core-invariants
 
-### Key Components
-
-- **Session Manager**: Manages lifecycle of subprocess workers
-- **ThreadedExecutor**: Runs user code in dedicated threads
-- **Protocol Layer**: Handles message serialization and framing
-- **Session Pool**: Manages pre-warmed session instances
+Examples include: single-reader transport, output-before-result ordering, merge-only namespace updates, pump-only outputs, and event loop ownership. Do not duplicate these here; link to the doc above in PRs/issues.
 
 ## Testing Guidelines
 
 1. Write tests for new features and bug fixes
-2. Ensure tests are isolated and don't depend on external state
+2. Prefer event-driven waits (Conditions/Events) over sleeps
 3. Use `pytest.mark.asyncio` for async tests
 4. Mock external dependencies when appropriate
-5. Aim for >80% code coverage
+5. Coverage target: ≥ 70% on core modules (see CI config)
 
 ## Submitting Changes
 
@@ -100,20 +90,22 @@ ruff format src/ tests/
 
 ## Issue Conventions and Templates
 
-We maintain consistent, high‑quality issues so ownership, risks, sequencing, and acceptance criteria are obvious.
+The conventions document is the source of truth for issue structure, labels, and invariants:
 
-- Read: `docs/PROCESS/ISSUE_CONVENTIONS.md` for titles, labels, required sections, rollout/flags, and core invariants by workstream.
-- Use GitHub templates when filing issues:
-  - Feature / Refactor / Hardening: `.github/ISSUE_TEMPLATE/feature.md`
-  - Meta / Process / Docs: `.github/ISSUE_TEMPLATE/meta.md`
-- Assign the appropriate milestone (e.g., "Executor & Worker (EW) — Native Async, Pump, Messaging").
-- Apply labels for ownership (`touches:*`), risk (`risk:*`), and type (`type:*`). Add `rollout:flagged` for gated features.
+- docs/issue-conventions.md
+
+Use GitHub templates when filing issues (do not duplicate guidance in the issue body):
+- Feature / Refactor / Hardening: `.github/ISSUE_TEMPLATE/feature.md`
+- Meta / Process / Docs: `.github/ISSUE_TEMPLATE/meta.md`
+- General skeleton (copyable body for quality passes): `.github/ISSUE_TEMPLATE.md`
+
+Apply labels for ownership (`touches:*`), risk (`risk:*`), type (`type:*`), and rollout (`rollout:*`) as appropriate. Assign the relevant milestone.
 
 ## Pull Request Guidelines
 
 - Provide a clear description of the changes
-- Reference any related issues
-- Ensure all tests pass
+- Reference any related issues and link relevant docs/specs (use references; don’t paste long excerpts)
+- Ensure all tests pass (CI must pass: tests, type checks, Ruff)
 - Update documentation if needed
 - Add an entry to CHANGELOG.md (unreleased section)
 
@@ -126,7 +118,7 @@ We maintain consistent, high‑quality issues so ownership, risks, sequencing, a
 
 - Update docstrings for API changes
 - Add examples to README.md for new features
-- Document architectural decisions in `docs/architecture/`
+- Document architectural decisions in the focused guides under `docs/` (e.g., `architecture-overview.md`, `execution-engine.md`, `session-runtime.md`); link from PRs instead of inlining.
 
 ## Getting Help
 

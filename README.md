@@ -189,6 +189,11 @@ uv run ruff format src/
 
 # Test with coverage
 uv run pytest --cov=src --cov-report=term-missing
+
+# Typing policy
+# See docs/typing-guidelines.md for the typing source of truth (tools, policies,
+# and where typing is deliberately loose with rationale). Type checks must pass
+# in CI.
 ```
 
 ## Project Structure
@@ -228,8 +233,9 @@ See `ROADMAP.md` for details.
 We welcome contributions! Please read the guidelines and use our issue templates to keep work scoped and reviewable.
 
 - Contributing Guide: see `CONTRIBUTING.md` (development workflow, testing, PR guidance)
-- Issue Conventions (titles, labels, required sections, invariants, rollout/flags): `docs/PROCESS/ISSUE_CONVENTIONS.md`
+- Issue Conventions (titles, labels, required sections, invariants, rollout/flags): `docs/issue-conventions.md`
 - GitHub Issue Templates: `.github/ISSUE_TEMPLATE/`
+- Typing policy (source of truth): `docs/typing-guidelines.md`
 
 
 ### Focus Areas

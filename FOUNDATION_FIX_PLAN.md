@@ -410,11 +410,10 @@ git checkout -b fix/foundation-phase1-async-executor
 - `tests/features/test_cancellation.py` - Cancellation tests
 
 ### Specification Documents
-- `docs/async_capability_prompts/current/00_foundation_resonate.md` - Resonate integration vision
-- `docs/async_capability_prompts/current/10_prompt_async_executor.md` - AsyncExecutor implementation guide
-- `docs/async_capability_prompts/current/20_spec_architecture.md` - Full architecture specification
-- `docs/async_capability_prompts/current/22_spec_async_execution.md` - Async execution patterns
-- `docs/async_capability_prompts/current/24_spec_namespace_management.md` - Namespace management rules
+- `docs/bridge-capabilities.md` - Resonate integration and capability wiring
+- `docs/async-executor.md` - AsyncExecutor implementation guide
+- `docs/architecture-overview.md` - Runtime architecture map
+- `docs/execution-engine.md` - Worker execution model and namespace management
 
 ## Implementation Snapshot (Local Mode)
 
@@ -533,7 +532,7 @@ msg = HeartbeatMessage(
 
 #### 1.1 Implement Namespace Merge-Only Policy ✅ COMPLETED IN DAY 2
 **Files Modified**: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
-**Spec**: `docs/async_capability_prompts/current/24_spec_namespace_management.md:87-102` (ENGINE_INTERNALS list)
+**Spec**: `docs/execution-engine.md` (namespace preservation / ENGINE_INTERNALS)
 
 **Completed Implementation**:
 - Added ENGINE_INTERNALS constant with all protected keys
@@ -545,7 +544,7 @@ msg = HeartbeatMessage(
 
 #### 1.2 Create AsyncExecutor Skeleton ✅ COMPLETED IN DAY 3
 **New File**: `src/subprocess/async_executor.py` (395 lines)
-**Based On**: `docs/async_capability_prompts/current/22_spec_async_execution.md:58-144`
+**Based On**: `docs/async-executor.md` (mode analysis & routing)
 **Test File**: `tests/unit/test_async_executor.py` (499 lines, 22 tests)
 
 **Completed Implementation**:
@@ -591,7 +590,7 @@ class AsyncExecutor:
 
 #### 1.3 Fix Event Loop Management
 **File**: `src/session/manager.py` (fix lines 81-83)
-**Guidance**: `docs/async_capability_prompts/current/22_spec_async_execution.md:123-128`
+**Guidance**: `docs/async-executor.md` (event loop ownership notes)
 
 ```python
 # In session/manager.py, replace lines 81-83:
@@ -616,7 +615,7 @@ class Session:
 
 #### 2.1 Create Execution Mode Router
 **New Component**: Add to `src/subprocess/async_executor.py`
-**Based On**: `docs/async_capability_prompts/current/22_spec_async_execution.md:69-75, 149-247`
+**Based On**: `docs/async-executor.md` (routing + blocking detection details)
 
 ```python
 # Add to src/subprocess/async_executor.py
@@ -658,8 +657,8 @@ class ExecutionRouter:
 
 #### 2.2 Add Basic Promise Abstraction (Pre-Resonate)
 **New File**: `src/subprocess/promise_manager.py`
-**Bridge To**: `docs/async_capability_prompts/current/00_foundation_resonate.md:109-162`
-**Replaces**: Protocol Bridge concept from `docs/async_capability_prompts/archive/obsolete_30_protocol_bridge.md`
+**Bridge To**: `docs/bridge-capabilities.md` (Resonate integration lifecycle—expand with additional factory wiring details if gaps surface)
+**Replaces**: Archived protocol-bridge prompt; migrate any missing nuance into `docs/bridge-capabilities.md`.
 
 ```python
 # src/subprocess/promise_manager.py
@@ -667,7 +666,7 @@ class PromiseManager:
     """Simple promise manager as bridge to Resonate.
     
     This is a temporary implementation that will be replaced by
-    Resonate promises as described in foundation_resonate.md:109-162
+    Resonate promises as described in docs/bridge-capabilities.md:109-162
     """
     
     def __init__(self):
@@ -676,7 +675,7 @@ class PromiseManager:
     async def create_promise(self, id: str, data: Any) -> asyncio.Future:
         """Create a promise that can be resolved later.
         
-        Maps to future Resonate usage (foundation_resonate.md:123-136):
+        Maps to future Resonate usage (docs/bridge-capabilities.md:123-136):
         promise = self._resonate.promises.create(
             id=promise_id,
             timeout=timeout,
@@ -690,7 +689,7 @@ class PromiseManager:
     def resolve_promise(self, id: str, result: Any):
         """Resolve a promise with a result.
         
-        Maps to future Resonate usage (foundation_resonate.md:153-157):
+        Maps to future Resonate usage (docs/bridge-capabilities.md:153-157):
         self._resonate.promises.resolve(
             id=correlation_id,
             data=json.dumps(result)
@@ -770,7 +769,7 @@ def async_executor(namespace_manager, transport):
    
 3. **Day 2**: Implement merge-only namespace policy ✅ COMPLETE  
    - Files: `src/subprocess/namespace.py`, `src/subprocess/worker.py`
-   - Spec: `docs/async_capability_prompts/current/24_spec_namespace_management.md:15-29`
+   - Spec: `docs/execution-engine.md` (namespace management)
    - Added ENGINE_INTERNALS constant with protected keys
    - Fixed _setup_namespace() to UPDATE instead of REPLACE
    - Added update_namespace() method with merge strategies
@@ -842,14 +841,14 @@ def async_executor(namespace_manager, transport):
 
 #### Critical Insight from Spec Review
 The specs solve the async/await vs yield paradigm through a **wrapper pattern** (refs below):
-- User code uses async/await normally (`22_spec_async_execution.md:252-293`)
-- AsyncExecutor handles async/await with PyCF_ALLOW_TOP_LEVEL_AWAIT (`22_spec_async_execution.md:17-25, 298-339`)
-- Resonate wraps AsyncExecutor in durable functions using yield (`22_spec_async_execution.md:671-734`, `21_spec_resonate_integration.md:133-190`)
-- No code transformation needed - separation of concerns at integration layer (`00_foundation_resonate.md:303-309`)
+- User code uses async/await normally (`docs/async-executor.md:252-293`)
+- AsyncExecutor handles async/await with PyCF_ALLOW_TOP_LEVEL_AWAIT (`docs/async-executor.md:17-25, 298-339`)
+- Resonate wraps AsyncExecutor in durable functions using yield (`docs/async-executor.md:671-734`, `docs/bridge-capabilities.md:133-190`)
+- No code transformation needed - separation of concerns at integration layer (`docs/bridge-capabilities.md:303-309`)
 
 6. **Day 5: Implement Resonate Wrapper Pattern** (8 hours)
    - Create durable function wrapper for AsyncExecutor
-   - Based On: `docs/async_capability_prompts/current/22_spec_async_execution.md:671-734`
+   - Based On: `docs/async-executor.md` (AST fallback and namespace merge behavior)
    - Pattern:
      ```python
      @resonate.register
@@ -863,12 +862,12 @@ The specs solve the async/await vs yield paradigm through a **wrapper pattern** 
 7. **Day 6: Promise Adapter Layer** (4 hours)
    - Create `AwaitableResonatePromise` for async/await compatibility
    - Fix timing issues between Resonate promises and asyncio
-   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:319-377`
+   - Based On: `docs/bridge-capabilities.md` (Resonate integration lifecycle)
    - Key: Make Resonate promises awaitable in async contexts
    
 8. **Day 7: Migration Adapter Implementation** (4 hours)
    - Implement `MigrationAdapter` from spec lines 894-922
-   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:894-922`
+   - Based On: `docs/bridge-capabilities.md` (capability registry policy)
    - Add intelligent routing based on execution modes:
      ```python
      def _should_use_resonate(self, code: str) -> bool:
@@ -878,16 +877,16 @@ The specs solve the async/await vs yield paradigm through a **wrapper pattern** 
    
 9. **Day 8: Dependency Injection Refinement** (4 hours)
    - Fix singleton vs factory patterns for dependencies
-   - Based On: `docs/async_capability_prompts/current/21_spec_resonate_integration.md:243-314`
+   - Based On: `docs/bridge-capabilities.md` (promise correlation)
    - Critical fix: AsyncExecutor needs factory function, not singleton
    - Test namespace manager lifecycle with Resonate
    
 10. **Day 9-10: Integration Testing** (8 hours)
-    - Test checkpoint recovery (`21_spec_resonate_integration.md:754-794`)
+    - Test checkpoint recovery (`docs/bridge-capabilities.md:754-794`)
     - Test local vs remote mode consistency
     - Verify promise resolution in both modes
-    - Test HITL workflows with promises (`21_spec_resonate_integration.md:473-512`)
-    - Performance benchmarks per spec targets (`21_spec_resonate_integration.md:1085-1093`)
+    - Test HITL workflows with promises (`docs/bridge-capabilities.md:473-512`)
+    - Performance benchmarks per spec targets (`docs/bridge-capabilities.md:1085-1093`)
 
 **Goal**: 95% tests passing with Resonate integration working in local mode
 
@@ -895,7 +894,7 @@ The specs solve the async/await vs yield paradigm through a **wrapper pattern** 
 ```python
 # Test 1: Verify wrapper pattern works
 def test_resonate_wrapper_pattern():
-    """Based on 22_spec_async_execution.md:671-734"""
+    """Based on docs/async-executor.md:671-734"""
     @resonate.register
     def wrapped_execute(ctx, args):
         executor = AsyncExecutor(ctx.resonate, namespace_manager, "test")
@@ -972,18 +971,18 @@ After reading the full specs, the architecture is elegantly solved:
 
 ### Key Integration Points (with Spec References)
 - **Promise Adapter**: Bridge between Resonate promises (yield-based) and asyncio futures (await-based)
-  - Spec: `21_spec_resonate_integration.md:319-418` (PromiseManager and PromiseBasedProtocol)
-  - Pattern: `00_foundation_resonate.md:109-162` (Protocol Bridge with Resonate Promises)
+  - Spec: `docs/bridge-capabilities.md:319-418` (PromiseManager and PromiseBasedProtocol)
+  - Pattern: `docs/bridge-capabilities.md:109-162` (Protocol Bridge with Resonate Promises)
 - **Dependency Injection**: Use factory functions for per-execution instances
-  - Spec: `21_spec_resonate_integration.md:243-314` (Dependency Registration and Access)
+  - Spec: `docs/bridge-capabilities.md:243-314` (Dependency Registration and Access)
   - Critical: AsyncExecutor must be `singleton=False` (line 264)
 - **Checkpoint Strategy**: Namespace snapshots at each checkpoint for recovery
-  - Spec: `21_spec_resonate_integration.md:569-611` (CheckpointManager)
-  - Example: `21_spec_resonate_integration.md:754-794` (crash_resilient_execution)
+  - Spec: `docs/bridge-capabilities.md:569-611` (CheckpointManager)
+  - Example: `docs/bridge-capabilities.md:754-794` (crash_resilient_execution)
 - **Local/Remote Parity**: Same behavior in both modes, different persistence
-  - Local: `21_spec_resonate_integration.md:51-85` (initialize_resonate_local)
-  - Remote: `21_spec_resonate_integration.md:87-126` (initialize_resonate_remote)
-  - Migration: `21_spec_resonate_integration.md:894-922` (MigrationAdapter)
+  - Local: `docs/bridge-capabilities.md:51-85` (initialize_resonate_local)
+  - Remote: `docs/bridge-capabilities.md:87-126` (initialize_resonate_remote)
+  - Migration: `docs/bridge-capabilities.md:894-922` (MigrationAdapter)
 
 ## Risks and Mitigations (Updated)
 
@@ -1034,17 +1033,17 @@ Context: Reviews for PR #11 (branch: `fix/foundation-phase1-resonate-wrapper`) s
 
 Notes
 - Tests: Add targeted tests in Phase 1 to validate that functions defined under both paths retain `__globals__` pointing at the live mapping and that subsequent executions see updated globals. Current suite lacks this coverage (as reviews noted).
-- Spec alignment: Changes are consistent with `24_spec_namespace_management.md` (merge‑only policy) and the PyCF top‑level await behavior noted in the PDF and `22_spec_async_execution.md`.
+- Spec alignment: Changes are consistent with `docs/execution-engine.md` (merge‑only policy) and the PyCF top‑level await behavior noted in the PDF and `docs/async-executor.md`.
 
 ### Phase 1 (Plan and implement)
 - Dependency Injection factory pattern: Replace error‑prone “get + initialize()” with a factory that yields fully initialized instances per execution context.
-  - Docs: Update `docs/async_capability_prompts/current/21_spec_resonate_integration.md` to show factory registration and access. Ensure AsyncExecutor, NamespaceManager, and transport instances have clear lifecycles.
+  - Docs: Update `docs/bridge-capabilities.md` to show factory registration and access. Ensure AsyncExecutor, NamespaceManager, and transport instances have clear lifecycles.
   - Code: Introduce DI hooks around the Resonate wrapper; remove any implicit singleton assumptions.
 - Resonate wrapper + promise adapter: Implement the wrapper pattern where Resonate drives durability while AsyncExecutor handles async/await natively. Provide an awaitable adapter over Resonate promises.
-  - Docs: `00_foundation_resonate.md`, `22_spec_async_execution.md`
+  - Docs: `docs/bridge-capabilities.md`, `docs/async-executor.md`
   - Code: Wrapper function(s) and `AwaitableResonatePromise` abstraction per spec.
 - Execution mode routing hardening: Finish routing logic and expand blocking‑I/O detection (attribute chains like `time.sleep`, `requests.get`, `socket.recv`). Add tests first to constrain false positives.
-  - Docs: `22_spec_async_execution.md`
+  - Docs: `docs/async-executor.md`
   - Code: Extend AST analysis to resolve `ast.Attribute` and imported name aliases.
 - Top‑level await AST fallback correctness:
   - Add pre‑exec globals snapshot and apply post‑exec global diffs AFTER locals merge so global writes take precedence (fixes cases like `global g; g=...` being overwritten by wrapper locals).
